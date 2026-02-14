@@ -4,7 +4,13 @@ import io
 import time
 import unittest
 
-from assistant_app.cli import _handle_input_with_feedback, _should_show_waiting
+from assistant_app.cli import (
+    CLEAR_TERMINAL_SEQUENCE,
+    _clear_terminal_history,
+    _exit_cli,
+    _handle_input_with_feedback,
+    _should_show_waiting,
+)
 
 
 class _FakeAgent:
@@ -19,6 +25,16 @@ class _FakeAgent:
 
 
 class CLIFeedbackTest(unittest.TestCase):
+    def test_clear_terminal_history_writes_escape_sequence(self) -> None:
+        stream = io.StringIO()
+        _clear_terminal_history(stream=stream)
+        self.assertEqual(stream.getvalue(), CLEAR_TERMINAL_SEQUENCE)
+
+    def test_exit_cli_clears_screen_and_prints_exit_message(self) -> None:
+        stream = io.StringIO()
+        _exit_cli(stream=stream, with_leading_newline=True)
+        self.assertEqual(stream.getvalue(), f"{CLEAR_TERMINAL_SEQUENCE}\n已退出。\n")
+
     def test_should_show_waiting_for_natural_language_with_llm(self) -> None:
         agent = _FakeAgent(llm_enabled=True)
         self.assertTrue(_should_show_waiting(agent, "看一下全部待办"))

@@ -11,6 +11,7 @@ from assistant_app.llm import OpenAICompatibleClient
 
 WAITING_FRAME_INTERVAL = 0.25
 WAITING_CLEAR_WIDTH = 48
+CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
 
 
 def _should_show_waiting(agent: AssistantAgent, user_input: str) -> bool:
@@ -21,6 +22,19 @@ def _should_show_waiting(agent: AssistantAgent, user_input: str) -> bool:
 def _render_waiting_frame(frame_index: int) -> str:
     dots = "." * (frame_index % 3 + 1)
     return f"助手> 正在思考{dots}"
+
+
+def _clear_terminal_history(stream: TextIO = sys.stdout) -> None:
+    stream.write(CLEAR_TERMINAL_SEQUENCE)
+    stream.flush()
+
+
+def _exit_cli(stream: TextIO = sys.stdout, with_leading_newline: bool = False) -> None:
+    _clear_terminal_history(stream=stream)
+    if with_leading_newline:
+        stream.write("\n")
+    stream.write("已退出。\n")
+    stream.flush()
 
 
 def _handle_input_with_feedback(
@@ -72,16 +86,17 @@ def main() -> None:
 
     agent = AssistantAgent(db=db, llm_client=llm_client)
 
+    _clear_terminal_history()
     print("CLI 个人助手已启动。输入 /help 查看命令，输入 exit 退出。")
     while True:
         try:
             raw = input("你> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n已退出。")
+            _exit_cli(with_leading_newline=True)
             break
 
         if raw.lower() in {"exit", "quit"}:
-            print("已退出。")
+            _exit_cli()
             break
 
         try:
