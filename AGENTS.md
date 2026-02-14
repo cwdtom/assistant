@@ -10,7 +10,7 @@ Current MVP constraints:
 - Single user, no login
 - SQLite local storage
 - No third-party calendar/email integration in V1
-- LLM via OpenAI-compatible API (`OPENAI_BASE_URL` + `OPENAI_API_KEY`)
+- LLM via DeepSeek API (`DEEPSEEK_BASE_URL` + `DEEPSEEK_API_KEY`)
 
 ## Tech Stack (MVP)
 - Python 3.10+
@@ -31,11 +31,12 @@ Current MVP constraints:
 ## Command Contract (MVP)
 Supported input forms in CLI:
 - `/help`
-- `/todo add <content>`
-- `/todo list`
+- `/todo add <content> [--tag <tag>]`
+- `/todo list [--tag <tag>]`
 - `/todo done <id>`
 - `/schedule add <YYYY-MM-DD HH:MM> <title>`
 - `/schedule list`
+- natural language -> model intent recognition -> execute local action (e.g. `添加待办 买牛奶`, `查看日程`)
 - free text => send to LLM
 
 ## Development Workflow

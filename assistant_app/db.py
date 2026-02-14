@@ -12,6 +12,7 @@ from typing import Iterator
 class TodoItem:
     id: int
     content: str
+    tag: str
     done: bool
     created_at: str
 
@@ -58,11 +59,13 @@ class AssistantDB:
                 CREATE TABLE IF NOT EXISTS todos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     content TEXT NOT NULL,
+                    tag TEXT NOT NULL DEFAULT 'default',
                     done INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            self._ensure_todo_tag_column(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schedules (
@@ -84,24 +87,44 @@ class AssistantDB:
                 """
             )
 
-    def add_todo(self, content: str) -> int:
+    def _ensure_todo_tag_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(todos)").fetchall()
+        has_tag = any(row["name"] == "tag" for row in columns)
+        if not has_tag:
+            conn.execute("ALTER TABLE todos ADD COLUMN tag TEXT NOT NULL DEFAULT 'default'")
+
+    def add_todo(self, content: str, tag: str = "default") -> int:
         timestamp = _now_iso()
+        normalized_tag = _normalize_tag(tag)
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO todos (content, done, created_at) VALUES (?, 0, ?)",
-                (content, timestamp),
+                "INSERT INTO todos (content, tag, done, created_at) VALUES (?, ?, 0, ?)",
+                (content, normalized_tag, timestamp),
             )
             return int(cur.lastrowid)
 
-    def list_todos(self) -> list[TodoItem]:
+    def list_todos(self, tag: str | None = None) -> list[TodoItem]:
+        normalized_tag = _normalize_tag(tag) if tag is not None else None
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id, content, done, created_at FROM todos ORDER BY id ASC"
-            ).fetchall()
+            if normalized_tag is None:
+                rows = conn.execute(
+                    "SELECT id, content, tag, done, created_at FROM todos ORDER BY id ASC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, content, tag, done, created_at
+                    FROM todos
+                    WHERE tag = ?
+                    ORDER BY id ASC
+                    """,
+                    (normalized_tag,),
+                ).fetchall()
         return [
             TodoItem(
                 id=row["id"],
                 content=row["content"],
+                tag=row["tag"] or "default",
                 done=bool(row["done"]),
                 created_at=row["created_at"],
             )
@@ -163,3 +186,12 @@ class AssistantDB:
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat(sep=" ")
+
+
+def _normalize_tag(tag: str | None) -> str:
+    if tag is None:
+        return "default"
+    normalized = tag.strip().lower()
+    if not normalized:
+        return "default"
+    return normalized

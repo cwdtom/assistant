@@ -23,6 +23,7 @@ class AssistantDBTest(unittest.TestCase):
         todos = self.db.list_todos()
         self.assertEqual(len(todos), 1)
         self.assertEqual(todos[0].content, "写单元测试")
+        self.assertEqual(todos[0].tag, "default")
         self.assertFalse(todos[0].done)
 
     def test_mark_todo_done(self) -> None:
@@ -32,6 +33,15 @@ class AssistantDBTest(unittest.TestCase):
         self.assertTrue(updated)
         todos = self.db.list_todos()
         self.assertTrue(todos[0].done)
+
+    def test_todo_tag_filter(self) -> None:
+        self.db.add_todo("修复 bug", tag="work")
+        self.db.add_todo("买牛奶", tag="life")
+
+        work_todos = self.db.list_todos(tag="work")
+        self.assertEqual(len(work_todos), 1)
+        self.assertEqual(work_todos[0].content, "修复 bug")
+        self.assertEqual(work_todos[0].tag, "work")
 
     def test_schedule_order(self) -> None:
         self.db.add_schedule("晚上的会", "2026-02-20 20:00")

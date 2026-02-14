@@ -30,11 +30,23 @@ def load_env_file(env_path: str = ".env") -> None:
             os.environ[key] = value
 
 
-def load_config() -> AppConfig:
-    load_env_file()
+def load_config(load_dotenv: bool = True) -> AppConfig:
+    if load_dotenv:
+        load_env_file()
+    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = (
+        os.getenv("DEEPSEEK_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or "https://api.deepseek.com"
+    )
+    model = (
+        os.getenv("DEEPSEEK_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "deepseek-chat"
+    )
     return AppConfig(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL", "https://www.packyapi.com/v1"),
-        model=os.getenv("OPENAI_MODEL", "codex5.3"),
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
     )
