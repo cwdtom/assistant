@@ -37,6 +37,7 @@ python main.py
 - `/todo done <id>`
 - `/schedule add <YYYY-MM-DD HH:MM> <标题>`
 - `/schedule list`
+- 自然语言处理调用模型时会显示“正在思考...”动态提示，便于区分等待与异常
 - 支持自然语言命令（先由模型做意图识别，再执行动作），示例：
   - `添加待办 买牛奶，标签是 life`
   - `完成待办 1`
