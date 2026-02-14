@@ -44,7 +44,11 @@ class AssistantAgentTest(unittest.TestCase):
         result = agent.handle_input("/help")
 
         self.assertIn("/todo add", result)
+        self.assertIn("/todo update", result)
+        self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
+        self.assertIn("/schedule update", result)
+        self.assertIn("/schedule delete", result)
 
     def test_slash_commands_without_llm(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -72,6 +76,45 @@ class AssistantAgentTest(unittest.TestCase):
         invalid = agent.handle_input("/todo list --tag")
         self.assertIn("用法", invalid)
 
+    def test_slash_todo_full_crud_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        add_resp = agent.handle_input("/todo add 写周报 --tag work")
+        self.assertIn("已添加待办 #1", add_resp)
+
+        get_resp = agent.handle_input("/todo get 1")
+        self.assertIn("[work] 写周报", get_resp)
+
+        update_resp = agent.handle_input("/todo update 1 写周报v2 --tag review")
+        self.assertIn("已更新待办 #1 [标签:review]: 写周报v2", update_resp)
+
+        update_without_tag = agent.handle_input("/todo update 1 写周报最终版")
+        self.assertIn("已更新待办 #1 [标签:review]: 写周报最终版", update_without_tag)
+
+        delete_resp = agent.handle_input("/todo delete 1")
+        self.assertIn("待办 #1 已删除", delete_resp)
+
+        missing_resp = agent.handle_input("/todo get 1")
+        self.assertIn("未找到待办 #1", missing_resp)
+
+    def test_slash_schedule_full_crud_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会")
+        self.assertIn("已添加日程 #1", add_resp)
+
+        get_resp = agent.handle_input("/schedule get 1")
+        self.assertIn("2026-02-20 09:30 | 站会", get_resp)
+
+        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会")
+        self.assertIn("已更新日程 #1: 2026-02-21 10:00 复盘会", update_resp)
+
+        delete_resp = agent.handle_input("/schedule delete 1")
+        self.assertIn("日程 #1 已删除", delete_resp)
+
+        missing_resp = agent.handle_input("/schedule get 1")
+        self.assertIn("未找到日程 #1", missing_resp)
+
     def test_nl_todo_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -94,8 +137,8 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_schedule_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"schedule_add","todo_content":null,"todo_id":null,"event_time":"2026-02-20 09:30","title":"周会"}',
-                '{"intent":"schedule_list","todo_content":null,"todo_id":null,"event_time":null,"title":null}',
+                '{"intent":"schedule_add","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":"2026-02-20 09:30","title":"周会"}',
+                '{"intent":"schedule_list","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -106,6 +149,38 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("看一下日程")
         self.assertIn("周会", list_resp)
         self.assertEqual(len(fake_llm.calls), 2)
+
+    def test_nl_todo_update_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                '{"intent":"todo_update","todo_content":"买牛奶和面包","todo_tag":"life","todo_id":1,"schedule_id":null,"event_time":null,"title":null}',
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_todo("买牛奶", tag="default")
+
+        response = agent.handle_input("把待办1改成买牛奶和面包，标签life")
+        self.assertIn("已更新待办 #1", response)
+        self.assertIn("[标签:life]", response)
+
+        todo = self.db.get_todo(1)
+        self.assertIsNotNone(todo)
+        assert todo is not None
+        self.assertEqual(todo.content, "买牛奶和面包")
+        self.assertEqual(todo.tag, "life")
+
+    def test_nl_schedule_delete_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                '{"intent":"schedule_delete","todo_content":null,"todo_id":null,"schedule_id":1,"event_time":null,"title":null}',
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_schedule("周会", "2026-02-20 09:30")
+
+        response = agent.handle_input("把日程1删掉")
+        self.assertIn("日程 #1 已删除", response)
+        self.assertIsNone(self.db.get_schedule(1))
 
     def test_chat_path_requires_intent_then_chat(self) -> None:
         fake_llm = FakeLLMClient(
@@ -130,7 +205,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_intent_missing_fields_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_done","todo_content":null,"todo_id":null,"event_time":null,"title":null}',
+                '{"intent":"todo_done","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -142,8 +217,8 @@ class AssistantAgentTest(unittest.TestCase):
     def test_action_missing_params_retry_then_success(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_done","todo_content":null,"todo_id":null,"event_time":null,"title":null}',
-                '{"intent":"todo_done","todo_content":null,"todo_id":1,"event_time":null,"title":null}',
+                '{"intent":"todo_done","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
+                '{"intent":"todo_done","todo_content":null,"todo_id":1,"schedule_id":null,"event_time":null,"title":null}',
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -152,6 +227,18 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("把这个待办标记完成")
         self.assertIn("待办 #1 已完成", response)
         self.assertEqual(len(fake_llm.calls), 2)
+
+    def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                '{"intent":"schedule_delete","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("删掉这个日程")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
 
     def test_invalid_intent_json_returns_service_unavailable(self) -> None:
         fake_llm = FakeLLMClient(responses=["不是json", "还是不是json", "依然不是json"])
@@ -176,7 +263,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 "不是json",
-                "{\"intent\":\"todo_add\",\"todo_content\":\"明天早上10 :00吃早饭\",\"todo_id\":null,\"event_time\":null,\"title\":null}",
+                "{\"intent\":\"todo_add\",\"todo_content\":\"明天早上10 :00吃早饭\",\"todo_id\":null,\"schedule_id\":null,\"event_time\":null,\"title\":null}",
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)

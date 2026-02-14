@@ -131,6 +131,59 @@ class AssistantDB:
             for row in rows
         ]
 
+    def get_todo(self, todo_id: int) -> TodoItem | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, content, tag, done, created_at FROM todos WHERE id = ?",
+                (todo_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return TodoItem(
+            id=row["id"],
+            content=row["content"],
+            tag=row["tag"] or "default",
+            done=bool(row["done"]),
+            created_at=row["created_at"],
+        )
+
+    def update_todo(
+        self,
+        todo_id: int,
+        *,
+        content: str | None = None,
+        tag: str | None = None,
+        done: bool | None = None,
+    ) -> bool:
+        fields: list[str] = []
+        values: list[object] = []
+
+        if content is not None:
+            fields.append("content = ?")
+            values.append(content)
+        if tag is not None:
+            fields.append("tag = ?")
+            values.append(_normalize_tag(tag))
+        if done is not None:
+            fields.append("done = ?")
+            values.append(1 if done else 0)
+
+        if not fields:
+            return False
+
+        values.append(todo_id)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"UPDATE todos SET {', '.join(fields)} WHERE id = ?",
+                values,
+            )
+            return cur.rowcount > 0
+
+    def delete_todo(self, todo_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+            return cur.rowcount > 0
+
     def mark_todo_done(self, todo_id: int) -> bool:
         with self._connect() as conn:
             cur = conn.execute("UPDATE todos SET done = 1 WHERE id = ?", (todo_id,))
@@ -159,6 +212,34 @@ class AssistantDB:
             )
             for row in rows
         ]
+
+    def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, title, event_time, created_at FROM schedules WHERE id = ?",
+                (schedule_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ScheduleItem(
+            id=row["id"],
+            title=row["title"],
+            event_time=row["event_time"],
+            created_at=row["created_at"],
+        )
+
+    def update_schedule(self, schedule_id: int, *, title: str, event_time: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE schedules SET title = ?, event_time = ? WHERE id = ?",
+                (title, event_time, schedule_id),
+            )
+            return cur.rowcount > 0
+
+    def delete_schedule(self, schedule_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+            return cur.rowcount > 0
 
     def save_message(self, role: str, content: str) -> None:
         timestamp = _now_iso()

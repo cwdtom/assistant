@@ -34,6 +34,29 @@ class AssistantDBTest(unittest.TestCase):
         todos = self.db.list_todos()
         self.assertTrue(todos[0].done)
 
+    def test_todo_crud(self) -> None:
+        todo_id = self.db.add_todo("写周报", tag="work")
+
+        item = self.db.get_todo(todo_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.content, "写周报")
+        self.assertEqual(item.tag, "work")
+
+        updated = self.db.update_todo(todo_id, content="写周报v2", tag="review", done=True)
+        self.assertTrue(updated)
+
+        changed = self.db.get_todo(todo_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.content, "写周报v2")
+        self.assertEqual(changed.tag, "review")
+        self.assertTrue(changed.done)
+
+        deleted = self.db.delete_todo(todo_id)
+        self.assertTrue(deleted)
+        self.assertIsNone(self.db.get_todo(todo_id))
+
     def test_todo_tag_filter(self) -> None:
         self.db.add_todo("修复 bug", tag="work")
         self.db.add_todo("买牛奶", tag="life")
@@ -50,6 +73,31 @@ class AssistantDBTest(unittest.TestCase):
         items = self.db.list_schedules()
         self.assertEqual(items[0].title, "早上的会")
         self.assertEqual(items[1].title, "晚上的会")
+
+    def test_schedule_crud(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
+
+        item = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.title, "项目同步")
+
+        updated = self.db.update_schedule(
+            schedule_id,
+            title="项目复盘",
+            event_time="2026-02-21 11:30",
+        )
+        self.assertTrue(updated)
+
+        changed = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.title, "项目复盘")
+        self.assertEqual(changed.event_time, "2026-02-21 11:30")
+
+        deleted = self.db.delete_schedule(schedule_id)
+        self.assertTrue(deleted)
+        self.assertIsNone(self.db.get_schedule(schedule_id))
 
     def test_recent_messages_in_chronological_order(self) -> None:
         self.db.save_message("user", "hello")

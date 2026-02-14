@@ -34,16 +34,29 @@ python main.py
 - `/help`
 - `/todo add <内容> [--tag <标签>]`
 - `/todo list [--tag <标签>]`
+- `/todo get <id>`
+- `/todo update <id> <内容> [--tag <标签>]`
+- `/todo delete <id>`
 - `/todo done <id>`
 - `/schedule add <YYYY-MM-DD HH:MM> <标题>`
+- `/schedule get <id>`
+- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题>`
+- `/schedule delete <id>`
 - `/schedule list`
+- 待办和日程均支持增删改查（CRUD）
 - 进入 CLI 和退出 CLI 时，会自动清空当前终端显示历史（scrollback）
 - 自然语言处理调用模型时会显示“正在思考...”动态提示，便于区分等待与异常
 - 支持自然语言命令（先由模型做意图识别，再执行动作），示例：
   - `添加待办 买牛奶，标签是 life`
+  - `查看待办 1`
+  - `把待办 1 改成 买牛奶和面包，标签 life`
+  - `删除待办 1`
   - `完成待办 1`
   - `查看 work 标签的待办`
   - `添加日程 2026-02-15 09:30 站会`
+  - `查看日程 1`
+  - `把日程 1 改到 2026-02-16 09:30 站会`
+  - `删除日程 1`
   - `查看待办`
   - `查看日程`
 - 直接输入任意文本：会先做意图识别，识别为 chat 后再发送给 AI
