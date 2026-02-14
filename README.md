@@ -32,10 +32,10 @@ python main.py
 
 ## 命令
 - `/help`
-- `/todo add <内容> [--tag <标签>]`
+- `/todo add <内容> [--tag <标签>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
 - `/todo list [--tag <标签>]`
 - `/todo get <id>`
-- `/todo update <id> <内容> [--tag <标签>]`
+- `/todo update <id> <内容> [--tag <标签>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
 - `/todo delete <id>`
 - `/todo done <id>`
 - `/schedule add <YYYY-MM-DD HH:MM> <标题>`
@@ -44,12 +44,14 @@ python main.py
 - `/schedule delete <id>`
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
+- 待办和日程查询结果默认以表格样式输出，便于在 CLI 快速浏览
+- 待办列表和待办详情均展示创建时间、完成时间、截止时间、提醒时间（提醒需配合截止时间）
 - 进入 CLI 和退出 CLI 时，会自动清空当前终端显示历史（scrollback）
 - 自然语言处理调用模型时会显示“正在思考...”动态提示，便于区分等待与异常
 - 支持自然语言命令（先由模型做意图识别，再执行动作），示例：
-  - `添加待办 买牛奶，标签是 life`
+  - `添加待办 买牛奶，标签是 life，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`
   - `查看待办 1`
-  - `把待办 1 改成 买牛奶和面包，标签 life`
+  - `把待办 1 改成 买牛奶和面包，标签 life，截止 2026-02-26 20:00`
   - `删除待办 1`
   - `完成待办 1`
   - `查看 work 标签的待办`

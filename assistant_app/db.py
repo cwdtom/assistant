@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+_UNSET = object()
+
 
 @dataclass(frozen=True)
 class TodoItem:
@@ -15,6 +17,9 @@ class TodoItem:
     tag: str
     done: bool
     created_at: str
+    completed_at: str | None
+    due_at: str | None
+    remind_at: str | None
 
 
 @dataclass(frozen=True)
@@ -61,11 +66,15 @@ class AssistantDB:
                     content TEXT NOT NULL,
                     tag TEXT NOT NULL DEFAULT 'default',
                     done INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    due_at TEXT,
+                    remind_at TEXT
                 )
                 """
             )
             self._ensure_todo_tag_column(conn)
+            self._ensure_todo_extra_columns(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schedules (
@@ -93,13 +102,34 @@ class AssistantDB:
         if not has_tag:
             conn.execute("ALTER TABLE todos ADD COLUMN tag TEXT NOT NULL DEFAULT 'default'")
 
-    def add_todo(self, content: str, tag: str = "default") -> int:
+    def _ensure_todo_extra_columns(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(todos)").fetchall()
+        names = {row["name"] for row in columns}
+        if "completed_at" not in names:
+            conn.execute("ALTER TABLE todos ADD COLUMN completed_at TEXT")
+        if "due_at" not in names:
+            conn.execute("ALTER TABLE todos ADD COLUMN due_at TEXT")
+        if "remind_at" not in names:
+            conn.execute("ALTER TABLE todos ADD COLUMN remind_at TEXT")
+
+    def add_todo(
+        self,
+        content: str,
+        tag: str = "default",
+        due_at: str | None = None,
+        remind_at: str | None = None,
+    ) -> int:
+        if remind_at and not due_at:
+            raise ValueError("remind_at requires due_at")
         timestamp = _now_iso()
         normalized_tag = _normalize_tag(tag)
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO todos (content, tag, done, created_at) VALUES (?, ?, 0, ?)",
-                (content, normalized_tag, timestamp),
+                """
+                INSERT INTO todos (content, tag, done, created_at, completed_at, due_at, remind_at)
+                VALUES (?, ?, 0, ?, NULL, ?, ?)
+                """,
+                (content, normalized_tag, timestamp, due_at, remind_at),
             )
             return int(cur.lastrowid)
 
@@ -108,12 +138,16 @@ class AssistantDB:
         with self._connect() as conn:
             if normalized_tag is None:
                 rows = conn.execute(
-                    "SELECT id, content, tag, done, created_at FROM todos ORDER BY id ASC"
+                    """
+                    SELECT id, content, tag, done, created_at, completed_at, due_at, remind_at
+                    FROM todos
+                    ORDER BY id ASC
+                    """
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """
-                    SELECT id, content, tag, done, created_at
+                    SELECT id, content, tag, done, created_at, completed_at, due_at, remind_at
                     FROM todos
                     WHERE tag = ?
                     ORDER BY id ASC
@@ -127,6 +161,9 @@ class AssistantDB:
                 tag=row["tag"] or "default",
                 done=bool(row["done"]),
                 created_at=row["created_at"],
+                completed_at=row["completed_at"],
+                due_at=row["due_at"],
+                remind_at=row["remind_at"],
             )
             for row in rows
         ]
@@ -134,7 +171,11 @@ class AssistantDB:
     def get_todo(self, todo_id: int) -> TodoItem | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, content, tag, done, created_at FROM todos WHERE id = ?",
+                """
+                SELECT id, content, tag, done, created_at, completed_at, due_at, remind_at
+                FROM todos
+                WHERE id = ?
+                """,
                 (todo_id,),
             ).fetchone()
         if row is None:
@@ -145,6 +186,9 @@ class AssistantDB:
             tag=row["tag"] or "default",
             done=bool(row["done"]),
             created_at=row["created_at"],
+            completed_at=row["completed_at"],
+            due_at=row["due_at"],
+            remind_at=row["remind_at"],
         )
 
     def update_todo(
@@ -154,7 +198,13 @@ class AssistantDB:
         content: str | None = None,
         tag: str | None = None,
         done: bool | None = None,
+        due_at: str | None | object = _UNSET,
+        remind_at: str | None | object = _UNSET,
     ) -> bool:
+        current = self.get_todo(todo_id)
+        if current is None:
+            return False
+
         fields: list[str] = []
         values: list[object] = []
 
@@ -167,6 +217,22 @@ class AssistantDB:
         if done is not None:
             fields.append("done = ?")
             values.append(1 if done else 0)
+            fields.append("completed_at = ?")
+            if done:
+                values.append(current.completed_at or _now_iso())
+            else:
+                values.append(None)
+        if due_at is not _UNSET:
+            fields.append("due_at = ?")
+            values.append(due_at)
+        if remind_at is not _UNSET:
+            fields.append("remind_at = ?")
+            values.append(remind_at)
+
+        effective_due = current.due_at if due_at is _UNSET else due_at
+        effective_remind = current.remind_at if remind_at is _UNSET else remind_at
+        if effective_remind and not effective_due:
+            return False
 
         if not fields:
             return False
@@ -186,7 +252,10 @@ class AssistantDB:
 
     def mark_todo_done(self, todo_id: int) -> bool:
         with self._connect() as conn:
-            cur = conn.execute("UPDATE todos SET done = 1 WHERE id = ?", (todo_id,))
+            cur = conn.execute(
+                "UPDATE todos SET done = 1, completed_at = COALESCE(completed_at, ?) WHERE id = ?",
+                (_now_iso(), todo_id),
+            )
             return cur.rowcount > 0
 
     def add_schedule(self, title: str, event_time: str) -> int:

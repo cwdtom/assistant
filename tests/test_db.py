@@ -25,6 +25,9 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(todos[0].content, "写单元测试")
         self.assertEqual(todos[0].tag, "default")
         self.assertFalse(todos[0].done)
+        self.assertIsNone(todos[0].completed_at)
+        self.assertIsNone(todos[0].due_at)
+        self.assertIsNone(todos[0].remind_at)
 
     def test_mark_todo_done(self) -> None:
         todo_id = self.db.add_todo("完成第一个版本")
@@ -33,6 +36,7 @@ class AssistantDBTest(unittest.TestCase):
         self.assertTrue(updated)
         todos = self.db.list_todos()
         self.assertTrue(todos[0].done)
+        self.assertIsNotNone(todos[0].completed_at)
 
     def test_todo_crud(self) -> None:
         todo_id = self.db.add_todo("写周报", tag="work")
@@ -56,6 +60,42 @@ class AssistantDBTest(unittest.TestCase):
         deleted = self.db.delete_todo(todo_id)
         self.assertTrue(deleted)
         self.assertIsNone(self.db.get_todo(todo_id))
+
+    def test_todo_due_and_remind(self) -> None:
+        todo_id = self.db.add_todo(
+            "准备复盘",
+            tag="work",
+            due_at="2026-02-25 18:00",
+            remind_at="2026-02-25 17:00",
+        )
+
+        item = self.db.get_todo(todo_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.due_at, "2026-02-25 18:00")
+        self.assertEqual(item.remind_at, "2026-02-25 17:00")
+
+        self.assertTrue(
+            self.db.update_todo(
+                todo_id,
+                due_at="2026-02-25 20:00",
+                remind_at="2026-02-25 19:00",
+            )
+        )
+        changed = self.db.get_todo(todo_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.due_at, "2026-02-25 20:00")
+        self.assertEqual(changed.remind_at, "2026-02-25 19:00")
+
+    def test_remind_requires_due(self) -> None:
+        with self.assertRaises(ValueError):
+            self.db.add_todo("只设置提醒", remind_at="2026-02-25 09:00")
+
+        todo_id = self.db.add_todo("有截止时间", due_at="2026-02-25 10:00")
+        # Try to clear due while keeping remind -> invalid
+        ok = self.db.update_todo(todo_id, remind_at="2026-02-25 09:00", due_at=None)
+        self.assertFalse(ok)
 
     def test_todo_tag_filter(self) -> None:
         self.db.add_todo("修复 bug", tag="work")
