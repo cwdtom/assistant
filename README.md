@@ -1,7 +1,7 @@
 # CLI AI Personal Assistant (MVP)
 
 一个中文优先的本地 CLI 个人助手，支持：
-- AI 对话（DeepSeek API）
+- AI 对话（DeepSeek 优先，兼容 OpenAI-compatible API）
 - 待办管理
 - 日程管理
 
@@ -45,7 +45,7 @@ python main.py
   - `添加日程 2026-02-15 09:30 站会`
   - `查看待办`
   - `查看日程`
-- 直接输入任意文本：发送给 AI
+- 直接输入任意文本：会先做意图识别，识别为 chat 后再发送给 AI
 
 ## 测试
 ```bash
