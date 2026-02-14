@@ -62,7 +62,7 @@ class AssistantAgent:
             return self._handle_command(text)
 
         if not self.llm_client:
-            return "当前未配置 LLM。请设置 OPENAI_API_KEY 后重试。"
+            return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
 
         intent_payload = self._analyze_intent(text)
         intent_response = self._dispatch_intent(intent_payload)
@@ -155,32 +155,36 @@ class AssistantAgent:
                 if intent not in INTENT_LABELS:
                     intent = "chat"
                 payload["intent"] = intent
+                if self._intent_requires_retry(payload):
+                    continue
                 return payload
 
-            # Degraded path: this provider often returns free text even under JSON constraints.
-            recovered_intent = _extract_intent_label(cleaned)
-            if recovered_intent == "todo_add":
-                recovered = _extract_args_from_text(text, intent="todo_add")
-                if recovered.get("todo_content"):
-                    recovered["intent"] = "todo_add"
-                    return recovered
-                continue
-            if recovered_intent == "todo_done":
-                recovered = _extract_args_from_text(text, intent="todo_done")
-                if recovered.get("todo_id") is not None:
-                    recovered["intent"] = "todo_done"
-                    return recovered
-                continue
-            if recovered_intent == "schedule_add":
-                recovered = _extract_args_from_text(text, intent="schedule_add")
-                if recovered.get("event_time") and recovered.get("title"):
-                    recovered["intent"] = "schedule_add"
-                    return recovered
-                continue
-            if recovered_intent in {"todo_list", "schedule_list", "chat"}:
-                return {"intent": recovered_intent}
-
         return {"intent": INTENT_SERVICE_UNAVAILABLE}
+
+    def _intent_requires_retry(self, payload: dict[str, Any]) -> bool:
+        intent = str(payload.get("intent", "chat")).strip().lower()
+
+        if intent == "todo_add":
+            content = str(payload.get("todo_content") or "").strip()
+            return not content
+
+        if intent == "todo_done":
+            todo_id = payload.get("todo_id")
+            if todo_id is None:
+                return True
+            try:
+                return self._to_int(todo_id) <= 0
+            except (TypeError, ValueError):
+                return True
+
+        if intent == "schedule_add":
+            event_time = str(payload.get("event_time") or "").strip()
+            title = str(payload.get("title") or "").strip()
+            if not event_time or not title:
+                return True
+            return re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", event_time) is None
+
+        return False
 
     def _llm_reply_for_intent(self, messages: list[dict[str, str]]) -> str:
         if self.llm_client is None:
@@ -250,7 +254,7 @@ class AssistantAgent:
 
     def _handle_chat(self, text: str) -> str:
         if not self.llm_client:
-            return "当前未配置 LLM。请设置 OPENAI_API_KEY 后重试。"
+            return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
 
         self.db.save_message("user", text)
 
@@ -427,30 +431,12 @@ def _try_parse_json(text: str) -> dict[str, Any] | None:
         return None
 
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"```$", "", cleaned).strip()
-
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
             return parsed
     except json.JSONDecodeError:
         pass
-
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-
-    snippet = cleaned[start : end + 1]
-    try:
-        parsed = json.loads(snippet)
-    except json.JSONDecodeError:
-        return None
-
-    if isinstance(parsed, dict):
-        return parsed
     return None
 
 
