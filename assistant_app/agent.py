@@ -395,6 +395,9 @@ class AssistantAgent:
                 repeat_name=repeat_name,
                 repeat_times=repeat_times,
             )
+            conflicts = self.db.find_schedule_conflicts(event_times)
+            if conflicts:
+                return _format_schedule_conflicts(conflicts)
             created_ids = self.db.add_schedules(title=title, event_times=event_times)
             if len(created_ids) == 1:
                 return f"已添加日程 #{created_ids[0]}: {event_time} {title}"
@@ -411,17 +414,20 @@ class AssistantAgent:
                     "[--repeat <none|daily|weekly|monthly>] [--times <>=1>]"
                 )
             schedule_id, event_time, title, repeat_name, repeat_times = update_schedule_parsed
+            event_times = _build_schedule_event_times(
+                event_time=event_time,
+                repeat_name=repeat_name,
+                repeat_times=repeat_times,
+            )
+            conflicts = self.db.find_schedule_conflicts(event_times, exclude_schedule_id=schedule_id)
+            if conflicts:
+                return _format_schedule_conflicts(conflicts)
             updated = self.db.update_schedule(schedule_id, title=title, event_time=event_time)
             if not updated:
                 return f"未找到日程 #{schedule_id}"
             if repeat_times <= 1:
                 return f"已更新日程 #{schedule_id}: {event_time} {title}"
-
-            follow_up_times = _build_schedule_event_times(
-                event_time=event_time,
-                repeat_name=repeat_name,
-                repeat_times=repeat_times,
-            )[1:]
+            follow_up_times = event_times[1:]
             created_ids = self.db.add_schedules(title=title, event_times=follow_up_times)
             return (
                 f"已更新日程 #{schedule_id}: {event_time} {title} "
@@ -1386,6 +1392,15 @@ def _format_todo_meta_inline(due_at: str | None, remind_at: str | None, *, prior
     if not meta_parts:
         return ""
     return " | " + " ".join(meta_parts)
+
+
+def _format_schedule_conflicts(conflicts: list[Any]) -> str:
+    lines = ["日程冲突：以下时间点已有日程，请调整时间后重试。"]
+    for item in conflicts[:5]:
+        lines.append(f"- #{item.id} {item.event_time} {item.title}")
+    if len(conflicts) > 5:
+        lines.append(f"- ... 还有 {len(conflicts) - 5} 条冲突")
+    return "\n".join(lines)
 
 
 def _render_table(headers: list[str], rows: list[list[str]]) -> str:

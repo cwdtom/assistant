@@ -164,6 +164,16 @@ class AssistantDBTest(unittest.TestCase):
             [item.event_time for item in items], ["2026-02-20 09:00", "2026-02-21 09:00", "2026-02-22 09:00"]
         )
 
+    def test_find_schedule_conflicts(self) -> None:
+        self.db.add_schedule("晨会", "2026-02-20 09:00")
+        second_id = self.db.add_schedule("周会", "2026-02-21 09:00")
+
+        conflicts = self.db.find_schedule_conflicts(["2026-02-20 09:00", "2026-02-21 09:00"])
+        self.assertEqual([item.title for item in conflicts], ["晨会", "周会"])
+
+        excluded = self.db.find_schedule_conflicts(["2026-02-21 09:00"], exclude_schedule_id=second_id)
+        self.assertEqual(excluded, [])
+
     def test_schedule_crud(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
 

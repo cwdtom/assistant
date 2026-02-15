@@ -251,6 +251,22 @@ class AssistantAgentTest(unittest.TestCase):
         invalid = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat none --times 3")
         self.assertIn("用法", invalid)
 
+    def test_slash_schedule_conflict_detection(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会")
+
+        conflict = agent.handle_input("/schedule add 2026-02-20 09:30 周会")
+        self.assertIn("日程冲突", conflict)
+        self.assertIn("2026-02-20 09:30", conflict)
+
+    def test_slash_schedule_conflict_detection_with_repeat(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-27 09:30 固定会")
+
+        conflict = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat weekly --times 2")
+        self.assertIn("日程冲突", conflict)
+        self.assertIn("固定会", conflict)
+
     def test_slash_schedule_repeat_update_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-20 09:30 站会")
@@ -261,6 +277,14 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("/schedule list")
         self.assertIn("2026-02-21 10:00", list_resp)
         self.assertIn("2026-02-28 10:00", list_resp)
+
+    def test_slash_schedule_update_conflict_detection(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会")
+        agent.handle_input("/schedule add 2026-02-21 09:30 周会")
+
+        conflict = agent.handle_input("/schedule update 1 2026-02-21 09:30 复盘会")
+        self.assertIn("日程冲突", conflict)
 
     def test_slash_schedule_calendar_view_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -343,6 +367,19 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("2026-02-20 09:30", list_resp)
         self.assertIn("2026-02-27 09:30", list_resp)
         self.assertIn("2026-03-06 09:30", list_resp)
+
+    def test_nl_schedule_add_conflict_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("schedule_add", event_time="2026-02-20 09:30", title="周会"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_schedule("站会", "2026-02-20 09:30")
+
+        result = agent.handle_input("帮我加一个 2 月 20 号 9 点半周会")
+        self.assertIn("日程冲突", result)
+        self.assertIn("站会", result)
 
     def test_nl_schedule_view_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(

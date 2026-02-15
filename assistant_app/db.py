@@ -367,6 +367,38 @@ class AssistantDB:
             for row in rows
         ]
 
+    def find_schedule_conflicts(
+        self,
+        event_times: list[str],
+        *,
+        exclude_schedule_id: int | None = None,
+    ) -> list[ScheduleItem]:
+        if not event_times:
+            return []
+
+        unique_times = sorted({item.strip() for item in event_times if item.strip()})
+        if not unique_times:
+            return []
+        placeholders = ", ".join("?" for _ in unique_times)
+        query = f"SELECT id, title, event_time, created_at FROM schedules WHERE event_time IN ({placeholders})"
+        params: list[object] = list(unique_times)
+        if exclude_schedule_id is not None:
+            query += " AND id != ?"
+            params.append(exclude_schedule_id)
+        query += " ORDER BY event_time ASC, id ASC"
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            ScheduleItem(
+                id=row["id"],
+                title=row["title"],
+                event_time=row["event_time"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
         with self._connect() as conn:
             row = conn.execute(
