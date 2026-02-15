@@ -1,5 +1,5 @@
 ## a. Commit message
-- 待提交（建议：`refactor: enforce pure plan-only flow and remove legacy intent/chat path`）
+- `5060f41 refactor: enforce pure plan-only flow`
 
 ## b. Modified Files and Summary of Changes
 - `assistant_app/agent.py`
