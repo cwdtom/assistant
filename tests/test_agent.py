@@ -455,6 +455,33 @@ class AssistantAgentTest(unittest.TestCase):
         invalid_duration = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 0")
         self.assertIn("用法", invalid_duration)
 
+    def test_slash_schedule_remind_fields_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        add_resp = agent.handle_input(
+            "/schedule add 2026-02-20 09:30 站会 --remind 2026-02-20 09:00 "
+            "--interval 1440 --times 3 --remind-start 2026-02-20 08:30"
+        )
+        self.assertIn("提醒:2026-02-20 09:00", add_resp)
+        self.assertIn("重复提醒开始:2026-02-20 08:30", add_resp)
+
+        detail = agent.handle_input("/schedule get 1")
+        self.assertIn("提醒时间", detail)
+        self.assertIn("重复提醒开始", detail)
+        self.assertIn("2026-02-20 09:00", detail)
+        self.assertIn("2026-02-20 08:30", detail)
+
+        update_resp = agent.handle_input(
+            "/schedule update 1 2026-02-21 09:30 站会 --remind 2026-02-21 09:10 "
+            "--interval 1440 --times 3 --remind-start 2026-02-21 08:40"
+        )
+        self.assertIn("提醒:2026-02-21 09:10", update_resp)
+        self.assertIn("重复提醒开始:2026-02-21 08:40", update_resp)
+
+        invalid = agent.handle_input(
+            "/schedule add 2026-02-22 09:30 单次会 --remind-start 2026-02-22 09:00"
+        )
+        self.assertIn("用法", invalid)
+
     def test_slash_schedule_repeat_default_times_is_infinite(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 60")

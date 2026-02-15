@@ -55,16 +55,19 @@ python main.py
 - `/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
 - `/todo delete <id>`
 - `/todo done <id>`
-- `/schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]`
+- `/schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] [--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]`
 - `/schedule get <id>`
 - `/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]`
-- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]`
+- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] [--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]`
 - `/schedule repeat <id> <on|off>`
 - `/schedule delete <id>`
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
 - 日程支持 `duration_minutes` 字段（单位分钟，新增默认 `60`；更新时不传则保留原值）
 - 日程支持重复创建（interval 分钟 + times），重复规则单独存储，查询时与普通日程拼接
+- 日程支持提醒时间字段（`--remind`，不填则不提醒）
+- 重复日程支持提醒开始时间字段（`--remind-start`，仅用于重复规则）
+- 当前版本仅存储并展示提醒相关字段，尚未实现自动提醒触发
 - 当提供 `--interval` 但省略 `--times` 时，默认重复次数为 `-1`（无限循环）
 - 重复规则支持启用/停用（停用后仅保留基础日程，不展开后续重复实例）
 - `/schedule list` 默认展示“从前天开始向后 1 个月”的窗口，最大查询范围固定为 1 个月
@@ -116,6 +119,24 @@ python main.py
 - `day`：按天查看日程，参数格式 `YYYY-MM-DD`
 - `week`：按周查看日程（周一到周日），参数格式 `YYYY-MM-DD`
 - `month`：按月查看日程，参数格式 `YYYY-MM`
+
+## 数据库表结构（SQLite）
+- `todos`：待办主表，存储内容、标签、优先级、完成状态、创建/完成时间、截止时间、提醒时间。
+- `schedules`：日程主表，存储标题、事件时间、时长、提醒时间、创建时间。
+- `recurring_schedules`：重复规则表（关联 `schedules.id`），存储重复开始时间、间隔分钟、重复次数、重复提醒开始时间、启停状态；删除日程会级联删除规则。
+- `chat_history`：聊天历史表，存储消息角色、消息内容和创建时间。
+
+## 初始化数据库（可选）
+- 初始化 SQL 文件：`sql/init_assistant_db.sql`
+- 适用场景：手动创建全新 SQLite 库（不含历史迁移步骤）。
+- 示例命令：
+```bash
+# 按默认库名初始化
+sqlite3 assistant.db < sql/init_assistant_db.sql
+
+# 或初始化到自定义路径（与 ASSISTANT_DB_PATH 一致）
+sqlite3 /path/to/assistant.db < sql/init_assistant_db.sql
+```
 
 ## 测试
 ```bash

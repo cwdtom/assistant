@@ -175,6 +175,33 @@ class AssistantDBTest(unittest.TestCase):
         assert item is not None
         self.assertEqual(item.duration_minutes, 45)
 
+    def test_schedule_remind_fields_are_persisted(self) -> None:
+        schedule_id = self.db.add_schedule(
+            "项目同步",
+            "2026-02-20 10:00",
+            duration_minutes=45,
+            remind_at="2026-02-20 09:45",
+        )
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 10:00",
+                repeat_interval_minutes=1440,
+                repeat_times=3,
+                remind_start_time="2026-02-20 09:30",
+            )
+        )
+
+        item = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.remind_at, "2026-02-20 09:45")
+        self.assertEqual(item.repeat_remind_start_time, "2026-02-20 09:30")
+
+        listed = self.db.list_schedules()
+        self.assertTrue(all(x.remind_at == "2026-02-20 09:45" for x in listed))
+        self.assertTrue(all(x.repeat_remind_start_time == "2026-02-20 09:30" for x in listed))
+
     def test_add_schedules_batch_with_custom_duration(self) -> None:
         ids = self.db.add_schedules(
             "晨会",
@@ -367,6 +394,30 @@ class AssistantDBTest(unittest.TestCase):
         deleted = self.db.delete_schedule(schedule_id)
         self.assertTrue(deleted)
         self.assertIsNone(self.db.get_schedule(schedule_id))
+
+    def test_update_schedule_can_update_remind_fields(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-02-20 10:00",
+            repeat_interval_minutes=10080,
+            repeat_times=3,
+        )
+
+        updated = self.db.update_schedule(
+            schedule_id,
+            title="项目同步-改",
+            event_time="2026-02-21 11:00",
+            remind_at="2026-02-21 10:40",
+            repeat_remind_start_time="2026-02-21 10:20",
+        )
+        self.assertTrue(updated)
+
+        changed = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.remind_at, "2026-02-21 10:40")
+        self.assertEqual(changed.repeat_remind_start_time, "2026-02-21 10:20")
 
     def test_update_schedule_without_duration_keeps_existing_duration(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00", duration_minutes=45)

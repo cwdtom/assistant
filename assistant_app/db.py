@@ -30,9 +30,11 @@ class ScheduleItem:
     event_time: str
     duration_minutes: int
     created_at: str
+    remind_at: str | None = None
     repeat_interval_minutes: int | None = None
     repeat_times: int | None = None
     repeat_enabled: bool | None = None
+    repeat_remind_start_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class RecurringScheduleRule:
     start_time: str
     repeat_interval_minutes: int
     repeat_times: int
+    remind_start_time: str | None
     enabled: bool
     created_at: str
 
@@ -101,11 +104,13 @@ class AssistantDB:
                     title TEXT NOT NULL,
                     event_time TEXT NOT NULL,
                     duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes >= 1),
+                    remind_at TEXT,
                     created_at TEXT NOT NULL
                 )
                 """
             )
             self._ensure_schedule_duration_column(conn)
+            self._ensure_schedule_remind_column(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS recurring_schedules (
@@ -114,6 +119,7 @@ class AssistantDB:
                     start_time TEXT NOT NULL,
                     repeat_interval_minutes INTEGER NOT NULL CHECK (repeat_interval_minutes >= 1),
                     repeat_times INTEGER NOT NULL CHECK (repeat_times = -1 OR repeat_times >= 2),
+                    remind_start_time TEXT,
                     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
@@ -121,6 +127,7 @@ class AssistantDB:
                 """
             )
             self._ensure_recurring_interval_column(conn)
+            self._ensure_recurring_remind_start_column(conn)
             self._ensure_recurring_enabled_column(conn)
             self._ensure_recurring_repeat_times_constraint(conn)
             conn.execute(
@@ -167,6 +174,12 @@ class AssistantDB:
             "WHERE duration_minutes IS NULL OR duration_minutes < 1"
         )
 
+    def _ensure_schedule_remind_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
+        names = {row["name"] for row in columns}
+        if "remind_at" not in names:
+            conn.execute("ALTER TABLE schedules ADD COLUMN remind_at TEXT")
+
     def _ensure_recurring_interval_column(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(recurring_schedules)").fetchall()
         names = {row["name"] for row in columns}
@@ -200,6 +213,12 @@ class AssistantDB:
             "UPDATE recurring_schedules SET enabled = 1 "
             "WHERE enabled IS NULL OR enabled NOT IN (0, 1)"
         )
+
+    def _ensure_recurring_remind_start_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(recurring_schedules)").fetchall()
+        names = {row["name"] for row in columns}
+        if "remind_start_time" not in names:
+            conn.execute("ALTER TABLE recurring_schedules ADD COLUMN remind_start_time TEXT")
 
     def _ensure_recurring_repeat_times_constraint(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -238,6 +257,9 @@ class AssistantDB:
         enabled_expr = "1"
         if "enabled" in names:
             enabled_expr = "COALESCE(enabled, 1)"
+        remind_start_expr = "NULL"
+        if "remind_start_time" in names:
+            remind_start_expr = "remind_start_time"
 
         conn.execute("ALTER TABLE recurring_schedules RENAME TO recurring_schedules_old")
         conn.execute(
@@ -248,6 +270,7 @@ class AssistantDB:
                 start_time TEXT NOT NULL,
                 repeat_interval_minutes INTEGER NOT NULL CHECK (repeat_interval_minutes >= 1),
                 repeat_times INTEGER NOT NULL CHECK (repeat_times = -1 OR repeat_times >= 2),
+                remind_start_time TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
@@ -257,7 +280,8 @@ class AssistantDB:
         conn.execute(
             f"""
             INSERT INTO recurring_schedules (
-                id, schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at
+                id, schedule_id, start_time, repeat_interval_minutes, repeat_times,
+                remind_start_time, enabled, created_at
             )
             SELECT
                 id,
@@ -269,6 +293,7 @@ class AssistantDB:
                     WHEN repeat_times IS NULL OR repeat_times < 2 THEN 2
                     ELSE repeat_times
                 END,
+                {remind_start_expr},
                 {enabled_expr},
                 created_at
             FROM recurring_schedules_old
@@ -479,19 +504,32 @@ class AssistantDB:
             )
             return cur.rowcount > 0
 
-    def add_schedule(self, title: str, event_time: str, duration_minutes: int = 60) -> int:
+    def add_schedule(
+        self,
+        title: str,
+        event_time: str,
+        duration_minutes: int = 60,
+        remind_at: str | None = None,
+    ) -> int:
         timestamp = _now_iso()
         normalized_duration = _normalize_duration_minutes(duration_minutes)
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO schedules (title, event_time, duration_minutes, created_at) VALUES (?, ?, ?, ?)",
-                (title, event_time, normalized_duration, timestamp),
+                "INSERT INTO schedules (title, event_time, duration_minutes, remind_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (title, event_time, normalized_duration, remind_at, timestamp),
             )
             if cur.lastrowid is None:
                 raise RuntimeError("failed to insert schedule")
             return int(cur.lastrowid)
 
-    def add_schedules(self, title: str, event_times: list[str], duration_minutes: int = 60) -> list[int]:
+    def add_schedules(
+        self,
+        title: str,
+        event_times: list[str],
+        duration_minutes: int = 60,
+        remind_at: str | None = None,
+    ) -> list[int]:
         if not event_times:
             return []
         timestamp = _now_iso()
@@ -500,8 +538,9 @@ class AssistantDB:
         with self._connect() as conn:
             for event_time in event_times:
                 cur = conn.execute(
-                    "INSERT INTO schedules (title, event_time, duration_minutes, created_at) VALUES (?, ?, ?, ?)",
-                    (title, event_time, normalized_duration, timestamp),
+                    "INSERT INTO schedules (title, event_time, duration_minutes, remind_at, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (title, event_time, normalized_duration, remind_at, timestamp),
                 )
                 if cur.lastrowid is None:
                     raise RuntimeError("failed to insert schedule")
@@ -515,6 +554,7 @@ class AssistantDB:
         start_time: str,
         repeat_interval_minutes: int,
         repeat_times: int,
+        remind_start_time: str | None = None,
         enabled: bool = True,
     ) -> bool:
         if repeat_times == 1:
@@ -538,13 +578,15 @@ class AssistantDB:
             conn.execute(
                 """
                 INSERT INTO recurring_schedules (
-                    schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at
+                    schedule_id, start_time, repeat_interval_minutes, repeat_times,
+                    remind_start_time, enabled, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(schedule_id) DO UPDATE SET
                     start_time = excluded.start_time,
                     repeat_interval_minutes = excluded.repeat_interval_minutes,
                     repeat_times = excluded.repeat_times,
+                    remind_start_time = excluded.remind_start_time,
                     enabled = excluded.enabled
                 """,
                 (
@@ -552,6 +594,7 @@ class AssistantDB:
                     start_time,
                     repeat_interval_minutes,
                     repeat_times,
+                    remind_start_time,
                     1 if enabled else 0,
                     timestamp,
                 ),
@@ -700,12 +743,12 @@ class AssistantDB:
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, title, event_time, duration_minutes, created_at FROM schedules WHERE id = ?",
+                "SELECT id, title, event_time, duration_minutes, remind_at, created_at FROM schedules WHERE id = ?",
                 (schedule_id,),
             ).fetchone()
             rule_row = conn.execute(
                 """
-                SELECT schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled
+                SELECT schedule_id, start_time, repeat_interval_minutes, repeat_times, remind_start_time, enabled
                 FROM recurring_schedules
                 WHERE schedule_id = ?
                 """,
@@ -721,6 +764,7 @@ class AssistantDB:
                 start_time=str(rule_row["start_time"]),
                 repeat_interval_minutes=int(rule_row["repeat_interval_minutes"]),
                 repeat_times=int(rule_row["repeat_times"]),
+                remind_start_time=str(rule_row["remind_start_time"]) if rule_row["remind_start_time"] else None,
                 enabled=bool(rule_row["enabled"]),
                 created_at=row["created_at"],
             )
@@ -732,6 +776,7 @@ class AssistantDB:
                 duration_minutes=_normalize_duration_minutes(
                     row["duration_minutes"] if row["duration_minutes"] is not None else 60
                 ),
+                remind_at=str(row["remind_at"]) if row["remind_at"] else None,
                 created_at=row["created_at"],
             ),
             rule,
@@ -744,6 +789,8 @@ class AssistantDB:
         title: str,
         event_time: str,
         duration_minutes: int | object = _UNSET,
+        remind_at: str | None | object = _UNSET,
+        repeat_remind_start_time: str | None | object = _UNSET,
     ) -> bool:
         fields = ["title = ?", "event_time = ?"]
         values: list[object] = [title, event_time]
@@ -758,6 +805,9 @@ class AssistantDB:
             normalized_duration = _normalize_duration_minutes(duration_minutes)
             fields.append("duration_minutes = ?")
             values.append(normalized_duration)
+        if remind_at is not _UNSET:
+            fields.append("remind_at = ?")
+            values.append(remind_at)
 
         values.append(schedule_id)
         with self._connect() as conn:
@@ -771,6 +821,11 @@ class AssistantDB:
                 "UPDATE recurring_schedules SET start_time = ? WHERE schedule_id = ?",
                 (event_time, schedule_id),
             )
+            if repeat_remind_start_time is not _UNSET:
+                conn.execute(
+                    "UPDATE recurring_schedules SET remind_start_time = ? WHERE schedule_id = ?",
+                    (repeat_remind_start_time, schedule_id),
+                )
             return True
 
     def delete_schedule(self, schedule_id: int) -> bool:
@@ -781,7 +836,7 @@ class AssistantDB:
 
     def _list_base_schedules(self, conn: sqlite3.Connection) -> list[ScheduleItem]:
         rows = conn.execute(
-            "SELECT id, title, event_time, duration_minutes, created_at "
+            "SELECT id, title, event_time, duration_minutes, remind_at, created_at "
             "FROM schedules ORDER BY event_time ASC, id ASC"
         ).fetchall()
         return [
@@ -792,6 +847,7 @@ class AssistantDB:
                 duration_minutes=_normalize_duration_minutes(
                     row["duration_minutes"] if row["duration_minutes"] is not None else 60
                 ),
+                remind_at=str(row["remind_at"]) if row["remind_at"] else None,
                 created_at=str(row["created_at"]),
             )
             for row in rows
@@ -800,7 +856,8 @@ class AssistantDB:
     def _list_recurring_rules(self, conn: sqlite3.Connection) -> list[RecurringScheduleRule]:
         rows = conn.execute(
             """
-            SELECT id, schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at
+            SELECT id, schedule_id, start_time, repeat_interval_minutes, repeat_times,
+                   remind_start_time, enabled, created_at
             FROM recurring_schedules
             ORDER BY id ASC
             """
@@ -812,6 +869,7 @@ class AssistantDB:
                 start_time=str(row["start_time"]),
                 repeat_interval_minutes=int(row["repeat_interval_minutes"]),
                 repeat_times=int(row["repeat_times"]),
+                remind_start_time=str(row["remind_start_time"]) if row["remind_start_time"] else None,
                 enabled=bool(row["enabled"]) if row["enabled"] is not None else True,
                 created_at=str(row["created_at"]),
             )
@@ -953,9 +1011,11 @@ def _expand_recurring_schedule_items(
             event_time=event_time,
             duration_minutes=base.duration_minutes,
             created_at=base.created_at,
+            remind_at=base.remind_at,
             repeat_interval_minutes=rule.repeat_interval_minutes,
             repeat_times=rule.repeat_times,
             repeat_enabled=rule.enabled,
+            repeat_remind_start_time=rule.remind_start_time,
         )
         for event_time in expanded_times
     ]
@@ -970,9 +1030,11 @@ def _attach_recurrence_to_schedule(base: ScheduleItem, rule: RecurringScheduleRu
         event_time=base.event_time,
         duration_minutes=base.duration_minutes,
         created_at=base.created_at,
+        remind_at=base.remind_at,
         repeat_interval_minutes=rule.repeat_interval_minutes,
         repeat_times=rule.repeat_times,
         repeat_enabled=rule.enabled,
+        repeat_remind_start_time=rule.remind_start_time,
     )
 
 
