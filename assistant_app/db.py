@@ -336,6 +336,22 @@ class AssistantDB:
                 raise RuntimeError("failed to insert schedule")
             return int(cur.lastrowid)
 
+    def add_schedules(self, title: str, event_times: list[str]) -> list[int]:
+        if not event_times:
+            return []
+        timestamp = _now_iso()
+        created_ids: list[int] = []
+        with self._connect() as conn:
+            for event_time in event_times:
+                cur = conn.execute(
+                    "INSERT INTO schedules (title, event_time, created_at) VALUES (?, ?, ?)",
+                    (title, event_time, timestamp),
+                )
+                if cur.lastrowid is None:
+                    raise RuntimeError("failed to insert schedule")
+                created_ids.append(int(cur.lastrowid))
+        return created_ids
+
     def list_schedules(self) -> list[ScheduleItem]:
         with self._connect() as conn:
             rows = conn.execute(

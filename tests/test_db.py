@@ -150,6 +150,20 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(items[0].title, "早上的会")
         self.assertEqual(items[1].title, "晚上的会")
 
+    def test_add_schedules_batch(self) -> None:
+        ids = self.db.add_schedules(
+            "晨会",
+            ["2026-02-20 09:00", "2026-02-21 09:00", "2026-02-22 09:00"],
+        )
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(ids, [1, 2, 3])
+
+        items = self.db.list_schedules()
+        self.assertEqual(len(items), 3)
+        self.assertEqual(
+            [item.event_time for item in items], ["2026-02-20 09:00", "2026-02-21 09:00", "2026-02-22 09:00"]
+        )
+
     def test_schedule_crud(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
 

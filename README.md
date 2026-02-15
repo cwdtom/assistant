@@ -43,12 +43,13 @@ python main.py
 - `/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
 - `/todo delete <id>`
 - `/todo done <id>`
-- `/schedule add <YYYY-MM-DD HH:MM> <标题>`
+- `/schedule add <YYYY-MM-DD HH:MM> <标题> [--repeat <none|daily|weekly|monthly>] [--times <>=1>]`
 - `/schedule get <id>`
-- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题>`
+- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--repeat <none|daily|weekly|monthly>] [--times <>=1>]`
 - `/schedule delete <id>`
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
+- 日程支持重复创建（daily/weekly/monthly + times）
 - 待办支持关键词搜索（可选按标签范围搜索）
 - 待办支持视图（all/today/overdue/upcoming/inbox）
 - 待办支持 `priority` 字段（默认 `0`，数值越小优先级越高，最小为 `0`）
@@ -66,6 +67,7 @@ python main.py
   - `完成待办 1`
   - `查看 work 标签的待办`
   - `添加日程 2026-02-15 09:30 站会`
+  - `添加日程 2026-02-15 09:30 站会，每周重复三次`
   - `查看日程 1`
   - `把日程 1 改到 2026-02-16 09:30 站会`
   - `删除日程 1`

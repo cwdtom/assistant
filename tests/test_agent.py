@@ -29,6 +29,8 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "schedule_id": None,
         "event_time": None,
         "title": None,
+        "schedule_repeat": None,
+        "schedule_repeat_times": None,
     }
     payload.update(overrides)
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -233,6 +235,31 @@ class AssistantAgentTest(unittest.TestCase):
         missing_resp = agent.handle_input("/schedule get 1")
         self.assertIn("未找到日程 #1", missing_resp)
 
+    def test_slash_schedule_repeat_add_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat daily --times 3")
+        self.assertIn("已添加重复日程 3 条", add_resp)
+
+        list_resp = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-20 09:30", list_resp)
+        self.assertIn("2026-02-21 09:30", list_resp)
+        self.assertIn("2026-02-22 09:30", list_resp)
+
+        invalid = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat none --times 3")
+        self.assertIn("用法", invalid)
+
+    def test_slash_schedule_repeat_update_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会")
+
+        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会 --repeat weekly --times 2")
+        self.assertIn("新增 1 条后续日程", update_resp)
+
+        list_resp = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-21 10:00", list_resp)
+        self.assertIn("2026-02-28 10:00", list_resp)
+
     def test_nl_todo_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -268,6 +295,29 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("看一下日程")
         self.assertIn("周会", list_resp)
         self.assertEqual(len(fake_llm.calls), 2)
+
+    def test_nl_schedule_repeat_add_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json(
+                    "schedule_add",
+                    event_time="2026-02-20 09:30",
+                    title="周会",
+                    schedule_repeat="weekly",
+                    schedule_repeat_times=3,
+                ),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        add_resp = agent.handle_input("每周加一个周会，连续三周")
+        self.assertIn("已添加重复日程 3 条", add_resp)
+        self.assertEqual(len(fake_llm.calls), 1)
+
+        list_resp = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-20 09:30", list_resp)
+        self.assertIn("2026-02-27 09:30", list_resp)
+        self.assertIn("2026-03-06 09:30", list_resp)
 
     def test_nl_todo_search_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -510,6 +560,24 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("看一下待办视图")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
+    def test_schedule_repeat_invalid_combo_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json(
+                    "schedule_add",
+                    event_time="2026-02-20 09:30",
+                    title="周会",
+                    schedule_repeat="none",
+                    schedule_repeat_times=2,
+                ),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("帮我加一个重复日程")
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
