@@ -3,15 +3,13 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from assistant_app.db import AssistantDB
 from assistant_app.llm import LLMClient
 
 SCHEDULE_ADD_PATTERN = re.compile(r"^/schedule add (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+(.+)$")
-SCHEDULE_UPDATE_PATTERN = re.compile(
-    r"^/schedule update (\d+)\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+(.+)$"
-)
+SCHEDULE_UPDATE_PATTERN = re.compile(r"^/schedule update (\d+)\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+(.+)$")
 TODO_TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
 TODO_DUE_OPTION_PATTERN = re.compile(r"(^|\s)--due\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
 TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
@@ -51,7 +49,7 @@ INTENT_ANALYZE_PROMPT = """
 
 输出 JSON 字段固定为:
 {{
-  "intent": "todo_add|todo_get|todo_list|todo_update|todo_delete|todo_done|schedule_add|schedule_get|schedule_list|schedule_update|schedule_delete|chat",
+  "intent": "one_of_supported_intents",
   "todo_content": "string|null",
   "todo_tag": "string|null",
   "todo_due_time": "YYYY-MM-DD HH:MM|null",
@@ -77,7 +75,7 @@ INTENT_ANALYZE_PROMPT = """
 
 
 class AssistantAgent:
-    def __init__(self, db: AssistantDB, llm_client: Optional[LLMClient] = None) -> None:
+    def __init__(self, db: AssistantDB, llm_client: LLMClient | None = None) -> None:
         self.db = db
         self.llm_client = llm_client
 
@@ -104,30 +102,38 @@ class AssistantAgent:
             return self._help_text()
 
         if command.startswith("/todo add "):
-            parsed = _parse_todo_add_input(command.removeprefix("/todo add ").strip())
-            if parsed is None:
+            add_parsed = _parse_todo_add_input(command.removeprefix("/todo add ").strip())
+            if add_parsed is None:
                 return "用法: /todo add <内容> [--tag <标签>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
-            content, tag, due_at, remind_at = parsed
+            content, add_tag, add_due_at, add_remind_at = add_parsed
             if not content:
                 return "用法: /todo add <内容> [--tag <标签>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
             try:
-                todo_id = self.db.add_todo(content, tag=tag, due_at=due_at, remind_at=remind_at)
+                added_todo_id = self.db.add_todo(
+                    content,
+                    tag=add_tag,
+                    due_at=add_due_at,
+                    remind_at=add_remind_at,
+                )
             except ValueError:
                 return "提醒时间需要和截止时间一起设置。"
-            return f"已添加待办 #{todo_id} [标签:{tag}]: {content}{_format_todo_meta_inline(due_at, remind_at)}"
+            return (
+                f"已添加待办 #{added_todo_id} [标签:{add_tag}]: {content}"
+                f"{_format_todo_meta_inline(add_due_at, add_remind_at)}"
+            )
 
         if command == "/todo list" or command.startswith("/todo list "):
             parsed_tag = _parse_todo_list_tag(command)
-            if parsed_tag is _INVALID_TODO_TAG:
+            if parsed_tag is _INVALID_TODO_TAG or not isinstance(parsed_tag, (str, type(None))):
                 return "用法: /todo list [--tag <标签>]"
-            tag = parsed_tag
-            todos = self.db.list_todos(tag=tag)
+            list_tag = parsed_tag
+            todos = self.db.list_todos(tag=list_tag)
             if not todos:
-                if tag is None:
+                if list_tag is None:
                     return "暂无待办。"
-                return f"标签 {tag} 下暂无待办。"
+                return f"标签 {list_tag} 下暂无待办。"
 
-            header = f"待办列表(标签: {tag}):" if tag is not None else "待办列表:"
+            header = f"待办列表(标签: {list_tag}):" if list_tag is not None else "待办列表:"
             rows = [
                 [
                     str(item.id),
@@ -148,12 +154,12 @@ class AssistantAgent:
             return f"{header}\n{table}"
 
         if command.startswith("/todo get "):
-            todo_id = _parse_positive_int(command.removeprefix("/todo get ").strip())
-            if todo_id is None:
+            get_todo_id = _parse_positive_int(command.removeprefix("/todo get ").strip())
+            if get_todo_id is None:
                 return "用法: /todo get <id>"
-            todo = self.db.get_todo(todo_id)
+            todo = self.db.get_todo(get_todo_id)
             if todo is None:
-                return f"未找到待办 #{todo_id}"
+                return f"未找到待办 #{get_todo_id}"
             status = "x" if todo.done else " "
             completed_at = todo.completed_at or "-"
             due_at = todo.due_at or "-"
@@ -176,44 +182,55 @@ class AssistantAgent:
             return f"待办详情:\n{table}"
 
         if command.startswith("/todo update "):
-            parsed = _parse_todo_update_input(command.removeprefix("/todo update ").strip())
-            if parsed is None:
-                return "用法: /todo update <id> <内容> [--tag <标签>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
-            todo_id, content, tag, due_at, remind_at, has_due, has_remind = parsed
-            current = self.db.get_todo(todo_id)
+            update_parsed = _parse_todo_update_input(command.removeprefix("/todo update ").strip())
+            if update_parsed is None:
+                return (
+                    "用法: /todo update <id> <内容> [--tag <标签>] "
+                    "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
+                )
+            (
+                update_todo_id,
+                content,
+                update_tag,
+                update_due_at,
+                update_remind_at,
+                has_due,
+                has_remind,
+            ) = update_parsed
+            current = self.db.get_todo(update_todo_id)
             if current is None:
-                return f"未找到待办 #{todo_id}"
+                return f"未找到待办 #{update_todo_id}"
 
-            if has_remind and remind_at and not ((has_due and due_at) or current.due_at):
+            if has_remind and update_remind_at and not ((has_due and update_due_at) or current.due_at):
                 return "提醒时间需要和截止时间一起设置。"
 
             update_kwargs: dict[str, Any] = {"content": content}
-            if tag is not None:
-                update_kwargs["tag"] = tag
+            if update_tag is not None:
+                update_kwargs["tag"] = update_tag
             if has_due:
-                update_kwargs["due_at"] = due_at
+                update_kwargs["due_at"] = update_due_at
             if has_remind:
-                update_kwargs["remind_at"] = remind_at
+                update_kwargs["remind_at"] = update_remind_at
 
-            updated = self.db.update_todo(todo_id, **update_kwargs)
+            updated = self.db.update_todo(update_todo_id, **update_kwargs)
             if not updated:
-                return f"未找到待办 #{todo_id}"
-            todo = self.db.get_todo(todo_id)
+                return f"未找到待办 #{update_todo_id}"
+            todo = self.db.get_todo(update_todo_id)
             if todo is None:
-                return f"已更新待办 #{todo_id}: {content}"
+                return f"已更新待办 #{update_todo_id}: {content}"
             return (
-                f"已更新待办 #{todo_id} [标签:{todo.tag}]: {content}"
+                f"已更新待办 #{update_todo_id} [标签:{todo.tag}]: {content}"
                 f"{_format_todo_meta_inline(todo.due_at, todo.remind_at)}"
             )
 
         if command.startswith("/todo delete "):
-            todo_id = _parse_positive_int(command.removeprefix("/todo delete ").strip())
-            if todo_id is None:
+            delete_todo_id = _parse_positive_int(command.removeprefix("/todo delete ").strip())
+            if delete_todo_id is None:
                 return "用法: /todo delete <id>"
-            deleted = self.db.delete_todo(todo_id)
+            deleted = self.db.delete_todo(delete_todo_id)
             if not deleted:
-                return f"未找到待办 #{todo_id}"
-            return f"待办 #{todo_id} 已删除。"
+                return f"未找到待办 #{delete_todo_id}"
+            return f"待办 #{delete_todo_id} 已删除。"
 
         if command.startswith("/todo done "):
             id_text = command.removeprefix("/todo done ").strip()
@@ -223,8 +240,8 @@ class AssistantAgent:
             if not done:
                 return f"未找到待办 #{id_text}"
             todo = self.db.get_todo(int(id_text))
-            completed_at = todo.completed_at if todo is not None else _now_time_text()
-            return f"待办 #{id_text} 已完成。完成时间: {completed_at}"
+            done_completed_at = todo.completed_at if todo is not None else _now_time_text()
+            return f"待办 #{id_text} 已完成。完成时间: {done_completed_at}"
 
         if command == "/schedule list":
             items = self.db.list_schedules()
@@ -232,10 +249,7 @@ class AssistantAgent:
                 return "暂无日程。"
             table = _render_table(
                 headers=["ID", "时间", "标题", "创建时间"],
-                rows=[
-                    [str(item.id), item.event_time, item.title, item.created_at]
-                    for item in items
-                ],
+                rows=[[str(item.id), item.event_time, item.title, item.created_at] for item in items],
             )
             return f"日程列表:\n{table}"
 
@@ -401,10 +415,7 @@ class AssistantAgent:
         intent = str(payload.get("intent", "chat")).lower()
 
         if intent == INTENT_SERVICE_UNAVAILABLE:
-            return (
-                "抱歉，当前意图识别服务暂时不可用。"
-                "你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
-            )
+            return "抱歉，当前意图识别服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
 
         if intent == "todo_list":
             tag = _normalize_todo_tag_value(payload.get("todo_tag"))
@@ -487,9 +498,7 @@ class AssistantAgent:
             title = str(payload.get("title") or "").strip()
             if schedule_id is None or not event_time or not title:
                 return "我识别到你可能要修改日程，但编号、时间或标题不完整。"
-            return self._handle_command(
-                f"/schedule update {self._to_int(schedule_id)} {event_time} {title}"
-            )
+            return self._handle_command(f"/schedule update {self._to_int(schedule_id)} {event_time} {title}")
 
         if intent == "schedule_delete":
             schedule_id = payload.get("schedule_id")
@@ -551,9 +560,7 @@ class AssistantAgent:
             )
             or "- 无"
         )
-        schedule_lines = (
-            "\n".join(f"- {item.event_time} {item.title}" for item in schedules) or "- 无"
-        )
+        schedule_lines = "\n".join(f"- {item.event_time} {item.title}" for item in schedules) or "- 无"
 
         return (
             "你是一个中文优先的个人助手。回答尽量简洁、可执行。\n"
@@ -603,6 +610,8 @@ def _parse_todo_add_input(raw: str) -> tuple[str, str, str | None, str | None] |
     content, tag, due_at, remind_at, _, _ = parsed
     if remind_at and not due_at:
         return None
+    if tag is None:
+        tag = "default"
     return content, tag, due_at, remind_at
 
 

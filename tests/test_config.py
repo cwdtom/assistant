@@ -43,9 +43,7 @@ class ConfigTest(unittest.TestCase):
     def test_load_env_file_sets_only_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
-            env_path.write_text(
-                "DEEPSEEK_API_KEY=file-key\nDEEPSEEK_MODEL=deepseek-chat\n", encoding="utf-8"
-            )
+            env_path.write_text("DEEPSEEK_API_KEY=file-key\nDEEPSEEK_MODEL=deepseek-chat\n", encoding="utf-8")
             with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "existing-key"}, clear=True):
                 load_env_file(str(env_path))
                 self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "existing-key")

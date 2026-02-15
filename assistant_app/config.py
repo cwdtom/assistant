@@ -34,16 +34,8 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
     if load_dotenv:
         load_env_file()
     api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = (
-        os.getenv("DEEPSEEK_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or "https://api.deepseek.com"
-    )
-    model = (
-        os.getenv("DEEPSEEK_MODEL")
-        or os.getenv("OPENAI_MODEL")
-        or "deepseek-chat"
-    )
+    base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.deepseek.com"
+    model = os.getenv("DEEPSEEK_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-chat"
     return AppConfig(
         api_key=api_key,
         base_url=base_url,

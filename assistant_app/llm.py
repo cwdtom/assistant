@@ -19,8 +19,7 @@ except Exception:
 
 
 class LLMClient(Protocol):
-    def reply(self, messages: list[dict[str, str]]) -> str:
-        ...
+    def reply(self, messages: list[dict[str, str]]) -> str: ...
 
 
 @dataclass
@@ -49,9 +48,7 @@ class OpenAICompatibleClient:
         try:
             import openai
         except ImportError as exc:
-            raise RuntimeError(
-                "openai SDK 未安装，请先执行: pip install -e ."
-            ) from exc
+            raise RuntimeError("openai SDK 未安装，请先执行: pip install -e .") from exc
 
         if hasattr(openai, "OpenAI"):
             client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.timeout)

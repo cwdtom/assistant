@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,22 @@ from assistant_app.agent import (
     _try_parse_json,
 )
 from assistant_app.db import AssistantDB
+
+
+def _intent_json(intent: str, **overrides: object) -> str:
+    payload: dict[str, object | None] = {
+        "intent": intent,
+        "todo_content": None,
+        "todo_tag": None,
+        "todo_due_time": None,
+        "todo_remind_time": None,
+        "todo_id": None,
+        "schedule_id": None,
+        "event_time": None,
+        "title": None,
+    }
+    payload.update(overrides)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 class FakeLLMClient:
@@ -106,9 +123,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_slash_todo_due_and_remind_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
-        add_resp = agent.handle_input(
-            "/todo add 准备发布 --tag work --due 2026-02-25 18:00 --remind 2026-02-25 17:30"
-        )
+        add_resp = agent.handle_input("/todo add 准备发布 --tag work --due 2026-02-25 18:00 --remind 2026-02-25 17:30")
         self.assertIn("截止:2026-02-25 18:00", add_resp)
         self.assertIn("提醒:2026-02-25 17:30", add_resp)
 
@@ -150,8 +165,8 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_todo_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_add","todo_content":"买牛奶","todo_tag":"life","todo_due_time":null,"todo_remind_time":null,"todo_id":null,"event_time":null,"title":null}',
-                '{"intent":"todo_list","todo_content":null,"todo_tag":"life","todo_due_time":null,"todo_remind_time":null,"todo_id":null,"event_time":null,"title":null}',
+                _intent_json("todo_add", todo_content="买牛奶", todo_tag="life"),
+                _intent_json("todo_list", todo_tag="life"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -169,8 +184,8 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_schedule_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"schedule_add","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":"2026-02-20 09:30","title":"周会"}',
-                '{"intent":"schedule_list","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
+                _intent_json("schedule_add", event_time="2026-02-20 09:30", title="周会"),
+                _intent_json("schedule_list"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -185,7 +200,14 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_todo_update_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_update","todo_content":"买牛奶和面包","todo_tag":"life","todo_due_time":"2026-02-26 20:00","todo_remind_time":"2026-02-26 19:30","todo_id":1,"schedule_id":null,"event_time":null,"title":null}',
+                _intent_json(
+                    "todo_update",
+                    todo_content="买牛奶和面包",
+                    todo_tag="life",
+                    todo_due_time="2026-02-26 20:00",
+                    todo_remind_time="2026-02-26 19:30",
+                    todo_id=1,
+                ),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -206,7 +228,13 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_todo_update_only_remind_uses_existing_due(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_update","todo_content":"准备周报","todo_tag":"work","todo_due_time":null,"todo_remind_time":"2026-02-26 19:30","todo_id":1,"schedule_id":null,"event_time":null,"title":null}',
+                _intent_json(
+                    "todo_update",
+                    todo_content="准备周报",
+                    todo_tag="work",
+                    todo_remind_time="2026-02-26 19:30",
+                    todo_id=1,
+                ),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -225,7 +253,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_schedule_delete_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"schedule_delete","todo_content":null,"todo_id":null,"schedule_id":1,"event_time":null,"title":null}',
+                _intent_json("schedule_delete", schedule_id=1),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -238,7 +266,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_chat_path_requires_intent_then_chat(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"chat","todo_content":null,"todo_id":null,"event_time":null,"title":null}',
+                _intent_json("chat"),
                 "建议先处理高优先级事项",
             ]
         )
@@ -258,7 +286,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_intent_missing_fields_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_done","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
+                _intent_json("todo_done"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -270,8 +298,8 @@ class AssistantAgentTest(unittest.TestCase):
     def test_action_missing_params_retry_then_success(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_done","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
-                '{"intent":"todo_done","todo_content":null,"todo_id":1,"schedule_id":null,"event_time":null,"title":null}',
+                _intent_json("todo_done"),
+                _intent_json("todo_done", todo_id=1),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -284,7 +312,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"schedule_delete","todo_content":null,"todo_id":null,"schedule_id":null,"event_time":null,"title":null}',
+                _intent_json("schedule_delete"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -303,9 +331,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_non_json_model_text_is_treated_as_failure(self) -> None:
-        fake_llm = FakeLLMClient(
-            responses=["我先快速扫一遍待办项并给你汇总清单。"]
-        )
+        fake_llm = FakeLLMClient(responses=["我先快速扫一遍待办项并给你汇总清单。"])
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("看一下全部待办")
@@ -316,7 +342,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 "不是json",
-                "{\"intent\":\"todo_add\",\"todo_content\":\"明天早上10 :00吃早饭\",\"todo_due_time\":null,\"todo_remind_time\":null,\"todo_id\":null,\"schedule_id\":null,\"event_time\":null,\"title\":null}",
+                _intent_json("todo_add", todo_content="明天早上10 :00吃早饭"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -332,7 +358,12 @@ class AssistantAgentTest(unittest.TestCase):
     def test_todo_add_with_remind_without_due_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                '{"intent":"todo_add","todo_content":"准备周报","todo_tag":"work","todo_due_time":null,"todo_remind_time":"2026-02-25 09:00","todo_id":null,"schedule_id":null,"event_time":null,"title":null}'
+                _intent_json(
+                    "todo_add",
+                    todo_content="准备周报",
+                    todo_tag="work",
+                    todo_remind_time="2026-02-25 09:00",
+                )
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -359,7 +390,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNone(_extract_intent_label("你好"))
 
     def test_try_parse_json_from_fenced_block(self) -> None:
-        payload = _try_parse_json("```json\n{\"intent\":\"todo_list\"}\n```")
+        payload = _try_parse_json('```json\n{"intent":"todo_list"}\n```')
         self.assertIsNone(payload)
 
     def test_extract_args_from_text(self) -> None:
@@ -369,9 +400,7 @@ class AssistantAgentTest(unittest.TestCase):
         todo_done = _extract_args_from_text("先完成待办 12。", intent="todo_done")
         self.assertEqual(todo_done["todo_id"], 12)
 
-        schedule = _extract_args_from_text(
-            "已为你添加日程：2026-02-20 09:30，事项：周会。", intent="schedule_add"
-        )
+        schedule = _extract_args_from_text("已为你添加日程：2026-02-20 09:30，事项：周会。", intent="schedule_add")
         self.assertEqual(schedule["event_time"], "2026-02-20 09:30")
         self.assertEqual(schedule["title"], "周会")
 
@@ -381,6 +410,7 @@ class AssistantAgentTest(unittest.TestCase):
             "明天早上10 :00吃早饭",
         )
         self.assertIsNone(_extract_todo_content("我先看看有没有 .ics 文件"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,8 @@
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+# 开发工具（ruff/mypy/pre-commit）
+pip install -e ".[dev]"
 ```
 
 2. 配置环境变量
@@ -66,4 +68,25 @@ python main.py
 ## 测试
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
+```
+
+## 代码质量（lint/type-check）
+```bash
+# Ruff lint
+ruff check .
+
+# Ruff format
+ruff format .
+
+# mypy type check
+mypy
+```
+
+## pre-commit
+```bash
+# 安装 git hooks
+pre-commit install
+
+# 手动对全仓执行
+pre-commit run --all-files
 ```

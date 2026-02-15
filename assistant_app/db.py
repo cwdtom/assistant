@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
 
 _UNSET = object()
 
@@ -131,6 +131,8 @@ class AssistantDB:
                 """,
                 (content, normalized_tag, timestamp, due_at, remind_at),
             )
+            if cur.lastrowid is None:
+                raise RuntimeError("failed to insert todo")
             return int(cur.lastrowid)
 
     def list_todos(self, tag: str | None = None) -> list[TodoItem]:
@@ -265,6 +267,8 @@ class AssistantDB:
                 "INSERT INTO schedules (title, event_time, created_at) VALUES (?, ?, ?)",
                 (title, event_time, timestamp),
             )
+            if cur.lastrowid is None:
+                raise RuntimeError("failed to insert schedule")
             return int(cur.lastrowid)
 
     def list_schedules(self) -> list[ScheduleItem]:
