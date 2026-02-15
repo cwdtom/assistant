@@ -21,6 +21,7 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "intent": intent,
         "todo_content": None,
         "todo_tag": None,
+        "todo_view": None,
         "todo_priority": None,
         "todo_due_time": None,
         "todo_remind_time": None,
@@ -64,6 +65,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("/todo add", result)
         self.assertIn("--priority <>=0>", result)
         self.assertIn("/todo search <关键词>", result)
+        self.assertIn("/view list", result)
         self.assertIn("/todo update", result)
         self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
@@ -119,6 +121,31 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("买牛奶", result)
 
         invalid = agent.handle_input("/todo search --tag work")
+        self.assertIn("用法", invalid)
+
+    def test_slash_todo_view_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/todo add 今天复盘 --tag work --due 2026-02-15 18:00")
+        agent.handle_input("/todo add 明天写周报 --tag work --due 2026-02-16 10:00")
+        agent.handle_input("/todo add 收件箱任务 --tag life")
+
+        view_list = agent.handle_input("/view list")
+        self.assertIn("today", view_list)
+        self.assertIn("upcoming", view_list)
+
+        today = agent.handle_input("/view today")
+        self.assertIn("今天复盘", today)
+        self.assertNotIn("明天写周报", today)
+
+        upcoming = agent.handle_input("/todo list --view upcoming")
+        self.assertIn("明天写周报", upcoming)
+        self.assertIn("视图: upcoming", upcoming)
+
+        inbox = agent.handle_input("/view inbox --tag life")
+        self.assertIn("收件箱任务", inbox)
+        self.assertIn("标签: life", inbox)
+
+        invalid = agent.handle_input("/view week")
         self.assertIn("用法", invalid)
 
     def test_slash_todo_full_crud_commands(self) -> None:
@@ -256,6 +283,21 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("搜索结果", result)
         self.assertIn("买牛奶", result)
         self.assertNotIn("写周报", result)
+        self.assertEqual(len(fake_llm.calls), 1)
+
+    def test_nl_todo_view_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("todo_view", todo_view="today"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_todo("今天复盘", due_at="2026-02-15 18:00")
+        self.db.add_todo("明天开会", due_at="2026-02-16 09:30")
+
+        result = agent.handle_input("看一下今天待办")
+        self.assertIn("今天复盘", result)
+        self.assertNotIn("明天开会", result)
         self.assertEqual(len(fake_llm.calls), 1)
 
     def test_nl_todo_update_via_intent_model(self) -> None:
@@ -456,6 +498,18 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("帮我搜索待办")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
+    def test_todo_view_missing_view_name_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("todo_view"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("看一下待办视图")
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 

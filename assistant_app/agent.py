@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from assistant_app.db import AssistantDB
@@ -11,6 +11,7 @@ from assistant_app.llm import LLMClient
 SCHEDULE_ADD_PATTERN = re.compile(r"^/schedule add (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+(.+)$")
 SCHEDULE_UPDATE_PATTERN = re.compile(r"^/schedule update (\d+)\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+(.+)$")
 TODO_TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
+TODO_VIEW_OPTION_PATTERN = re.compile(r"(^|\s)--view\s+(\S+)")
 TODO_PRIORITY_OPTION_PATTERN = re.compile(r"(^|\s)--priority\s+(-?\d+)")
 TODO_DUE_OPTION_PATTERN = re.compile(r"(^|\s)--due\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
 TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
@@ -18,6 +19,7 @@ INTENT_LABELS = (
     "todo_add",
     "todo_get",
     "todo_list",
+    "todo_view",
     "todo_search",
     "todo_update",
     "todo_delete",
@@ -31,6 +33,7 @@ INTENT_LABELS = (
 )
 INTENT_JSON_RETRY_COUNT = 2
 INTENT_SERVICE_UNAVAILABLE = "__intent_service_unavailable__"
+TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 
 INTENT_ANALYZE_PROMPT = """
 你是 CLI 助手的意图识别器。你必须只输出一个 json 对象，不能输出任何其他内容。
@@ -39,6 +42,7 @@ INTENT_ANALYZE_PROMPT = """
 - todo_add
 - todo_get
 - todo_list
+- todo_view
 - todo_search
 - todo_update
 - todo_delete
@@ -55,6 +59,7 @@ INTENT_ANALYZE_PROMPT = """
   "intent": "one_of_supported_intents",
   "todo_content": "string|null",
   "todo_tag": "string|null",
+  "todo_view": "all|today|overdue|upcoming|inbox|null",
   "todo_priority": "number|null",
   "todo_due_time": "YYYY-MM-DD HH:MM|null",
   "todo_remind_time": "YYYY-MM-DD HH:MM|null",
@@ -71,6 +76,7 @@ INTENT_ANALYZE_PROMPT = """
 - todo_get/todo_update/todo_delete/todo_done 需要 todo_id
 - schedule_get/schedule_update/schedule_delete 需要 schedule_id
 - todo_update 需要 todo_content
+- todo_view 需要 todo_view 字段
 - todo_search 需要 todo_content
 - todo_priority 必须是 >=0 的整数，无法确定就填 null
 - todo_remind_time 仅在有 todo_due_time 时可填写
@@ -107,6 +113,19 @@ class AssistantAgent:
         if command == "/help":
             return self._help_text()
 
+        if command == "/view list":
+            return self._todo_view_list_text()
+
+        if command.startswith("/view "):
+            view_parsed = _parse_view_command_input(command.removeprefix("/view ").strip())
+            if view_parsed is None:
+                return "用法: /view <all|today|overdue|upcoming|inbox> [--tag <标签>]"
+            view_name, view_tag = view_parsed
+            list_cmd = f"/todo list --view {view_name}"
+            if view_tag is not None:
+                list_cmd += f" --tag {view_tag}"
+            return self._handle_command(list_cmd)
+
         if command.startswith("/todo add "):
             add_parsed = _parse_todo_add_input(command.removeprefix("/todo add ").strip())
             if add_parsed is None:
@@ -136,17 +155,30 @@ class AssistantAgent:
             )
 
         if command == "/todo list" or command.startswith("/todo list "):
-            parsed_tag = _parse_todo_list_tag(command)
-            if parsed_tag is _INVALID_TODO_TAG or not isinstance(parsed_tag, (str, type(None))):
-                return "用法: /todo list [--tag <标签>]"
-            list_tag = parsed_tag
+            list_parsed = _parse_todo_list_options(command)
+            if list_parsed is None:
+                return "用法: /todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]"
+            list_tag, list_view = list_parsed
             todos = self.db.list_todos(tag=list_tag)
+            todos = _filter_todos_by_view(todos, view_name=list_view)
             if not todos:
-                if list_tag is None:
+                if list_tag is None and list_view == "all":
                     return "暂无待办。"
-                return f"标签 {list_tag} 下暂无待办。"
+                if list_tag is None:
+                    return f"视图 {list_view} 下暂无待办。"
+                if list_view == "all":
+                    return f"标签 {list_tag} 下暂无待办。"
+                return f"标签 {list_tag} 的 {list_view} 视图下暂无待办。"
 
-            header = f"待办列表(标签: {list_tag}):" if list_tag is not None else "待办列表:"
+            header_parts: list[str] = []
+            if list_tag is not None:
+                header_parts.append(f"标签: {list_tag}")
+            if list_view != "all":
+                header_parts.append(f"视图: {list_view}")
+            if header_parts:
+                header = f"待办列表({', '.join(header_parts)}):"
+            else:
+                header = "待办列表:"
             rows = [
                 [
                     str(item.id),
@@ -408,6 +440,10 @@ class AssistantAgent:
             todo_id = payload.get("todo_id")
             return self._is_invalid_positive_id(todo_id)
 
+        if intent == "todo_view":
+            view_name = _normalize_todo_view_value(payload.get("todo_view"))
+            return view_name is None
+
         if intent == "todo_search":
             keyword = str(payload.get("todo_content") or "").strip()
             return not keyword
@@ -482,6 +518,16 @@ class AssistantAgent:
 
         if intent == INTENT_SERVICE_UNAVAILABLE:
             return "抱歉，当前意图识别服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
+
+        if intent == "todo_view":
+            view_name = _normalize_todo_view_value(payload.get("todo_view"))
+            if view_name is None:
+                return "我识别到你可能要查看待办视图，但视图名称不完整。"
+            tag = _normalize_todo_tag_value(payload.get("todo_tag"))
+            cmd = f"/todo list --view {view_name}"
+            if tag is not None:
+                cmd += f" --tag {tag}"
+            return self._handle_command(cmd)
 
         if intent == "todo_list":
             tag = _normalize_todo_tag_value(payload.get("todo_tag"))
@@ -656,13 +702,26 @@ class AssistantAgent:
         )
 
     @staticmethod
+    def _todo_view_list_text() -> str:
+        return (
+            "可用视图:\n"
+            "- all: 全部待办（含已完成）\n"
+            "- today: 今天到期且未完成\n"
+            "- overdue: 已逾期且未完成\n"
+            "- upcoming: 未来 7 天到期且未完成\n"
+            "- inbox: 未设置截止时间且未完成"
+        )
+
+    @staticmethod
     def _help_text() -> str:
         return (
             "可用命令:\n"
             "/help\n"
+            "/view list\n"
+            "/view <all|today|overdue|upcoming|inbox> [--tag <标签>]\n"
             "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
             "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
-            "/todo list [--tag <标签>]\n"
+            "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]\n"
             "/todo search <关键词> [--tag <标签>]\n"
             "/todo get <id>\n"
             "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
@@ -677,9 +736,6 @@ class AssistantAgent:
             "你也可以直接说自然语言（会先做意图识别，再执行动作）。\n"
             "其他文本会直接发给 AI。"
         )
-
-
-_INVALID_TODO_TAG = object()
 
 
 def _parse_positive_int(raw: str) -> int | None:
@@ -784,26 +840,74 @@ def _parse_todo_text_with_options(
     return content, tag, priority, due_at, remind_at, has_priority, has_due, has_remind
 
 
-def _parse_todo_list_tag(command: str) -> str | None | object:
+def _parse_todo_list_options(command: str) -> tuple[str | None, str] | None:
     if command == "/todo list":
-        return None
+        return None, "all"
 
     suffix = command.removeprefix("/todo list").strip()
     if not suffix:
+        return None, "all"
+
+    working = suffix
+    tag: str | None = None
+    view_name = "all"
+
+    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
+    if tag_match:
+        parsed_tag = _sanitize_tag(tag_match.group(2))
+        if parsed_tag is None:
+            return None
+        tag = parsed_tag
+        working = _remove_option_span(working, tag_match.span())
+
+    view_match = TODO_VIEW_OPTION_PATTERN.search(working)
+    if view_match:
+        parsed_view = _normalize_todo_view_value(view_match.group(2))
+        if parsed_view is None:
+            return None
+        view_name = parsed_view
+        working = _remove_option_span(working, view_match.span())
+
+    leftover = re.sub(r"\s+", " ", working).strip()
+    if leftover:
+        if " " in leftover:
+            return None
+        if leftover.startswith("--"):
+            return None
+        parsed_tag = _sanitize_tag(leftover)
+        if parsed_tag is None:
+            return None
+        if tag is not None:
+            return None
+        tag = parsed_tag
+
+    return tag, view_name
+
+
+def _parse_view_command_input(raw: str) -> tuple[str, str | None] | None:
+    text = raw.strip()
+    if not text:
         return None
-    if suffix == "--tag":
-        return _INVALID_TODO_TAG
+
+    parts = text.split(maxsplit=1)
+    view_name = _normalize_todo_view_value(parts[0])
+    if view_name is None:
+        return None
+
+    if len(parts) == 1:
+        return view_name, None
+
+    suffix = parts[1].strip()
+    if not suffix:
+        return view_name, None
 
     option_match = re.match(r"^--tag\s+(\S+)$", suffix)
-    if option_match:
-        tag = _sanitize_tag(option_match.group(1))
-        return tag if tag else _INVALID_TODO_TAG
-
-    if " " in suffix:
-        return _INVALID_TODO_TAG
-
-    tag = _sanitize_tag(suffix)
-    return tag if tag else _INVALID_TODO_TAG
+    if option_match is None:
+        return None
+    tag = _sanitize_tag(option_match.group(1))
+    if tag is None:
+        return None
+    return view_name, tag
 
 
 def _parse_todo_search_input(raw: str) -> tuple[str, str | None] | None:
@@ -846,6 +950,15 @@ def _normalize_todo_tag_value(value: Any) -> str | None:
     return _sanitize_tag(str(value))
 
 
+def _normalize_todo_view_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in TODO_VIEW_NAMES:
+        return text
+    return None
+
+
 def _normalize_todo_priority_value(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -875,6 +988,56 @@ def _normalize_datetime_text(value: str) -> str | None:
     except ValueError:
         return None
     return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _filter_todos_by_view(todos: list[Any], *, view_name: str, now: datetime | None = None) -> list[Any]:
+    if view_name == "all":
+        return todos
+
+    current = now or datetime.now()
+    today = current.date()
+    today_end = datetime.combine(today, datetime.max.time())
+    upcoming_end = current + timedelta(days=7)
+
+    filtered: list[Any] = []
+    for item in todos:
+        if item.done:
+            continue
+        due_at = _parse_due_datetime(item.due_at)
+
+        if view_name == "today":
+            if due_at is not None and due_at.date() == today:
+                filtered.append(item)
+            continue
+
+        if view_name == "overdue":
+            if due_at is not None and due_at < current:
+                filtered.append(item)
+            continue
+
+        if view_name == "upcoming":
+            if due_at is not None and today_end < due_at <= upcoming_end:
+                filtered.append(item)
+            continue
+
+        if view_name == "inbox":
+            if due_at is None:
+                filtered.append(item)
+            continue
+
+    return filtered
+
+
+def _parse_due_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
 
 
 def _now_time_text() -> str:

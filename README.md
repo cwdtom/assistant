@@ -34,8 +34,10 @@ python main.py
 
 ## 命令
 - `/help`
+- `/view list`
+- `/view <all|today|overdue|upcoming|inbox> [--tag <标签>]`
 - `/todo add <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
-- `/todo list [--tag <标签>]`
+- `/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]`
 - `/todo search <关键词> [--tag <标签>]`
 - `/todo get <id>`
 - `/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
@@ -48,6 +50,7 @@ python main.py
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
 - 待办支持关键词搜索（可选按标签范围搜索）
+- 待办支持视图（all/today/overdue/upcoming/inbox）
 - 待办支持 `priority` 字段（默认 `0`，数值越小优先级越高，最小为 `0`）
 - 待办和日程查询结果默认以表格样式输出，便于在 CLI 快速浏览
 - 待办列表和待办详情均展示标签、优先级、创建时间、完成时间、截止时间、提醒时间（提醒需配合截止时间）
@@ -57,6 +60,7 @@ python main.py
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`
   - `查看待办 1`
   - `搜索待办 牛奶`
+  - `看一下今天待办`
   - `把待办 1 改成 买牛奶和面包，标签 life，优先级 0，截止 2026-02-26 20:00`
   - `删除待办 1`
   - `完成待办 1`
@@ -68,6 +72,13 @@ python main.py
   - `查看待办`
   - `查看日程`
 - 直接输入任意文本：会先做意图识别，识别为 chat 后再发送给 AI
+
+## 视图说明
+- `all`：全部待办（含已完成）
+- `today`：今天到期且未完成
+- `overdue`：已逾期且未完成
+- `upcoming`：未来 7 天到期且未完成
+- `inbox`：未设置截止时间且未完成
 
 ## 测试
 ```bash
