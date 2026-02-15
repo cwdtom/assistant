@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Todo Executor"
+  short_description: "读取project待办并按优先级逐项实现并逐项提交"
+  default_prompt: "Use $project-todo-executor to process project-tag todos in ascending priority and run $commit after each completed item."
