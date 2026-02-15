@@ -63,6 +63,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertIn("/todo add", result)
         self.assertIn("--priority <>=0>", result)
+        self.assertIn("/todo search <关键词>", result)
         self.assertIn("/todo update", result)
         self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
@@ -85,6 +86,10 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("创建时间", list_resp)
         self.assertIn("| - | - | - |", list_resp)
 
+        search_resp = agent.handle_input("/todo search 牛奶")
+        self.assertIn("搜索结果", search_resp)
+        self.assertIn("买牛奶", search_resp)
+
         done_resp = agent.handle_input("/todo done 1")
         self.assertIn("已完成", done_resp)
         self.assertIn("完成时间:", done_resp)
@@ -100,6 +105,20 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("| work |", filtered)
 
         invalid = agent.handle_input("/todo list --tag")
+        self.assertIn("用法", invalid)
+
+    def test_slash_todo_search_with_tag(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/todo add 修复登录 --tag work")
+        agent.handle_input("/todo add 买牛奶 --tag life")
+
+        result = agent.handle_input("/todo search 修复 --tag work")
+        self.assertIn("关键词: 修复", result)
+        self.assertIn("标签: work", result)
+        self.assertIn("修复登录", result)
+        self.assertNotIn("买牛奶", result)
+
+        invalid = agent.handle_input("/todo search --tag work")
         self.assertIn("用法", invalid)
 
     def test_slash_todo_full_crud_commands(self) -> None:
@@ -222,6 +241,22 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("看一下日程")
         self.assertIn("周会", list_resp)
         self.assertEqual(len(fake_llm.calls), 2)
+
+    def test_nl_todo_search_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("todo_search", todo_content="牛奶", todo_tag="life"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_todo("买牛奶", tag="life")
+        self.db.add_todo("写周报", tag="work")
+
+        result = agent.handle_input("帮我找一下life里和牛奶有关的待办")
+        self.assertIn("搜索结果", result)
+        self.assertIn("买牛奶", result)
+        self.assertNotIn("写周报", result)
+        self.assertEqual(len(fake_llm.calls), 1)
 
     def test_nl_todo_update_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -409,6 +444,18 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("添加一个待办，优先级负数")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
+    def test_todo_search_missing_keyword_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("todo_search"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("帮我搜索待办")
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 

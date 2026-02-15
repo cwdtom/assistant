@@ -18,6 +18,7 @@ INTENT_LABELS = (
     "todo_add",
     "todo_get",
     "todo_list",
+    "todo_search",
     "todo_update",
     "todo_delete",
     "todo_done",
@@ -38,6 +39,7 @@ INTENT_ANALYZE_PROMPT = """
 - todo_add
 - todo_get
 - todo_list
+- todo_search
 - todo_update
 - todo_delete
 - todo_done
@@ -69,6 +71,7 @@ INTENT_ANALYZE_PROMPT = """
 - todo_get/todo_update/todo_delete/todo_done 需要 todo_id
 - schedule_get/schedule_update/schedule_delete 需要 schedule_id
 - todo_update 需要 todo_content
+- todo_search 需要 todo_content
 - todo_priority 必须是 >=0 的整数，无法确定就填 null
 - todo_remind_time 仅在有 todo_due_time 时可填写
 - schedule_add/schedule_update 需要 event_time 和 title
@@ -162,6 +165,41 @@ class AssistantAgent:
                 headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
                 rows=rows,
             )
+            return f"{header}\n{table}"
+
+        if command.startswith("/todo search "):
+            search_parsed = _parse_todo_search_input(command.removeprefix("/todo search ").strip())
+            if search_parsed is None:
+                return "用法: /todo search <关键词> [--tag <标签>]"
+            keyword, search_tag = search_parsed
+            todos = self.db.search_todos(keyword, tag=search_tag)
+            if not todos:
+                if search_tag is None:
+                    return f"未找到包含“{keyword}”的待办。"
+                return f"未在标签 {search_tag} 下找到包含“{keyword}”的待办。"
+
+            rows = [
+                [
+                    str(item.id),
+                    "完成" if item.done else "待办",
+                    item.tag,
+                    str(item.priority),
+                    item.content,
+                    item.created_at,
+                    item.completed_at or "-",
+                    item.due_at or "-",
+                    item.remind_at or "-",
+                ]
+                for item in todos
+            ]
+            table = _render_table(
+                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
+                rows=rows,
+            )
+            if search_tag is None:
+                header = f"搜索结果(关键词: {keyword}):"
+            else:
+                header = f"搜索结果(关键词: {keyword}, 标签: {search_tag}):"
             return f"{header}\n{table}"
 
         if command.startswith("/todo get "):
@@ -370,6 +408,10 @@ class AssistantAgent:
             todo_id = payload.get("todo_id")
             return self._is_invalid_positive_id(todo_id)
 
+        if intent == "todo_search":
+            keyword = str(payload.get("todo_content") or "").strip()
+            return not keyword
+
         if intent == "todo_update":
             todo_id = payload.get("todo_id")
             content = str(payload.get("todo_content") or "").strip()
@@ -446,6 +488,16 @@ class AssistantAgent:
             if tag is None:
                 return self._handle_command("/todo list")
             return self._handle_command(f"/todo list --tag {tag}")
+
+        if intent == "todo_search":
+            keyword = str(payload.get("todo_content") or "").strip()
+            if not keyword:
+                return "我识别到你可能要搜索待办，但缺少关键词。"
+            tag = _normalize_todo_tag_value(payload.get("todo_tag"))
+            cmd = f"/todo search {keyword}"
+            if tag is not None:
+                cmd += f" --tag {tag}"
+            return self._handle_command(cmd)
 
         if intent == "todo_get":
             todo_id = payload.get("todo_id")
@@ -611,6 +663,7 @@ class AssistantAgent:
             "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
             "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
             "/todo list [--tag <标签>]\n"
+            "/todo search <关键词> [--tag <标签>]\n"
             "/todo get <id>\n"
             "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
             "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
@@ -751,6 +804,28 @@ def _parse_todo_list_tag(command: str) -> str | None | object:
 
     tag = _sanitize_tag(suffix)
     return tag if tag else _INVALID_TODO_TAG
+
+
+def _parse_todo_search_input(raw: str) -> tuple[str, str | None] | None:
+    text = raw.strip()
+    if not text:
+        return None
+
+    working = text
+    tag: str | None = None
+
+    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
+    if tag_match:
+        provided_tag = _sanitize_tag(tag_match.group(2))
+        if not provided_tag:
+            return None
+        tag = provided_tag
+        working = _remove_option_span(working, tag_match.span())
+
+    keyword = re.sub(r"\s+", " ", working).strip()
+    if not keyword:
+        return None
+    return keyword, tag
 
 
 def _sanitize_tag(tag: str | None) -> str | None:

@@ -183,6 +183,49 @@ class AssistantDB:
             for row in rows
         ]
 
+    def search_todos(self, keyword: str, *, tag: str | None = None) -> list[TodoItem]:
+        text = keyword.strip()
+        if not text:
+            return []
+
+        normalized_tag = _normalize_tag(tag) if tag is not None else None
+        like_pattern = f"%{text}%"
+        with self._connect() as conn:
+            if normalized_tag is None:
+                rows = conn.execute(
+                    """
+                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
+                    FROM todos
+                    WHERE content LIKE ?
+                    ORDER BY priority ASC, id ASC
+                    """,
+                    (like_pattern,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
+                    FROM todos
+                    WHERE content LIKE ? AND tag = ?
+                    ORDER BY priority ASC, id ASC
+                    """,
+                    (like_pattern, normalized_tag),
+                ).fetchall()
+        return [
+            TodoItem(
+                id=row["id"],
+                content=row["content"],
+                tag=row["tag"] or "default",
+                priority=_normalize_priority(row["priority"] if row["priority"] is not None else 0),
+                done=bool(row["done"]),
+                created_at=row["created_at"],
+                completed_at=row["completed_at"],
+                due_at=row["due_at"],
+                remind_at=row["remind_at"],
+            )
+            for row in rows
+        ]
+
     def get_todo(self, todo_id: int) -> TodoItem | None:
         with self._connect() as conn:
             row = conn.execute(

@@ -109,6 +109,23 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(work_todos[0].content, "修复 bug")
         self.assertEqual(work_todos[0].tag, "work")
 
+    def test_search_todos(self) -> None:
+        self.db.add_todo("修复登录 bug", tag="work", priority=1)
+        self.db.add_todo("购买牛奶", tag="life", priority=0)
+        self.db.add_todo("修复支付 bug", tag="work", priority=0)
+
+        results = self.db.search_todos("bug")
+        self.assertEqual([item.content for item in results], ["修复支付 bug", "修复登录 bug"])
+
+    def test_search_todos_with_tag(self) -> None:
+        self.db.add_todo("修复登录 bug", tag="work")
+        self.db.add_todo("修复支付 bug", tag="work")
+        self.db.add_todo("修理台灯", tag="life")
+
+        results = self.db.search_todos("修复", tag="work")
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(item.tag == "work" for item in results))
+
     def test_todo_priority_sort(self) -> None:
         self.db.add_todo("低优先级", priority=3)
         self.db.add_todo("最高优先级", priority=0)
