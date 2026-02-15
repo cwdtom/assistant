@@ -31,6 +31,7 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "title": None,
         "schedule_repeat": None,
         "schedule_repeat_times": None,
+        "schedule_duration_minutes": None,
         "schedule_view": None,
         "schedule_view_date": None,
     }
@@ -75,6 +76,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("/schedule list", result)
         self.assertIn("/schedule update", result)
         self.assertIn("/schedule delete", result)
+        self.assertIn("--duration <>=1>", result)
 
     def test_slash_commands_without_llm(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -223,13 +225,22 @@ class AssistantAgentTest(unittest.TestCase):
 
         add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会")
         self.assertIn("已添加日程 #1", add_resp)
+        self.assertIn("(60 分钟)", add_resp)
 
         get_resp = agent.handle_input("/schedule get 1")
         self.assertIn("日程详情:", get_resp)
-        self.assertIn("| 1 | 2026-02-20 09:30 | 站会 |", get_resp)
+        self.assertIn("| 时长(分钟) |", get_resp)
+        self.assertIn("| 1 | 2026-02-20 09:30 | 60 | 站会 |", get_resp)
 
         update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会")
-        self.assertIn("已更新日程 #1: 2026-02-21 10:00 复盘会", update_resp)
+        self.assertIn("已更新日程 #1: 2026-02-21 10:00 复盘会 (60 分钟)", update_resp)
+
+        update_duration_resp = agent.handle_input("/schedule update 1 2026-02-21 11:00 复盘会 --duration 45")
+        self.assertIn("已更新日程 #1: 2026-02-21 11:00 复盘会 (45 分钟)", update_duration_resp)
+        item = self.db.get_schedule(1)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.duration_minutes, 45)
 
         delete_resp = agent.handle_input("/schedule delete 1")
         self.assertIn("日程 #1 已删除", delete_resp)
@@ -240,16 +251,21 @@ class AssistantAgentTest(unittest.TestCase):
     def test_slash_schedule_repeat_add_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
-        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat daily --times 3")
+        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 30 --repeat daily --times 3")
         self.assertIn("已添加重复日程 3 条", add_resp)
+        self.assertIn("duration=30m", add_resp)
 
         list_resp = agent.handle_input("/schedule list")
         self.assertIn("2026-02-20 09:30", list_resp)
         self.assertIn("2026-02-21 09:30", list_resp)
         self.assertIn("2026-02-22 09:30", list_resp)
+        self.assertIn("| 30 | 站会 |", list_resp)
 
         invalid = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat none --times 3")
         self.assertIn("用法", invalid)
+
+        invalid_duration = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 0")
+        self.assertIn("用法", invalid_duration)
 
     def test_slash_schedule_conflict_detection(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -269,14 +285,16 @@ class AssistantAgentTest(unittest.TestCase):
 
     def test_slash_schedule_repeat_update_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
-        agent.handle_input("/schedule add 2026-02-20 09:30 站会")
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 50")
 
         update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会 --repeat weekly --times 2")
         self.assertIn("新增 1 条后续日程", update_resp)
+        self.assertIn("duration=50m", update_resp)
 
         list_resp = agent.handle_input("/schedule list")
         self.assertIn("2026-02-21 10:00", list_resp)
         self.assertIn("2026-02-28 10:00", list_resp)
+        self.assertIn("| 50 | 复盘会 |", list_resp)
 
     def test_slash_schedule_update_conflict_detection(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -344,6 +362,26 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("看一下日程")
         self.assertIn("周会", list_resp)
         self.assertEqual(len(fake_llm.calls), 2)
+
+    def test_nl_schedule_add_with_duration_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json(
+                    "schedule_add",
+                    event_time="2026-02-20 09:30",
+                    title="周会",
+                    schedule_duration_minutes=45,
+                ),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        add_resp = agent.handle_input("明天早上九点半加个45分钟周会")
+        self.assertIn("(45 分钟)", add_resp)
+        item = self.db.get_schedule(1)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.duration_minutes, 45)
 
     def test_nl_schedule_repeat_add_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -496,6 +534,27 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("把日程1删掉")
         self.assertIn("日程 #1 已删除", response)
         self.assertIsNone(self.db.get_schedule(1))
+
+    def test_nl_schedule_update_without_duration_keeps_existing_duration(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json(
+                    "schedule_update",
+                    schedule_id=1,
+                    event_time="2026-02-21 11:00",
+                    title="周会-改",
+                ),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_schedule("周会", "2026-02-20 09:30", duration_minutes=35)
+
+        response = agent.handle_input("把日程1改到明天11点")
+        self.assertIn("(35 分钟)", response)
+        item = self.db.get_schedule(1)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.duration_minutes, 35)
 
     def test_chat_path_requires_intent_then_chat(self) -> None:
         fake_llm = FakeLLMClient(
@@ -657,6 +716,23 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("帮我加一个重复日程")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
+    def test_schedule_add_invalid_duration_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json(
+                    "schedule_add",
+                    event_time="2026-02-20 09:30",
+                    title="周会",
+                    schedule_duration_minutes=0,
+                ),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("帮我加个0分钟日程")
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 

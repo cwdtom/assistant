@@ -28,6 +28,7 @@ class ScheduleItem:
     id: int
     title: str
     event_time: str
+    duration_minutes: int
     created_at: str
 
 
@@ -84,10 +85,12 @@ class AssistantDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
                     event_time TEXT NOT NULL,
+                    duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes >= 1),
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            self._ensure_schedule_duration_column(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_history (
@@ -121,6 +124,16 @@ class AssistantDB:
         if "priority" not in names:
             conn.execute("ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
         conn.execute("UPDATE todos SET priority = 0 WHERE priority IS NULL OR priority < 0")
+
+    def _ensure_schedule_duration_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
+        names = {row["name"] for row in columns}
+        if "duration_minutes" not in names:
+            conn.execute("ALTER TABLE schedules ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60")
+        conn.execute(
+            "UPDATE schedules SET duration_minutes = 60 "
+            "WHERE duration_minutes IS NULL OR duration_minutes < 1"
+        )
 
     def add_todo(
         self,
@@ -325,27 +338,29 @@ class AssistantDB:
             )
             return cur.rowcount > 0
 
-    def add_schedule(self, title: str, event_time: str) -> int:
+    def add_schedule(self, title: str, event_time: str, duration_minutes: int = 60) -> int:
         timestamp = _now_iso()
+        normalized_duration = _normalize_duration_minutes(duration_minutes)
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO schedules (title, event_time, created_at) VALUES (?, ?, ?)",
-                (title, event_time, timestamp),
+                "INSERT INTO schedules (title, event_time, duration_minutes, created_at) VALUES (?, ?, ?, ?)",
+                (title, event_time, normalized_duration, timestamp),
             )
             if cur.lastrowid is None:
                 raise RuntimeError("failed to insert schedule")
             return int(cur.lastrowid)
 
-    def add_schedules(self, title: str, event_times: list[str]) -> list[int]:
+    def add_schedules(self, title: str, event_times: list[str], duration_minutes: int = 60) -> list[int]:
         if not event_times:
             return []
         timestamp = _now_iso()
+        normalized_duration = _normalize_duration_minutes(duration_minutes)
         created_ids: list[int] = []
         with self._connect() as conn:
             for event_time in event_times:
                 cur = conn.execute(
-                    "INSERT INTO schedules (title, event_time, created_at) VALUES (?, ?, ?)",
-                    (title, event_time, timestamp),
+                    "INSERT INTO schedules (title, event_time, duration_minutes, created_at) VALUES (?, ?, ?, ?)",
+                    (title, event_time, normalized_duration, timestamp),
                 )
                 if cur.lastrowid is None:
                     raise RuntimeError("failed to insert schedule")
@@ -355,13 +370,17 @@ class AssistantDB:
     def list_schedules(self) -> list[ScheduleItem]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, title, event_time, created_at FROM schedules ORDER BY event_time ASC, id ASC"
+                "SELECT id, title, event_time, duration_minutes, created_at "
+                "FROM schedules ORDER BY event_time ASC, id ASC"
             ).fetchall()
         return [
             ScheduleItem(
                 id=row["id"],
                 title=row["title"],
                 event_time=row["event_time"],
+                duration_minutes=_normalize_duration_minutes(
+                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
+                ),
                 created_at=row["created_at"],
             )
             for row in rows
@@ -380,7 +399,10 @@ class AssistantDB:
         if not unique_times:
             return []
         placeholders = ", ".join("?" for _ in unique_times)
-        query = f"SELECT id, title, event_time, created_at FROM schedules WHERE event_time IN ({placeholders})"
+        query = (
+            "SELECT id, title, event_time, duration_minutes, created_at FROM schedules "
+            f"WHERE event_time IN ({placeholders})"
+        )
         params: list[object] = list(unique_times)
         if exclude_schedule_id is not None:
             query += " AND id != ?"
@@ -394,6 +416,9 @@ class AssistantDB:
                 id=row["id"],
                 title=row["title"],
                 event_time=row["event_time"],
+                duration_minutes=_normalize_duration_minutes(
+                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
+                ),
                 created_at=row["created_at"],
             )
             for row in rows
@@ -402,7 +427,7 @@ class AssistantDB:
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, title, event_time, created_at FROM schedules WHERE id = ?",
+                "SELECT id, title, event_time, duration_minutes, created_at FROM schedules WHERE id = ?",
                 (schedule_id,),
             ).fetchone()
         if row is None:
@@ -411,14 +436,39 @@ class AssistantDB:
             id=row["id"],
             title=row["title"],
             event_time=row["event_time"],
+            duration_minutes=_normalize_duration_minutes(
+                row["duration_minutes"] if row["duration_minutes"] is not None else 60
+            ),
             created_at=row["created_at"],
         )
 
-    def update_schedule(self, schedule_id: int, *, title: str, event_time: str) -> bool:
+    def update_schedule(
+        self,
+        schedule_id: int,
+        *,
+        title: str,
+        event_time: str,
+        duration_minutes: int | object = _UNSET,
+    ) -> bool:
+        fields = ["title = ?", "event_time = ?"]
+        values: list[object] = [title, event_time]
+
+        if duration_minutes is not _UNSET:
+            if (
+                not isinstance(duration_minutes, int)
+                or isinstance(duration_minutes, bool)
+                or duration_minutes < 1
+            ):
+                return False
+            normalized_duration = _normalize_duration_minutes(duration_minutes)
+            fields.append("duration_minutes = ?")
+            values.append(normalized_duration)
+
+        values.append(schedule_id)
         with self._connect() as conn:
             cur = conn.execute(
-                "UPDATE schedules SET title = ?, event_time = ? WHERE id = ?",
-                (title, event_time, schedule_id),
+                f"UPDATE schedules SET {', '.join(fields)} WHERE id = ?",
+                values,
             )
             return cur.rowcount > 0
 
@@ -470,3 +520,11 @@ def _normalize_priority(priority: int) -> int:
     if priority < 0:
         raise ValueError("priority must be >= 0")
     return priority
+
+
+def _normalize_duration_minutes(duration_minutes: int) -> int:
+    if not isinstance(duration_minutes, int) or isinstance(duration_minutes, bool):
+        raise ValueError("duration_minutes must be an integer >= 1")
+    if duration_minutes < 1:
+        raise ValueError("duration_minutes must be >= 1")
+    return duration_minutes

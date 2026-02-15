@@ -149,6 +149,8 @@ class AssistantDBTest(unittest.TestCase):
         items = self.db.list_schedules()
         self.assertEqual(items[0].title, "早上的会")
         self.assertEqual(items[1].title, "晚上的会")
+        self.assertEqual(items[0].duration_minutes, 60)
+        self.assertEqual(items[1].duration_minutes, 60)
 
     def test_add_schedules_batch(self) -> None:
         ids = self.db.add_schedules(
@@ -163,6 +165,24 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(
             [item.event_time for item in items], ["2026-02-20 09:00", "2026-02-21 09:00", "2026-02-22 09:00"]
         )
+        self.assertEqual([item.duration_minutes for item in items], [60, 60, 60])
+
+    def test_add_schedule_with_custom_duration(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00", duration_minutes=45)
+        item = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.duration_minutes, 45)
+
+    def test_add_schedules_batch_with_custom_duration(self) -> None:
+        ids = self.db.add_schedules(
+            "晨会",
+            ["2026-02-20 09:00", "2026-02-21 09:00"],
+            duration_minutes=30,
+        )
+        self.assertEqual(ids, [1, 2])
+        items = self.db.list_schedules()
+        self.assertEqual([item.duration_minutes for item in items], [30, 30])
 
     def test_find_schedule_conflicts(self) -> None:
         self.db.add_schedule("晨会", "2026-02-20 09:00")
@@ -181,11 +201,13 @@ class AssistantDBTest(unittest.TestCase):
         self.assertIsNotNone(item)
         assert item is not None
         self.assertEqual(item.title, "项目同步")
+        self.assertEqual(item.duration_minutes, 60)
 
         updated = self.db.update_schedule(
             schedule_id,
             title="项目复盘",
             event_time="2026-02-21 11:30",
+            duration_minutes=90,
         )
         self.assertTrue(updated)
 
@@ -194,10 +216,40 @@ class AssistantDBTest(unittest.TestCase):
         assert changed is not None
         self.assertEqual(changed.title, "项目复盘")
         self.assertEqual(changed.event_time, "2026-02-21 11:30")
+        self.assertEqual(changed.duration_minutes, 90)
 
         deleted = self.db.delete_schedule(schedule_id)
         self.assertTrue(deleted)
         self.assertIsNone(self.db.get_schedule(schedule_id))
+
+    def test_update_schedule_without_duration_keeps_existing_duration(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00", duration_minutes=45)
+        updated = self.db.update_schedule(
+            schedule_id,
+            title="项目同步-改",
+            event_time="2026-02-20 11:00",
+        )
+        self.assertTrue(updated)
+        changed = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.duration_minutes, 45)
+
+    def test_schedule_duration_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            self.db.add_schedule("非法时长", "2026-02-20 10:00", duration_minutes=0)
+        with self.assertRaises(ValueError):
+            self.db.add_schedules("非法时长", ["2026-02-20 10:00"], duration_minutes=0)
+
+        schedule_id = self.db.add_schedule("正常时长", "2026-02-20 10:00", duration_minutes=30)
+        self.assertFalse(
+            self.db.update_schedule(
+                schedule_id,
+                title="正常时长",
+                event_time="2026-02-20 10:30",
+                duration_minutes=0,
+            )
+        )
 
     def test_recent_messages_in_chronological_order(self) -> None:
         self.db.save_message("user", "hello")
