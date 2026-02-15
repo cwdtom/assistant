@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-import threading
+from collections.abc import Callable
 from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
@@ -9,25 +9,21 @@ from assistant_app.config import load_config
 from assistant_app.db import AssistantDB
 from assistant_app.llm import OpenAICompatibleClient
 
-WAITING_FRAME_INTERVAL = 0.25
-WAITING_CLEAR_WIDTH = 48
 CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
+PROGRESS_COLOR_PREFIX = "\033[90m"
+PROGRESS_COLOR_SUFFIX = "\033[0m"
 
 
 class _AgentLike(Protocol):
     llm_client: Any
 
     def handle_input(self, user_input: str) -> str: ...
+    def set_progress_callback(self, callback: Callable[[str], None] | None) -> None: ...
 
 
 def _should_show_waiting(agent: _AgentLike, user_input: str) -> bool:
     text = user_input.strip()
     return bool(text) and not text.startswith("/") and agent.llm_client is not None
-
-
-def _render_waiting_frame(frame_index: int) -> str:
-    dots = "." * (frame_index % 3 + 1)
-    return f"助手> 正在思考{dots}"
 
 
 def _clear_terminal_history(stream: TextIO = sys.stdout) -> None:
@@ -47,35 +43,25 @@ def _handle_input_with_feedback(
     agent: _AgentLike,
     user_input: str,
     stream: TextIO = sys.stdout,
-    interval: float = WAITING_FRAME_INTERVAL,
 ) -> str:
-    if not _should_show_waiting(agent, user_input):
+    show_progress = _should_show_waiting(agent, user_input)
+    original_setter = getattr(agent, "set_progress_callback", None)
+    if callable(original_setter):
+        if show_progress:
+            original_setter(lambda msg: _write_progress_line(stream=stream, message=msg))
+        else:
+            original_setter(None)
+    try:
         return agent.handle_input(user_input)
+    finally:
+        if callable(original_setter):
+            original_setter(None)
 
-    state: dict[str, object | None] = {"response": None, "error": None}
 
-    def _worker() -> None:
-        try:
-            state["response"] = agent.handle_input(user_input)
-        except Exception as exc:  # noqa: BLE001
-            state["error"] = exc
-
-    worker = threading.Thread(target=_worker, daemon=True)
-    worker.start()
-
-    frame_index = 0
-    while worker.is_alive():
-        stream.write("\r" + _render_waiting_frame(frame_index))
-        stream.flush()
-        frame_index += 1
-        worker.join(timeout=interval)
-
-    stream.write("\r" + " " * WAITING_CLEAR_WIDTH + "\r")
+def _write_progress_line(stream: TextIO, message: str) -> None:
+    for line in message.splitlines():
+        stream.write(f"{PROGRESS_COLOR_PREFIX}进度> {line}{PROGRESS_COLOR_SUFFIX}\n")
     stream.flush()
-
-    if state["error"] is not None:
-        raise RuntimeError(str(state["error"]))
-    return str(state["response"] or "")
 
 
 def main() -> None:

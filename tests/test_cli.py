@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import time
 import unittest
 
 from assistant_app.cli import (
@@ -16,12 +15,17 @@ from assistant_app.cli import (
 class _FakeAgent:
     def __init__(self, llm_enabled: bool, delay: float = 0.0) -> None:
         self.llm_client = object() if llm_enabled else None
-        self.delay = delay
+        self.progress_callback = None
 
     def handle_input(self, user_input: str) -> str:
-        if self.delay:
-            time.sleep(self.delay)
+        if self.progress_callback is not None and not user_input.startswith("/"):
+            self.progress_callback("步骤进度：开始规划")
+            self.progress_callback("计划列表：\n1. [待办] 添加待办\n2. [待办] 确认结果")
+            self.progress_callback("完成情况：成功 0 步，失败 0 步，已执行 0/20 步。")
         return f"echo:{user_input}"
+
+    def set_progress_callback(self, callback) -> None:  # type: ignore[no-untyped-def]
+        self.progress_callback = callback
 
 
 class CLIFeedbackTest(unittest.TestCase):
@@ -45,14 +49,16 @@ class CLIFeedbackTest(unittest.TestCase):
         agent = _FakeAgent(llm_enabled=False)
         self.assertFalse(_should_show_waiting(agent, "今天怎么安排"))
 
-    def test_handle_input_with_feedback_renders_waiting_message(self) -> None:
-        agent = _FakeAgent(llm_enabled=True, delay=0.03)
+    def test_handle_input_with_feedback_renders_progress_lines(self) -> None:
+        agent = _FakeAgent(llm_enabled=True)
         stream = io.StringIO()
 
-        result = _handle_input_with_feedback(agent, "看一下全部待办", stream=stream, interval=0.005)
+        result = _handle_input_with_feedback(agent, "看一下全部待办", stream=stream)
 
         self.assertEqual(result, "echo:看一下全部待办")
-        self.assertIn("正在思考", stream.getvalue())
+        self.assertIn("进度> 步骤进度：开始规划", stream.getvalue())
+        self.assertIn("进度> 计划列表：", stream.getvalue())
+        self.assertIn("进度> 完成情况：成功 0 步，失败 0 步，已执行 0/20 步。", stream.getvalue())
 
     def test_handle_input_with_feedback_skips_waiting_for_command(self) -> None:
         agent = _FakeAgent(llm_enabled=True)

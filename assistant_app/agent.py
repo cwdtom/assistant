@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
 from assistant_app.db import AssistantDB
 from assistant_app.llm import LLMClient
+from assistant_app.search import BingSearchProvider, SearchProvider, SearchResult
 
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
 SCHEDULE_INTERVAL_OPTION_PATTERN = re.compile(r"(^|\s)--interval\s+(\d+)")
@@ -41,6 +44,12 @@ INTENT_SERVICE_UNAVAILABLE = "__intent_service_unavailable__"
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
 INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
+PLAN_REPLAN_MAX_STEPS = 20
+PLAN_REPLAN_RETRY_COUNT = 2
+PLAN_OBSERVATION_CHAR_LIMIT = 10000
+PLAN_OBSERVATION_HISTORY_LIMIT = 100
+PLAN_CONTINUOUS_FAILURE_LIMIT = 2
+TASK_CANCEL_COMMAND = "取消当前任务"
 
 INTENT_ANALYZE_PROMPT = """
 你是 CLI 助手的意图识别器。你必须只输出一个 json 对象，不能输出任何其他内容。
@@ -107,16 +116,135 @@ INTENT_ANALYZE_PROMPT = """
 - todo_due_time/todo_remind_time 必须是 YYYY-MM-DD HH:MM，无法确定就填 null
 """.strip()
 
+PLAN_REPLAN_PROMPT = """
+你是 CLI 助手的计划执行器，需要通过 plan -> act -> observe -> replan 的循环解决用户目标。
+你每次必须只输出一个 JSON 对象，禁止输出额外文本。
+
+可用工具：
+1) todo: 执行 /todo 或 /view 命令
+2) schedule: 执行 /schedule 命令
+3) internet_search: 搜索互联网，输入为搜索词
+4) ask_user: 向用户提问澄清，输入为单个问题
+
+工具输入格式（必须严格遵守）：
+- todo:
+  - /todo add <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]
+  - /todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]
+  - /todo get <id>
+  - /todo update <id> <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]
+  - /todo done <id>
+  - /todo delete <id>
+  - /todo search <关键词> [--tag <标签>]
+  - /view <all|today|overdue|upcoming|inbox> [--tag <标签>]
+- schedule:
+  - /schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]
+  - /schedule list
+  - /schedule get <id>
+  - /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]
+  - /schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]
+  - /schedule repeat <id> <on|off>
+  - /schedule delete <id>
+- internet_search: 仅输入查询词，不要输出命令行
+- ask_user: 仅输入一个明确问题，不要附加解释
+
+输出 JSON 格式：
+{
+  "status": "continue|done",
+  "plan": ["步骤1", "步骤2"],
+  "next_action": {
+    "tool": "todo|schedule|internet_search|ask_user",
+    "input": "string"
+  } | null,
+  "response": "string|null"
+}
+
+规则：
+- status=continue 时，next_action 必须存在，response 必须为空
+- status=done 时，next_action 必须是 null，response 必须为最终答复
+- 一次只执行一个工具
+- 如果信息不足，优先使用 ask_user 提问
+- 不要重复 ask_user 的同一个问题；用户已补充后必须重规划并尝试执行
+- todo/schedule 的 next_action.input 必须是可直接执行的合法命令，禁止自然语言描述
+- 如果 observation 已足够回答，直接 done
+""".strip()
+
+PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
+    "todo": [
+        "/todo add <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]",
+        "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]",
+        "/todo get <id>",
+        "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
+        "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]",
+        "/todo done <id>",
+        "/todo delete <id>",
+        "/todo search <关键词> [--tag <标签>]",
+        "/view <all|today|overdue|upcoming|inbox> [--tag <标签>]",
+    ],
+    "schedule": [
+        "/schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]",
+        "/schedule list",
+        "/schedule get <id>",
+        "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]",
+        "/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]",
+        "/schedule repeat <id> <on|off>",
+        "/schedule delete <id>",
+    ],
+    "internet_search": ["<关键词>"],
+    "ask_user": ["<单个澄清问题>"],
+}
+
+
+@dataclass
+class PlannerObservation:
+    tool: str
+    input_text: str
+    ok: bool
+    result: str
+
+
+@dataclass
+class PendingPlanTask:
+    goal: str
+    clarification_history: list[str] = field(default_factory=list)
+    observations: list[PlannerObservation] = field(default_factory=list)
+    step_count: int = 0
+    latest_plan: list[str] = field(default_factory=list)
+    planner_failure_rounds: int = 0
+    last_ask_user_question: str | None = None
+    last_ask_user_clarification_len: int = 0
+    ask_user_repeat_count: int = 0
+    must_execute_tool_before_next_ask: bool = False
+    successful_steps: int = 0
+    failed_steps: int = 0
+
 
 class AssistantAgent:
-    def __init__(self, db: AssistantDB, llm_client: LLMClient | None = None) -> None:
+    def __init__(
+        self,
+        db: AssistantDB,
+        llm_client: LLMClient | None = None,
+        search_provider: SearchProvider | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.db = db
         self.llm_client = llm_client
+        self.search_provider = search_provider or BingSearchProvider()
+        self._pending_plan_task: PendingPlanTask | None = None
+        self._progress_callback = progress_callback
+
+    def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
+        self._progress_callback = callback
 
     def handle_input(self, user_input: str) -> str:
         text = user_input.strip()
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
+
+        if text == TASK_CANCEL_COMMAND:
+            if self._pending_plan_task is None:
+                return "当前没有进行中的任务。"
+            self._pending_plan_task = None
+            return "已取消当前任务。"
 
         if text.startswith("/"):
             return self._handle_command(text)
@@ -124,12 +252,399 @@ class AssistantAgent:
         if not self.llm_client:
             return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
 
-        intent_payload = self._analyze_intent(text)
-        intent_response = self._dispatch_intent(intent_payload)
-        if intent_response is not None:
-            return intent_response
+        pending_task = self._pending_plan_task
+        if pending_task is not None:
+            self._pending_plan_task = None
+            pending_task.clarification_history.append(f"用户补充: {text}")
+            pending_task.must_execute_tool_before_next_ask = True
+            return self._run_plan_replan(task=pending_task, current_user_text=text)
 
-        return self._handle_chat(text)
+        task = PendingPlanTask(goal=text)
+        return self._run_plan_replan(task=task, current_user_text=text)
+
+    def _run_plan_replan(self, task: PendingPlanTask, current_user_text: str) -> str:
+        while True:
+            planned_total_text = self._progress_total_text(task)
+            current_plan_total = self._current_plan_total_text(task)
+            plan_suffix = f"（当前计划 {current_plan_total} 步）" if current_plan_total is not None else ""
+            progress_text = (
+                f"步骤进度：已执行 {task.step_count}/{planned_total_text}，"
+                f"开始第 {task.step_count + 1} 步规划。{plan_suffix}"
+            )
+            self._emit_progress(
+                progress_text
+            )
+            if task.step_count >= PLAN_REPLAN_MAX_STEPS:
+                return self._finalize_planner_task(task, self._format_step_limit_response(task))
+
+            planner_payload = self._request_planner_payload(task)
+            if planner_payload is None:
+                task.planner_failure_rounds += 1
+                self._append_observation(
+                    task,
+                    PlannerObservation(
+                        tool="planner",
+                        input_text="next_action",
+                        ok=False,
+                        result="planner 输出不符合 JSON 契约。",
+                    ),
+                )
+                if task.step_count == 0 and task.planner_failure_rounds >= 1:
+                    return self._finalize_planner_task(task, self._planner_unavailable_text())
+                if task.planner_failure_rounds >= PLAN_CONTINUOUS_FAILURE_LIMIT:
+                    return self._finalize_planner_task(task, self._planner_unavailable_text())
+                self._emit_progress("规划失败：模型输出不符合契约，准备重试。")
+                continue
+
+            task.planner_failure_rounds = 0
+
+            legacy_payload = planner_payload.get("legacy_intent_payload")
+            if isinstance(legacy_payload, dict):
+                self._emit_progress("检测到 legacy intent 流程，尝试兼容执行。")
+                legacy_response = self._dispatch_intent(legacy_payload)
+                if legacy_response is not None:
+                    return self._finalize_planner_task(task, legacy_response)
+                return self._finalize_planner_task(task, self._handle_chat(current_user_text))
+
+            decision = planner_payload.get("decision")
+            if not isinstance(decision, dict):
+                return self._finalize_planner_task(task, self._planner_unavailable_text())
+            plan_items = decision.get("plan")
+            if isinstance(plan_items, list):
+                task.latest_plan = plan_items
+            self._emit_plan_progress(task)
+
+            status = decision.get("status")
+            if status == "done":
+                response = str(decision.get("response") or "").strip()
+                if response:
+                    return self._finalize_planner_task(task, response)
+                return self._finalize_planner_task(task, self._planner_unavailable_text())
+
+            next_action = decision.get("next_action")
+            if not isinstance(next_action, dict):
+                self._append_observation(
+                    task,
+                    PlannerObservation(
+                        tool="planner",
+                        input_text="next_action",
+                        ok=False,
+                        result="status=continue 但 next_action 为空。",
+                    ),
+                )
+                continue
+            action_tool = str(next_action.get("tool") or "").strip().lower()
+            action_input = str(next_action.get("input") or "").strip()
+
+            if action_tool == "ask_user":
+                if not action_input:
+                    self._append_observation(
+                        task,
+                        PlannerObservation(
+                            tool="ask_user",
+                            input_text="",
+                            ok=False,
+                            result="ask_user 缺少提问内容。",
+                        ),
+                    )
+                    continue
+                if task.must_execute_tool_before_next_ask:
+                    task.ask_user_repeat_count += 1
+                    self._append_observation(
+                        task,
+                        PlannerObservation(
+                            tool="ask_user",
+                            input_text=action_input,
+                            ok=False,
+                            result="用户刚完成澄清，必须先重规划并执行至少一个工具动作，再决定是否继续提问。",
+                        ),
+                    )
+                    if task.ask_user_repeat_count >= PLAN_CONTINUOUS_FAILURE_LIMIT:
+                        fallback = self._try_legacy_dispatch_from_task_context(task)
+                        if fallback is not None:
+                            return self._finalize_planner_task(task, fallback)
+                        return self._finalize_planner_task(
+                            task,
+                            "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
+                        )
+                    continue
+                if (
+                    _is_same_question_text(task.last_ask_user_question, action_input)
+                    and len(task.clarification_history) > task.last_ask_user_clarification_len
+                ):
+                    task.ask_user_repeat_count += 1
+                    self._append_observation(
+                        task,
+                        PlannerObservation(
+                            tool="ask_user",
+                            input_text=action_input,
+                            ok=False,
+                            result="重复提问：用户已补充信息，请基于已知信息重规划并执行。",
+                        ),
+                    )
+                    if task.ask_user_repeat_count >= PLAN_CONTINUOUS_FAILURE_LIMIT:
+                        fallback = self._try_legacy_dispatch_from_task_context(task)
+                        if fallback is not None:
+                            return self._finalize_planner_task(task, fallback)
+                        return self._finalize_planner_task(
+                            task,
+                            "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
+                        )
+                    continue
+                ask_turns = sum(1 for line in task.clarification_history if line.startswith("助手提问:"))
+                if ask_turns >= 6:
+                    fallback = self._try_legacy_dispatch_from_task_context(task)
+                    if fallback is not None:
+                        return self._finalize_planner_task(task, fallback)
+                    return self._finalize_planner_task(
+                        task,
+                        "澄清次数过多，我仍无法稳定重规划。请直接使用 /todo 或 /schedule 命令。",
+                    )
+                task.ask_user_repeat_count = 0
+                task.last_ask_user_question = action_input
+                task.last_ask_user_clarification_len = len(task.clarification_history)
+                task.clarification_history.append(f"助手提问: {action_input}")
+                self._emit_progress(f"步骤动作：ask_user -> {action_input}")
+                self._pending_plan_task = task
+                return f"请确认：{action_input}"
+
+            self._emit_progress(f"步骤动作：{action_tool} -> {action_input}")
+            observation = self._execute_planner_tool(action_tool=action_tool, action_input=action_input)
+            self._append_observation(task, observation)
+            task.step_count += 1
+            task.must_execute_tool_before_next_ask = False
+            status_text = "成功" if observation.ok else "失败"
+            if observation.ok:
+                task.successful_steps += 1
+            else:
+                task.failed_steps += 1
+            preview = _truncate_text(observation.result.replace("\n", " "), 220)
+            self._emit_progress(f"步骤结果：{status_text} | {preview}")
+            planned_total_text = self._progress_total_text(task)
+            current_plan_total = self._current_plan_total_text(task)
+            plan_suffix = f"，当前计划 {current_plan_total} 步" if current_plan_total is not None else ""
+            self._emit_progress(
+                "完成情况："
+                f"成功 {task.successful_steps} 步，失败 {task.failed_steps} 步，"
+                f"已执行 {task.step_count}/{planned_total_text} 步（上限 {PLAN_REPLAN_MAX_STEPS}{plan_suffix}）。"
+            )
+
+    def _request_planner_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
+        if not self.llm_client:
+            return None
+
+        planner_messages = self._build_planner_messages(task)
+        max_attempts = 1 + PLAN_REPLAN_RETRY_COUNT
+        for _ in range(max_attempts):
+            try:
+                raw = self._llm_reply_for_planner(planner_messages)
+            except Exception:
+                continue
+            payload = _try_parse_json(_strip_think_blocks(raw).strip())
+            if not isinstance(payload, dict):
+                continue
+
+            legacy_payload = self._normalize_legacy_payload(payload)
+            if legacy_payload is not None:
+                if self._intent_requires_retry(legacy_payload):
+                    continue
+                return {"legacy_intent_payload": legacy_payload}
+
+            decision = _normalize_planner_decision(payload)
+            if decision is not None:
+                return {"decision": decision}
+        return None
+
+    def _build_planner_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+        observations = [
+            {
+                "tool": item.tool,
+                "input": item.input_text,
+                "ok": item.ok,
+                "result": item.result,
+            }
+            for item in task.observations
+        ]
+        context_payload = {
+            "goal": task.goal,
+            "clarification_history": task.clarification_history,
+            "step_count": task.step_count,
+            "max_steps": PLAN_REPLAN_MAX_STEPS,
+            "latest_plan": task.latest_plan,
+            "observations": observations,
+            "tool_contract": PLAN_TOOL_CONTRACT,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        return [
+            {"role": "system", "content": PLAN_REPLAN_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(context_payload, ensure_ascii=False),
+            },
+        ]
+
+    def _llm_reply_for_planner(self, messages: list[dict[str, str]]) -> str:
+        if self.llm_client is None:
+            return ""
+
+        reply_json = getattr(self.llm_client, "reply_json", None)
+        if callable(reply_json):
+            try:
+                return str(reply_json(messages))
+            except Exception:
+                pass
+        return self.llm_client.reply(messages)
+
+    def _normalize_legacy_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if "intent" not in payload:
+            return None
+        normalized = dict(payload)
+        intent = str(normalized.get("intent", "")).strip().lower()
+        if intent not in INTENT_LABELS:
+            intent = "chat"
+        normalized["intent"] = intent
+        return normalized
+
+    def _try_legacy_dispatch_from_task_context(self, task: PendingPlanTask) -> str | None:
+        if not self.llm_client:
+            return None
+        context_lines = [f"原始目标: {task.goal}", *task.clarification_history[-6:]]
+        merged_text = "\n".join(context_lines)
+        payload = self._analyze_intent(merged_text)
+        response = self._dispatch_intent(payload)
+        if response is not None:
+            return response
+        return None
+
+    def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
+        if action_tool == "todo":
+            normalized_command = action_input.strip()
+            if not normalized_command.startswith("/todo") and not normalized_command.startswith("/view"):
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=action_input,
+                    ok=False,
+                    result="todo 工具仅支持 /todo 或 /view 命令。",
+                )
+            command_result = self._handle_command(normalized_command)
+            ok = not command_result.startswith("用法:") and not command_result.startswith("未知命令")
+            return PlannerObservation(tool="todo", input_text=normalized_command, ok=ok, result=command_result)
+
+        if action_tool == "schedule":
+            normalized_command = action_input.strip()
+            if not normalized_command.startswith("/schedule"):
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=action_input,
+                    ok=False,
+                    result="schedule 工具仅支持 /schedule 命令。",
+                )
+            command_result = self._handle_command(normalized_command)
+            ok = not command_result.startswith("用法:") and not command_result.startswith("未知命令")
+            return PlannerObservation(tool="schedule", input_text=normalized_command, ok=ok, result=command_result)
+
+        if action_tool == "internet_search":
+            query = action_input.strip()
+            if not query:
+                return PlannerObservation(
+                    tool="internet_search",
+                    input_text=action_input,
+                    ok=False,
+                    result="internet_search 缺少查询词。",
+                )
+            try:
+                search_results = self.search_provider.search(query, top_k=3)
+            except Exception as exc:  # noqa: BLE001
+                return PlannerObservation(
+                    tool="internet_search",
+                    input_text=query,
+                    ok=False,
+                    result=f"搜索失败: {exc}",
+                )
+            if not search_results:
+                return PlannerObservation(
+                    tool="internet_search",
+                    input_text=query,
+                    ok=False,
+                    result=f"未搜索到与“{query}”相关的结果。",
+                )
+            formatted = _format_search_results(search_results)
+            return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
+
+        return PlannerObservation(
+            tool=action_tool or "unknown",
+            input_text=action_input,
+            ok=False,
+            result=f"未知工具: {action_tool}",
+        )
+
+    def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
+        truncated = _truncate_text(observation.result, PLAN_OBSERVATION_CHAR_LIMIT)
+        task.observations.append(
+            PlannerObservation(
+                tool=observation.tool,
+                input_text=observation.input_text,
+                ok=observation.ok,
+                result=truncated,
+            )
+        )
+        if len(task.observations) > PLAN_OBSERVATION_HISTORY_LIMIT:
+            task.observations = task.observations[-PLAN_OBSERVATION_HISTORY_LIMIT:]
+
+    def _format_step_limit_response(self, task: PendingPlanTask) -> str:
+        completed = [obs for obs in task.observations if obs.ok and obs.tool != "planner"]
+        failed = [obs for obs in task.observations if not obs.ok]
+        completed_lines = [f"- {item.tool}: {item.input_text}" for item in completed[-3:]] or ["- 暂无已完成动作。"]
+        failed_reason = failed[-1].result if failed else "需要更多信息才能继续。"
+        return (
+            f"已达到最大执行步数（{PLAN_REPLAN_MAX_STEPS}）。\n"
+            "已完成部分:\n"
+            f"{chr(10).join(completed_lines)}\n"
+            "未完成原因:\n"
+            f"- {failed_reason}\n"
+            "下一步建议:\n"
+            "- 你可以补充更具体的时间、编号或关键词；\n"
+            "- 或直接使用 /todo、/schedule 命令完成关键操作。"
+        )
+
+    def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
+        if self._pending_plan_task is task:
+            self._pending_plan_task = None
+        self._emit_progress("任务状态：已完成。")
+        return response
+
+    @staticmethod
+    def _planner_unavailable_text() -> str:
+        return "抱歉，当前意图识别服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
+
+    def _emit_progress(self, message: str) -> None:
+        callback = self._progress_callback
+        if callback is None:
+            return
+        callback(message)
+
+    def _emit_plan_progress(self, task: PendingPlanTask) -> None:
+        if not task.latest_plan:
+            return
+        done_count = min(task.successful_steps, len(task.latest_plan))
+        lines = ["计划列表："]
+        for idx, item in enumerate(task.latest_plan, start=1):
+            status = "完成" if idx <= done_count else "待办"
+            lines.append(f"{idx}. [{status}] {item}")
+        self._emit_progress("\n".join(lines))
+
+    @staticmethod
+    def _progress_total_text(task: PendingPlanTask) -> str:
+        if not task.latest_plan:
+            return "未定"
+        # Replan may shorten current plan. Keep denominator >= executed steps to avoid "20/1" style confusion.
+        return str(max(task.step_count, len(task.latest_plan)))
+
+    @staticmethod
+    def _current_plan_total_text(task: PendingPlanTask) -> str | None:
+        if not task.latest_plan:
+            return None
+        return str(len(task.latest_plan))
 
     def _handle_command(self, command: str) -> str:
         if command == "/help":
@@ -1697,3 +2212,86 @@ def _try_parse_json(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         pass
     return None
+
+
+def _normalize_planner_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in {"continue", "done"}:
+        return None
+
+    raw_plan = payload.get("plan")
+    plan_items: list[str] = []
+    if isinstance(raw_plan, list):
+        for item in raw_plan:
+            text = str(item).strip()
+            if text:
+                plan_items.append(text)
+
+    if status == "continue":
+        next_action = payload.get("next_action")
+        if not isinstance(next_action, dict):
+            return None
+        tool = str(next_action.get("tool") or "").strip().lower()
+        input_text = str(next_action.get("input") or "").strip()
+        if tool not in {"todo", "schedule", "internet_search", "ask_user"}:
+            return None
+        if not input_text:
+            return None
+        response_text = str(payload.get("response") or "").strip()
+        if response_text:
+            return None
+        return {
+            "status": "continue",
+            "plan": plan_items,
+            "next_action": {"tool": tool, "input": input_text},
+            "response": None,
+        }
+
+    next_action = payload.get("next_action")
+    if next_action is not None:
+        return None
+    response_text = str(payload.get("response") or "").strip()
+    if not response_text:
+        return None
+    return {
+        "status": "done",
+        "plan": plan_items,
+        "next_action": None,
+        "response": response_text,
+    }
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 3, 0)] + "..."
+
+
+def _is_same_question_text(previous: str | None, current: str) -> bool:
+    if previous is None:
+        return False
+    a = _normalize_question_text(previous)
+    b = _normalize_question_text(current)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a in b or b in a
+
+
+def _normalize_question_text(text: str) -> str:
+    normalized = text.strip().lower()
+    normalized = re.sub(r"[\s，。！？；：、,.!?;:]+", "", normalized)
+    return normalized
+
+
+def _format_search_results(results: list[SearchResult]) -> str:
+    lines = ["互联网搜索结果（Top 3）:"]
+    for index, item in enumerate(results[:3], start=1):
+        snippet = item.snippet or "-"
+        lines.append(f"{index}. {item.title}")
+        lines.append(f"   摘要: {snippet}")
+        lines.append(f"   链接: {item.url}")
+    return "\n".join(lines)
