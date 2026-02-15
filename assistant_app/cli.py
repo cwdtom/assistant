@@ -43,12 +43,21 @@ def _handle_input_with_feedback(
     agent: _AgentLike,
     user_input: str,
     stream: TextIO = sys.stdout,
+    progress_color_prefix: str = PROGRESS_COLOR_PREFIX,
+    progress_color_suffix: str = PROGRESS_COLOR_SUFFIX,
 ) -> str:
     show_progress = _should_show_waiting(agent, user_input)
     original_setter = getattr(agent, "set_progress_callback", None)
     if callable(original_setter):
         if show_progress:
-            original_setter(lambda msg: _write_progress_line(stream=stream, message=msg))
+            original_setter(
+                lambda msg: _write_progress_line(
+                    stream=stream,
+                    message=msg,
+                    color_prefix=progress_color_prefix,
+                    color_suffix=progress_color_suffix,
+                )
+            )
         else:
             original_setter(None)
     try:
@@ -58,15 +67,31 @@ def _handle_input_with_feedback(
             original_setter(None)
 
 
-def _write_progress_line(stream: TextIO, message: str) -> None:
+def _write_progress_line(
+    stream: TextIO,
+    message: str,
+    *,
+    color_prefix: str = PROGRESS_COLOR_PREFIX,
+    color_suffix: str = PROGRESS_COLOR_SUFFIX,
+) -> None:
     for line in message.splitlines():
-        stream.write(f"{PROGRESS_COLOR_PREFIX}进度> {line}{PROGRESS_COLOR_SUFFIX}\n")
+        stream.write(f"{color_prefix}进度> {line}{color_suffix}\n")
     stream.flush()
+
+
+def _resolve_progress_color(color: str) -> tuple[str, str]:
+    normalized = color.strip().lower()
+    if normalized in {"", "gray", "grey"}:
+        return PROGRESS_COLOR_PREFIX, PROGRESS_COLOR_SUFFIX
+    if normalized in {"off", "none", "no"}:
+        return "", ""
+    return PROGRESS_COLOR_PREFIX, PROGRESS_COLOR_SUFFIX
 
 
 def main() -> None:
     config = load_config()
     db = AssistantDB(config.db_path)
+    progress_color_prefix, progress_color_suffix = _resolve_progress_color(config.cli_progress_color)
 
     llm_client = None
     if config.api_key:
@@ -76,7 +101,19 @@ def main() -> None:
             model=config.model,
         )
 
-    agent = AssistantAgent(db=db, llm_client=llm_client)
+    agent = AssistantAgent(
+        db=db,
+        llm_client=llm_client,
+        plan_replan_max_steps=config.plan_replan_max_steps,
+        plan_replan_retry_count=config.plan_replan_retry_count,
+        plan_observation_char_limit=config.plan_observation_char_limit,
+        plan_observation_history_limit=config.plan_observation_history_limit,
+        plan_continuous_failure_limit=config.plan_continuous_failure_limit,
+        task_cancel_command=config.task_cancel_command,
+        internet_search_top_k=config.internet_search_top_k,
+        schedule_max_window_days=config.schedule_max_window_days,
+        infinite_repeat_conflict_preview_days=config.infinite_repeat_conflict_preview_days,
+    )
 
     _clear_terminal_history()
     print("CLI 个人助手已启动。输入 /help 查看命令，输入 exit 退出。")
@@ -92,7 +129,12 @@ def main() -> None:
             break
 
         try:
-            response = _handle_input_with_feedback(agent, raw)
+            response = _handle_input_with_feedback(
+                agent,
+                raw,
+                progress_color_prefix=progress_color_prefix,
+                progress_color_suffix=progress_color_suffix,
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"助手> 处理失败: {exc}")
             continue

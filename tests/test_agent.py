@@ -477,7 +477,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent.handle_input(f"/schedule add {too_far} 远期会")
 
         list_resp = agent.handle_input("/schedule list")
-        self.assertIn("日程列表(前天起未来 1 个月)", list_resp)
+        self.assertIn("日程列表(前天起未来 31 天)", list_resp)
         self.assertNotIn("过期会", list_resp)
         self.assertIn("窗口内会", list_resp)
         self.assertNotIn("远期会", list_resp)

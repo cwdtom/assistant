@@ -26,6 +26,18 @@ cp .env.example .env
 - `DEEPSEEK_MODEL=deepseek-chat`（通用对话）
 - 可选 `deepseek-reasoner`（更强推理，延迟通常更高）
 
+可选运行参数（均支持写入 `.env`）：
+- `PLAN_REPLAN_MAX_STEPS`：plan 循环最大执行步数（默认 `20`）
+- `PLAN_REPLAN_RETRY_COUNT`：planner JSON 失败重试次数（默认 `2`）
+- `PLAN_OBSERVATION_CHAR_LIMIT`：单条 observation 最大保留字符（默认 `10000`）
+- `PLAN_OBSERVATION_HISTORY_LIMIT`：observation 历史条数上限（默认 `100`）
+- `PLAN_CONTINUOUS_FAILURE_LIMIT`：连续失败兜底阈值（默认 `2`）
+- `TASK_CANCEL_COMMAND`：取消当前任务命令文本（默认 `取消当前任务`）
+- `INTERNET_SEARCH_TOP_K`：互联网搜索返回条数（默认 `3`）
+- `SCHEDULE_MAX_WINDOW_DAYS`：日程查询窗口最大天数（默认 `31`）
+- `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`：无限重复冲突检测预览天数（默认 `31`）
+- `CLI_PROGRESS_COLOR`：进度输出颜色，支持 `gray|off`（默认 `gray`）
+
 3. 运行
 ```bash
 python main.py
@@ -70,7 +82,7 @@ python main.py
 - 进入 CLI 和退出 CLI 时，会自动清空当前终端显示历史（scrollback）
 - 自然语言任务会实时输出循环进度：步骤进度、计划列表、工具执行结果与完成情况
 - 支持自然语言命令（plan -> act -> observe -> replan 循环），模型会在 todo/schedule/internet_search/ask_user 四种工具中逐步决策
-- ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `取消当前任务` 可终止当前循环任务
+- ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认使用 Bing 作为搜索源，返回 Top-3 摘要和链接（实现解耦，可替换 provider）
 - 自然语言任务默认最多执行 20 个工具步骤，超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：

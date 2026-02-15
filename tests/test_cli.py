@@ -8,6 +8,7 @@ from assistant_app.cli import (
     _clear_terminal_history,
     _exit_cli,
     _handle_input_with_feedback,
+    _resolve_progress_color,
     _should_show_waiting,
 )
 
@@ -68,6 +69,11 @@ class CLIFeedbackTest(unittest.TestCase):
 
         self.assertEqual(result, "echo:/todo list")
         self.assertEqual(stream.getvalue(), "")
+
+    def test_resolve_progress_color_off(self) -> None:
+        prefix, suffix = _resolve_progress_color("off")
+        self.assertEqual(prefix, "")
+        self.assertEqual(suffix, "")
 
 
 if __name__ == "__main__":

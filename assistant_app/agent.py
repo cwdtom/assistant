@@ -22,13 +22,15 @@ TODO_DUE_OPTION_PATTERN = re.compile(r"(^|\s)--due\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:
 TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
-INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
-PLAN_REPLAN_MAX_STEPS = 20
-PLAN_REPLAN_RETRY_COUNT = 2
-PLAN_OBSERVATION_CHAR_LIMIT = 10000
-PLAN_OBSERVATION_HISTORY_LIMIT = 100
-PLAN_CONTINUOUS_FAILURE_LIMIT = 2
-TASK_CANCEL_COMMAND = "取消当前任务"
+DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
+DEFAULT_PLAN_REPLAN_MAX_STEPS = 20
+DEFAULT_PLAN_REPLAN_RETRY_COUNT = 2
+DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT = 10000
+DEFAULT_PLAN_OBSERVATION_HISTORY_LIMIT = 100
+DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT = 2
+DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
+DEFAULT_INTERNET_SEARCH_TOP_K = 3
+DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
 
 PLAN_REPLAN_PROMPT = """
 你是 CLI 助手的计划执行器，需要通过 plan -> act -> observe -> replan 的循环解决用户目标。
@@ -140,12 +142,30 @@ class AssistantAgent:
         llm_client: LLMClient | None = None,
         search_provider: SearchProvider | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        plan_replan_max_steps: int = DEFAULT_PLAN_REPLAN_MAX_STEPS,
+        plan_replan_retry_count: int = DEFAULT_PLAN_REPLAN_RETRY_COUNT,
+        plan_observation_char_limit: int = DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT,
+        plan_observation_history_limit: int = DEFAULT_PLAN_OBSERVATION_HISTORY_LIMIT,
+        plan_continuous_failure_limit: int = DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT,
+        task_cancel_command: str = DEFAULT_TASK_CANCEL_COMMAND,
+        internet_search_top_k: int = DEFAULT_INTERNET_SEARCH_TOP_K,
+        schedule_max_window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
+        infinite_repeat_conflict_preview_days: int = DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS,
     ) -> None:
         self.db = db
         self.llm_client = llm_client
         self.search_provider = search_provider or BingSearchProvider()
         self._pending_plan_task: PendingPlanTask | None = None
         self._progress_callback = progress_callback
+        self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
+        self._plan_replan_retry_count = max(plan_replan_retry_count, 0)
+        self._plan_observation_char_limit = max(plan_observation_char_limit, 1)
+        self._plan_observation_history_limit = max(plan_observation_history_limit, 1)
+        self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
+        self._task_cancel_command = task_cancel_command.strip() or DEFAULT_TASK_CANCEL_COMMAND
+        self._internet_search_top_k = max(internet_search_top_k, 1)
+        self._schedule_max_window_days = max(schedule_max_window_days, 1)
+        self._infinite_repeat_conflict_preview_days = max(infinite_repeat_conflict_preview_days, 1)
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._progress_callback = callback
@@ -155,7 +175,7 @@ class AssistantAgent:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
 
-        if text == TASK_CANCEL_COMMAND:
+        if text == self._task_cancel_command:
             if self._pending_plan_task is None:
                 return "当前没有进行中的任务。"
             self._pending_plan_task = None
@@ -189,7 +209,7 @@ class AssistantAgent:
             self._emit_progress(
                 progress_text
             )
-            if task.step_count >= PLAN_REPLAN_MAX_STEPS:
+            if task.step_count >= self._plan_replan_max_steps:
                 return self._finalize_planner_task(task, self._format_step_limit_response(task))
 
             planner_payload = self._request_planner_payload(task)
@@ -206,7 +226,7 @@ class AssistantAgent:
                 )
                 if task.step_count == 0 and task.planner_failure_rounds >= 1:
                     return self._finalize_planner_task(task, self._planner_unavailable_text())
-                if task.planner_failure_rounds >= PLAN_CONTINUOUS_FAILURE_LIMIT:
+                if task.planner_failure_rounds >= self._plan_continuous_failure_limit:
                     return self._finalize_planner_task(task, self._planner_unavailable_text())
                 self._emit_progress("规划失败：模型输出不符合契约，准备重试。")
                 continue
@@ -266,7 +286,7 @@ class AssistantAgent:
                             result="用户刚完成澄清，必须先重规划并执行至少一个工具动作，再决定是否继续提问。",
                         ),
                     )
-                    if task.ask_user_repeat_count >= PLAN_CONTINUOUS_FAILURE_LIMIT:
+                    if task.ask_user_repeat_count >= self._plan_continuous_failure_limit:
                         return self._finalize_planner_task(
                             task,
                             "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
@@ -286,7 +306,7 @@ class AssistantAgent:
                             result="重复提问：用户已补充信息，请基于已知信息重规划并执行。",
                         ),
                     )
-                    if task.ask_user_repeat_count >= PLAN_CONTINUOUS_FAILURE_LIMIT:
+                    if task.ask_user_repeat_count >= self._plan_continuous_failure_limit:
                         return self._finalize_planner_task(
                             task,
                             "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
@@ -324,7 +344,7 @@ class AssistantAgent:
             self._emit_progress(
                 "完成情况："
                 f"成功 {task.successful_steps} 步，失败 {task.failed_steps} 步，"
-                f"已执行 {task.step_count}/{planned_total_text} 步（上限 {PLAN_REPLAN_MAX_STEPS}{plan_suffix}）。"
+                f"已执行 {task.step_count}/{planned_total_text} 步（上限 {self._plan_replan_max_steps}{plan_suffix}）。"
             )
 
     def _request_planner_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
@@ -332,7 +352,7 @@ class AssistantAgent:
             return None
 
         planner_messages = self._build_planner_messages(task)
-        max_attempts = 1 + PLAN_REPLAN_RETRY_COUNT
+        max_attempts = 1 + self._plan_replan_retry_count
         for _ in range(max_attempts):
             try:
                 raw = self._llm_reply_for_planner(planner_messages)
@@ -361,7 +381,7 @@ class AssistantAgent:
             "goal": task.goal,
             "clarification_history": task.clarification_history,
             "step_count": task.step_count,
-            "max_steps": PLAN_REPLAN_MAX_STEPS,
+            "max_steps": self._plan_replan_max_steps,
             "latest_plan": task.latest_plan,
             "observations": observations,
             "tool_contract": PLAN_TOOL_CONTRACT,
@@ -424,7 +444,7 @@ class AssistantAgent:
                     result="internet_search 缺少查询词。",
                 )
             try:
-                search_results = self.search_provider.search(query, top_k=3)
+                search_results = self.search_provider.search(query, top_k=self._internet_search_top_k)
             except Exception as exc:  # noqa: BLE001
                 return PlannerObservation(
                     tool="internet_search",
@@ -450,7 +470,7 @@ class AssistantAgent:
         )
 
     def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
-        truncated = _truncate_text(observation.result, PLAN_OBSERVATION_CHAR_LIMIT)
+        truncated = _truncate_text(observation.result, self._plan_observation_char_limit)
         task.observations.append(
             PlannerObservation(
                 tool=observation.tool,
@@ -459,8 +479,8 @@ class AssistantAgent:
                 result=truncated,
             )
         )
-        if len(task.observations) > PLAN_OBSERVATION_HISTORY_LIMIT:
-            task.observations = task.observations[-PLAN_OBSERVATION_HISTORY_LIMIT:]
+        if len(task.observations) > self._plan_observation_history_limit:
+            task.observations = task.observations[-self._plan_observation_history_limit :]
 
     def _format_step_limit_response(self, task: PendingPlanTask) -> str:
         completed = [obs for obs in task.observations if obs.ok and obs.tool != "planner"]
@@ -468,7 +488,7 @@ class AssistantAgent:
         completed_lines = [f"- {item.tool}: {item.input_text}" for item in completed[-3:]] or ["- 暂无已完成动作。"]
         failed_reason = failed[-1].result if failed else "需要更多信息才能继续。"
         return (
-            f"已达到最大执行步数（{PLAN_REPLAN_MAX_STEPS}）。\n"
+            f"已达到最大执行步数（{self._plan_replan_max_steps}）。\n"
             "已完成部分:\n"
             f"{chr(10).join(completed_lines)}\n"
             "未完成原因:\n"
@@ -742,14 +762,16 @@ class AssistantAgent:
             return f"待办 #{id_text} 已完成。完成时间: {done_completed_at}"
 
         if command == "/schedule list":
-            window_start, window_end = _default_schedule_list_window()
+            window_start, window_end = _default_schedule_list_window(
+                window_days=self._schedule_max_window_days
+            )
             items = self.db.list_schedules(
                 window_start=window_start,
                 window_end=window_end,
-                max_window_days=31,
+                max_window_days=self._schedule_max_window_days,
             )
             if not items:
-                return "前天起未来 1 个月内暂无日程。"
+                return f"前天起未来 {self._schedule_max_window_days} 天内暂无日程。"
             table = _render_table(
                 headers=["ID", "时间", "时长(分钟)", "标题", "重复间隔(分钟)", "重复次数", "重复启用", "创建时间"],
                 rows=[
@@ -766,7 +788,7 @@ class AssistantAgent:
                     for item in items
                 ],
             )
-            return f"日程列表(前天起未来 1 个月):\n{table}"
+            return f"日程列表(前天起未来 {self._schedule_max_window_days} 天):\n{table}"
 
         if command.startswith("/schedule view "):
             view_parsed = _parse_schedule_view_input(command.removeprefix("/schedule view ").strip())
@@ -777,7 +799,7 @@ class AssistantAgent:
             items = self.db.list_schedules(
                 window_start=window_start,
                 window_end=window_end,
-                max_window_days=31,
+                max_window_days=self._schedule_max_window_days,
             )
             items = _filter_schedules_by_calendar_view(items, view_name=view_name, anchor=anchor)
             if not items:
@@ -838,6 +860,7 @@ class AssistantAgent:
                 event_time=event_time,
                 repeat_interval_minutes=repeat_interval_minutes,
                 repeat_times=repeat_times,
+                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
             )
             conflicts = self.db.find_schedule_conflicts(
                 event_times,
@@ -895,6 +918,7 @@ class AssistantAgent:
                 event_time=event_time,
                 repeat_interval_minutes=repeat_interval_minutes,
                 repeat_times=repeat_times,
+                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
             )
             conflicts = self.db.find_schedule_conflicts(
                 event_times,
@@ -1540,10 +1564,14 @@ def _parse_due_datetime(value: str | None) -> datetime | None:
         return None
 
 
-def _default_schedule_list_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+def _default_schedule_list_window(
+    now: datetime | None = None,
+    *,
+    window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
+) -> tuple[datetime, datetime]:
     current = now or datetime.now()
     start = datetime.combine(current.date() - timedelta(days=2), datetime.min.time())
-    end = start + timedelta(days=31)
+    end = start + timedelta(days=max(window_days, 1))
     return start, end
 
 
@@ -1584,6 +1612,7 @@ def _build_schedule_event_times(
     event_time: str,
     repeat_interval_minutes: int | None,
     repeat_times: int,
+    infinite_repeat_conflict_preview_days: int = DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS,
 ) -> list[str]:
     base = datetime.strptime(event_time, "%Y-%m-%d %H:%M")
     if repeat_interval_minutes is None:
@@ -1591,7 +1620,7 @@ def _build_schedule_event_times(
 
     if repeat_times == -1:
         # Keep conflict checks deterministic with a time-bounded preview window.
-        preview_minutes = INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS * 24 * 60
+        preview_minutes = max(infinite_repeat_conflict_preview_days, 1) * 24 * 60
         preview_times = preview_minutes // repeat_interval_minutes + 1
     else:
         preview_times = max(repeat_times, 1)
