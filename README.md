@@ -43,17 +43,24 @@ python main.py
 - `/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
 - `/todo delete <id>`
 - `/todo done <id>`
-- `/schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--repeat <none|daily|weekly|monthly>] [--times <>=1>]`
+- `/schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]`
 - `/schedule get <id>`
 - `/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]`
-- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--repeat <none|daily|weekly|monthly>] [--times <>=1>]`
+- `/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]`
+- `/schedule repeat <id> <on|off>`
 - `/schedule delete <id>`
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
 - 日程支持 `duration_minutes` 字段（单位分钟，新增默认 `60`；更新时不传则保留原值）
-- 日程支持重复创建（daily/weekly/monthly + times）
+- 日程支持重复创建（interval 分钟 + times），重复规则单独存储，查询时与普通日程拼接
+- 当提供 `--interval` 但省略 `--times` 时，默认重复次数为 `-1`（无限循环）
+- 重复规则支持启用/停用（停用后仅保留基础日程，不展开后续重复实例）
+- `/schedule list` 默认展示“从前天开始向后 1 个月”的窗口，最大查询范围固定为 1 个月
+- `/schedule view` 会按传入锚点（day/week/month）计算时间窗口查询，不依赖“当前时间”展开重复日程
+- CLI 查看日程时会展示重复相关字段（重复间隔、重复次数、重复启用状态）
 - 日程支持日历视图（day/week/month）
 - 日程新增/修改时会做冲突检测（时间区间重叠会提示冲突，会考虑时长）
+- 对 `times=-1` 的无限重复，冲突检测按“起始时间起未来 31 天”窗口校验
 - 待办支持关键词搜索（可选按标签范围搜索）
 - 待办支持视图（all/today/overdue/upcoming/inbox）
 - 待办支持 `priority` 字段（默认 `0`，数值越小优先级越高，最小为 `0`）

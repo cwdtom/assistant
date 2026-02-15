@@ -3,13 +3,11 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from assistant_app.agent import (
     AssistantAgent,
-    _extract_args_from_text,
-    _extract_intent_label,
-    _extract_todo_content,
     _strip_think_blocks,
     _try_parse_json,
 )
@@ -29,7 +27,7 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "schedule_id": None,
         "event_time": None,
         "title": None,
-        "schedule_repeat": None,
+        "schedule_repeat_interval_minutes": None,
         "schedule_repeat_times": None,
         "schedule_duration_minutes": None,
         "schedule_view": None,
@@ -75,8 +73,10 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
         self.assertIn("/schedule update", result)
+        self.assertIn("/schedule repeat", result)
         self.assertIn("/schedule delete", result)
         self.assertIn("--duration <>=1>", result)
+        self.assertIn("--interval <>=1>", result)
 
     def test_slash_commands_without_llm(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -230,6 +230,9 @@ class AssistantAgentTest(unittest.TestCase):
         get_resp = agent.handle_input("/schedule get 1")
         self.assertIn("日程详情:", get_resp)
         self.assertIn("| 时长(分钟) |", get_resp)
+        self.assertIn("重复间隔(分钟)", get_resp)
+        self.assertIn("重复次数", get_resp)
+        self.assertIn("重复启用", get_resp)
         self.assertIn("| 1 | 2026-02-20 09:30 | 60 | 站会 |", get_resp)
 
         update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会")
@@ -251,21 +254,50 @@ class AssistantAgentTest(unittest.TestCase):
     def test_slash_schedule_repeat_add_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
-        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 30 --repeat daily --times 3")
+        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 30 --interval 1440 --times 3")
         self.assertIn("已添加重复日程 3 条", add_resp)
         self.assertIn("duration=30m", add_resp)
+        self.assertIn("interval=1440m", add_resp)
 
         list_resp = agent.handle_input("/schedule list")
         self.assertIn("2026-02-20 09:30", list_resp)
         self.assertIn("2026-02-21 09:30", list_resp)
         self.assertIn("2026-02-22 09:30", list_resp)
+        self.assertIn("| 1440 | 3 | on |", list_resp)
         self.assertIn("| 30 | 站会 |", list_resp)
 
-        invalid = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat none --times 3")
+        invalid = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --times 3")
         self.assertIn("用法", invalid)
 
         invalid_duration = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 0")
         self.assertIn("用法", invalid_duration)
+
+    def test_slash_schedule_repeat_default_times_is_infinite(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 60")
+        self.assertIn("已添加无限重复日程", add_resp)
+        self.assertIn("interval=60m", add_resp)
+
+        list_resp = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-20 09:30", list_resp)
+        self.assertIn("2026-02-20 10:30", list_resp)
+
+    def test_schedule_list_default_window_from_two_days_ago(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        now = datetime.now()
+        too_old = (now - timedelta(days=5)).strftime("%Y-%m-%d 09:00")
+        in_window = (now + timedelta(days=3)).strftime("%Y-%m-%d 10:00")
+        too_far = (now + timedelta(days=40)).strftime("%Y-%m-%d 11:00")
+
+        agent.handle_input(f"/schedule add {too_old} 过期会")
+        agent.handle_input(f"/schedule add {in_window} 窗口内会")
+        agent.handle_input(f"/schedule add {too_far} 远期会")
+
+        list_resp = agent.handle_input("/schedule list")
+        self.assertIn("日程列表(前天起未来 1 个月)", list_resp)
+        self.assertNotIn("过期会", list_resp)
+        self.assertIn("窗口内会", list_resp)
+        self.assertNotIn("远期会", list_resp)
 
     def test_slash_schedule_conflict_detection(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -289,7 +321,15 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-27 09:30 固定会")
 
-        conflict = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --repeat weekly --times 2")
+        conflict = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 2")
+        self.assertIn("日程冲突", conflict)
+        self.assertIn("固定会", conflict)
+
+    def test_slash_schedule_conflict_detection_with_infinite_repeat_window(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-15 10:00 固定会")
+
+        conflict = agent.handle_input("/schedule add 2026-02-15 00:00 高频循环 --interval 1")
         self.assertIn("日程冲突", conflict)
         self.assertIn("固定会", conflict)
 
@@ -297,14 +337,46 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 50")
 
-        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会 --repeat weekly --times 2")
-        self.assertIn("新增 1 条后续日程", update_resp)
+        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会 --interval 10080 --times 2")
+        self.assertIn("times=2", update_resp)
         self.assertIn("duration=50m", update_resp)
 
         list_resp = agent.handle_input("/schedule list")
         self.assertIn("2026-02-21 10:00", list_resp)
         self.assertIn("2026-02-28 10:00", list_resp)
         self.assertIn("| 50 | 复盘会 |", list_resp)
+
+    def test_slash_schedule_update_clears_repeat_when_times_is_one(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 3")
+
+        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会")
+        self.assertIn("已更新日程 #1", update_resp)
+
+        list_resp = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-21 10:00", list_resp)
+        self.assertNotIn("2026-02-28 10:00", list_resp)
+
+    def test_slash_schedule_repeat_toggle(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 3")
+
+        off_resp = agent.handle_input("/schedule repeat 1 off")
+        self.assertIn("已停用日程 #1 的重复规则", off_resp)
+        off_list = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-20 09:30", off_list)
+        self.assertNotIn("2026-02-27 09:30", off_list)
+
+        on_resp = agent.handle_input("/schedule repeat 1 on")
+        self.assertIn("已启用日程 #1 的重复规则", on_resp)
+        on_list = agent.handle_input("/schedule list")
+        self.assertIn("2026-02-27 09:30", on_list)
+
+    def test_slash_schedule_repeat_toggle_without_rule(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 单次会")
+        resp = agent.handle_input("/schedule repeat 1 off")
+        self.assertIn("没有可切换的重复规则", resp)
 
     def test_slash_schedule_update_conflict_detection(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -336,6 +408,14 @@ class AssistantAgentTest(unittest.TestCase):
 
         invalid = agent.handle_input("/schedule view quarter 2026-02")
         self.assertIn("用法", invalid)
+
+    def test_schedule_view_anchor_can_expand_infinite_recurrence(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-03 10:00 周会 --interval 10080")
+
+        month_resp = agent.handle_input("/schedule view month 2026-04")
+        self.assertIn("周会", month_resp)
+        self.assertIn("2026-04", month_resp)
 
     def test_nl_todo_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -400,7 +480,7 @@ class AssistantAgentTest(unittest.TestCase):
                     "schedule_add",
                     event_time="2026-02-20 09:30",
                     title="周会",
-                    schedule_repeat="weekly",
+                    schedule_repeat_interval_minutes=10080,
                     schedule_repeat_times=3,
                 ),
             ]
@@ -544,6 +624,22 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("把日程1删掉")
         self.assertIn("日程 #1 已删除", response)
         self.assertIsNone(self.db.get_schedule(1))
+
+    def test_nl_schedule_repeat_toggle_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("schedule_repeat_disable", schedule_id=1),
+                _intent_json("schedule_repeat_enable", schedule_id=1),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 3")
+
+        off_resp = agent.handle_input("停用日程1的重复")
+        self.assertIn("已停用日程 #1 的重复规则", off_resp)
+
+        on_resp = agent.handle_input("启用日程1的重复")
+        self.assertIn("已启用日程 #1 的重复规则", on_resp)
 
     def test_nl_schedule_update_without_duration_keeps_existing_duration(self) -> None:
         fake_llm = FakeLLMClient(
@@ -718,7 +814,6 @@ class AssistantAgentTest(unittest.TestCase):
                     "schedule_add",
                     event_time="2026-02-20 09:30",
                     title="周会",
-                    schedule_repeat="none",
                     schedule_repeat_times=2,
                 ),
             ]
@@ -758,6 +853,17 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
+    def test_schedule_repeat_toggle_missing_id_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("schedule_repeat_disable"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        response = agent.handle_input("停用重复日程")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
     def test_chat_without_llm(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
@@ -768,34 +874,9 @@ class AssistantAgentTest(unittest.TestCase):
         text = "<think>abc</think>最终答案"
         self.assertEqual(_strip_think_blocks(text), "最终答案")
 
-    def test_extract_intent_label(self) -> None:
-        self.assertEqual(_extract_intent_label("todo_list"), "todo_list")
-        self.assertEqual(_extract_intent_label("intent: schedule_add"), "schedule_add")
-        self.assertEqual(_extract_intent_label('{"intent":"chat"}'), "chat")
-        self.assertEqual(_extract_intent_label("当前待办记录如下："), "todo_list")
-        self.assertIsNone(_extract_intent_label("你好"))
-
     def test_try_parse_json_from_fenced_block(self) -> None:
         payload = _try_parse_json('```json\n{"intent":"todo_list"}\n```')
         self.assertIsNone(payload)
-
-    def test_extract_args_from_text(self) -> None:
-        todo_add = _extract_args_from_text("把“买牛奶”加进去。", intent="todo_add")
-        self.assertEqual(todo_add["todo_content"], "买牛奶")
-
-        todo_done = _extract_args_from_text("先完成待办 12。", intent="todo_done")
-        self.assertEqual(todo_done["todo_id"], 12)
-
-        schedule = _extract_args_from_text("已为你添加日程：2026-02-20 09:30，事项：周会。", intent="schedule_add")
-        self.assertEqual(schedule["event_time"], "2026-02-20 09:30")
-        self.assertEqual(schedule["title"], "周会")
-
-    def test_extract_todo_content(self) -> None:
-        self.assertEqual(
-            _extract_todo_content("增加一个测试待办，明天早上10 :00吃早饭"),
-            "明天早上10 :00吃早饭",
-        )
-        self.assertIsNone(_extract_todo_content("我先看看有没有 .ics 文件"))
 
 
 if __name__ == "__main__":

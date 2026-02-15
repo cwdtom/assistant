@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from typing import TextIO
+from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
 from assistant_app.config import load_config
@@ -14,7 +14,13 @@ WAITING_CLEAR_WIDTH = 48
 CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
 
 
-def _should_show_waiting(agent: AssistantAgent, user_input: str) -> bool:
+class _AgentLike(Protocol):
+    llm_client: Any
+
+    def handle_input(self, user_input: str) -> str: ...
+
+
+def _should_show_waiting(agent: _AgentLike, user_input: str) -> bool:
     text = user_input.strip()
     return bool(text) and not text.startswith("/") and agent.llm_client is not None
 
@@ -38,7 +44,7 @@ def _exit_cli(stream: TextIO = sys.stdout, with_leading_newline: bool = False) -
 
 
 def _handle_input_with_feedback(
-    agent: AssistantAgent,
+    agent: _AgentLike,
     user_input: str,
     stream: TextIO = sys.stdout,
     interval: float = WAITING_FRAME_INTERVAL,

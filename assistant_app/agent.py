@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from calendar import monthrange
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -10,8 +9,8 @@ from assistant_app.db import AssistantDB
 from assistant_app.llm import LLMClient
 
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
-SCHEDULE_REPEAT_OPTION_PATTERN = re.compile(r"(^|\s)--repeat\s+(none|daily|weekly|monthly)")
-SCHEDULE_TIMES_OPTION_PATTERN = re.compile(r"(^|\s)--times\s+(\d+)")
+SCHEDULE_INTERVAL_OPTION_PATTERN = re.compile(r"(^|\s)--interval\s+(\d+)")
+SCHEDULE_TIMES_OPTION_PATTERN = re.compile(r"(^|\s)--times\s+(-?\d+)")
 SCHEDULE_DURATION_OPTION_PATTERN = re.compile(r"(^|\s)--duration\s+(\d+)")
 TODO_TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
 TODO_VIEW_OPTION_PATTERN = re.compile(r"(^|\s)--view\s+(\S+)")
@@ -32,14 +31,16 @@ INTENT_LABELS = (
     "schedule_list",
     "schedule_view",
     "schedule_update",
+    "schedule_repeat_enable",
+    "schedule_repeat_disable",
     "schedule_delete",
     "chat",
 )
 INTENT_JSON_RETRY_COUNT = 2
 INTENT_SERVICE_UNAVAILABLE = "__intent_service_unavailable__"
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
-SCHEDULE_REPEAT_NAMES = ("none", "daily", "weekly", "monthly")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
+INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
 
 INTENT_ANALYZE_PROMPT = """
 你是 CLI 助手的意图识别器。你必须只输出一个 json 对象，不能输出任何其他内容。
@@ -58,6 +59,8 @@ INTENT_ANALYZE_PROMPT = """
 - schedule_list
 - schedule_view
 - schedule_update
+- schedule_repeat_enable
+- schedule_repeat_disable
 - schedule_delete
 - chat
 
@@ -74,7 +77,7 @@ INTENT_ANALYZE_PROMPT = """
   "schedule_id": "number|null",
   "event_time": "YYYY-MM-DD HH:MM|null",
   "title": "string|null",
-  "schedule_repeat": "none|daily|weekly|monthly|null",
+  "schedule_repeat_interval_minutes": "number|null",
   "schedule_repeat_times": "number|null",
   "schedule_duration_minutes": "number|null",
   "schedule_view": "day|week|month|null",
@@ -87,12 +90,14 @@ INTENT_ANALYZE_PROMPT = """
 - 缺少或不确定的字段填 null
 - todo_get/todo_update/todo_delete/todo_done 需要 todo_id
 - schedule_get/schedule_update/schedule_delete 需要 schedule_id
+- schedule_repeat_enable/schedule_repeat_disable 需要 schedule_id
 - todo_update 需要 todo_content
 - todo_view 需要 todo_view 字段
 - todo_search 需要 todo_content
 - todo_priority 必须是 >=0 的整数，无法确定就填 null
-- schedule_repeat 如出现必须是 none/daily/weekly/monthly
-- schedule_repeat_times 如出现必须是 >=1 的整数
+- schedule_repeat_interval_minutes 如出现必须是 >=1 的整数
+- 常见换算：每小时=60，每天=1440，每周=10080（按分钟填写）
+- schedule_repeat_times 如出现必须是 -1（无限）或 >=1 的整数
 - schedule_duration_minutes 如出现必须是 >=1 的整数
 - schedule_view 如出现必须是 day/week/month
 - schedule_view_date 仅用于 schedule_view。day/week 用 YYYY-MM-DD，month 用 YYYY-MM
@@ -347,30 +352,59 @@ class AssistantAgent:
             return f"待办 #{id_text} 已完成。完成时间: {done_completed_at}"
 
         if command == "/schedule list":
-            items = self.db.list_schedules()
+            window_start, window_end = _default_schedule_list_window()
+            items = self.db.list_schedules(
+                window_start=window_start,
+                window_end=window_end,
+                max_window_days=31,
+            )
             if not items:
-                return "暂无日程。"
+                return "前天起未来 1 个月内暂无日程。"
             table = _render_table(
-                headers=["ID", "时间", "时长(分钟)", "标题", "创建时间"],
+                headers=["ID", "时间", "时长(分钟)", "标题", "重复间隔(分钟)", "重复次数", "重复启用", "创建时间"],
                 rows=[
-                    [str(item.id), item.event_time, str(item.duration_minutes), item.title, item.created_at]
+                    [
+                        str(item.id),
+                        item.event_time,
+                        str(item.duration_minutes),
+                        item.title,
+                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+                        str(item.repeat_times) if item.repeat_times is not None else "-",
+                        _repeat_enabled_text(item.repeat_enabled),
+                        item.created_at,
+                    ]
                     for item in items
                 ],
             )
-            return f"日程列表:\n{table}"
+            return f"日程列表(前天起未来 1 个月):\n{table}"
 
         if command.startswith("/schedule view "):
             view_parsed = _parse_schedule_view_input(command.removeprefix("/schedule view ").strip())
             if view_parsed is None:
                 return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]"
             view_name, anchor = view_parsed
-            items = _filter_schedules_by_calendar_view(self.db.list_schedules(), view_name=view_name, anchor=anchor)
+            window_start, window_end = _resolve_schedule_view_window(view_name=view_name, anchor=anchor)
+            items = self.db.list_schedules(
+                window_start=window_start,
+                window_end=window_end,
+                max_window_days=31,
+            )
+            items = _filter_schedules_by_calendar_view(items, view_name=view_name, anchor=anchor)
             if not items:
                 return f"{view_name} 视图下暂无日程。"
             table = _render_table(
-                headers=["ID", "时间", "时长(分钟)", "标题", "创建时间"],
+                headers=["ID", "时间", "时长(分钟)", "标题", "重复间隔(分钟)", "重复次数", "重复启用", "创建时间"],
                 rows=[
-                    [str(item.id), item.event_time, str(item.duration_minutes), item.title, item.created_at]
+                    [
+                        str(item.id),
+                        item.event_time,
+                        str(item.duration_minutes),
+                        item.title,
+                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+                        str(item.repeat_times) if item.repeat_times is not None else "-",
+                        _repeat_enabled_text(item.repeat_enabled),
+                        item.created_at,
+                    ]
                     for item in items
                 ],
             )
@@ -386,8 +420,19 @@ class AssistantAgent:
             if item is None:
                 return f"未找到日程 #{schedule_id}"
             table = _render_table(
-                headers=["ID", "时间", "时长(分钟)", "标题", "创建时间"],
-                rows=[[str(item.id), item.event_time, str(item.duration_minutes), item.title, item.created_at]],
+                headers=["ID", "时间", "时长(分钟)", "标题", "重复间隔(分钟)", "重复次数", "重复启用", "创建时间"],
+                rows=[
+                    [
+                        str(item.id),
+                        item.event_time,
+                        str(item.duration_minutes),
+                        item.title,
+                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+                        str(item.repeat_times) if item.repeat_times is not None else "-",
+                        _repeat_enabled_text(item.repeat_enabled),
+                        item.created_at,
+                    ]
+                ],
             )
             return f"日程详情:\n{table}"
 
@@ -396,12 +441,12 @@ class AssistantAgent:
             if add_schedule_parsed is None:
                 return (
                     "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
-                    "[--duration <>=1>] [--repeat <none|daily|weekly|monthly>] [--times <>=1>]"
+                    "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]"
                 )
-            event_time, title, duration_minutes, repeat_name, repeat_times = add_schedule_parsed
+            event_time, title, duration_minutes, repeat_interval_minutes, repeat_times = add_schedule_parsed
             event_times = _build_schedule_event_times(
                 event_time=event_time,
-                repeat_name=repeat_name,
+                repeat_interval_minutes=repeat_interval_minutes,
                 repeat_times=repeat_times,
             )
             conflicts = self.db.find_schedule_conflicts(
@@ -410,16 +455,28 @@ class AssistantAgent:
             )
             if conflicts:
                 return _format_schedule_conflicts(conflicts)
-            created_ids = self.db.add_schedules(
+            schedule_id = self.db.add_schedule(
                 title=title,
-                event_times=event_times,
+                event_time=event_time,
                 duration_minutes=duration_minutes,
             )
-            if len(created_ids) == 1:
-                return f"已添加日程 #{created_ids[0]}: {event_time} {title} ({duration_minutes} 分钟)"
+            if repeat_interval_minutes is not None and repeat_times != 1:
+                self.db.set_schedule_recurrence(
+                    schedule_id,
+                    start_time=event_time,
+                    repeat_interval_minutes=repeat_interval_minutes,
+                    repeat_times=repeat_times,
+                )
+            if repeat_times == 1:
+                return f"已添加日程 #{schedule_id}: {event_time} {title} ({duration_minutes} 分钟)"
+            if repeat_times == -1:
+                return (
+                    f"已添加无限重复日程 #{schedule_id}: {event_time} {title} "
+                    f"(duration={duration_minutes}m, interval={repeat_interval_minutes}m)"
+                )
             return (
-                f"已添加重复日程 {len(created_ids)} 条: {event_time} {title} "
-                f"(duration={duration_minutes}m, repeat={repeat_name}, times={repeat_times})"
+                f"已添加重复日程 {repeat_times} 条: {event_time} {title} "
+                f"(duration={duration_minutes}m, interval={repeat_interval_minutes}m, times={repeat_times})"
             )
 
         if command.startswith("/schedule update "):
@@ -427,9 +484,16 @@ class AssistantAgent:
             if update_schedule_parsed is None:
                 return (
                     "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
-                    "[--duration <>=1>] [--repeat <none|daily|weekly|monthly>] [--times <>=1>]"
+                    "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]"
                 )
-            schedule_id, event_time, title, parsed_duration_minutes, repeat_name, repeat_times = update_schedule_parsed
+            (
+                schedule_id,
+                event_time,
+                title,
+                parsed_duration_minutes,
+                repeat_interval_minutes,
+                repeat_times,
+            ) = update_schedule_parsed
             current_item = self.db.get_schedule(schedule_id)
             if current_item is None:
                 return f"未找到日程 #{schedule_id}"
@@ -439,7 +503,7 @@ class AssistantAgent:
                 applied_duration_minutes = current_item.duration_minutes
             event_times = _build_schedule_event_times(
                 event_time=event_time,
-                repeat_name=repeat_name,
+                repeat_interval_minutes=repeat_interval_minutes,
                 repeat_times=repeat_times,
             )
             conflicts = self.db.find_schedule_conflicts(
@@ -457,17 +521,24 @@ class AssistantAgent:
             )
             if not updated:
                 return f"未找到日程 #{schedule_id}"
-            if repeat_times <= 1:
+            if repeat_times == 1:
+                self.db.clear_schedule_recurrence(schedule_id)
                 return f"已更新日程 #{schedule_id}: {event_time} {title} ({applied_duration_minutes} 分钟)"
-            follow_up_times = event_times[1:]
-            created_ids = self.db.add_schedules(
-                title=title,
-                event_times=follow_up_times,
-                duration_minutes=applied_duration_minutes,
-            )
+            if repeat_interval_minutes is not None:
+                self.db.set_schedule_recurrence(
+                    schedule_id,
+                    start_time=event_time,
+                    repeat_interval_minutes=repeat_interval_minutes,
+                    repeat_times=repeat_times,
+                )
+            if repeat_times == -1:
+                return (
+                    f"已更新为无限重复日程 #{schedule_id}: {event_time} {title} "
+                    f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m)"
+                )
             return (
                 f"已更新日程 #{schedule_id}: {event_time} {title} "
-                f"(duration={applied_duration_minutes}m, repeat={repeat_name}, 新增 {len(created_ids)} 条后续日程)"
+                f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m, times={repeat_times})"
             )
 
         if command.startswith("/schedule delete "):
@@ -478,6 +549,19 @@ class AssistantAgent:
             if not deleted:
                 return f"未找到日程 #{schedule_id}"
             return f"日程 #{schedule_id} 已删除。"
+
+        if command.startswith("/schedule repeat "):
+            repeat_toggle_parsed = _parse_schedule_repeat_toggle_input(
+                command.removeprefix("/schedule repeat ").strip()
+            )
+            if repeat_toggle_parsed is None:
+                return "用法: /schedule repeat <id> <on|off>"
+            schedule_id, enabled = repeat_toggle_parsed
+            changed = self.db.set_schedule_recurrence_enabled(schedule_id, enabled)
+            if not changed:
+                return f"日程 #{schedule_id} 没有可切换的重复规则。"
+            status = "启用" if enabled else "停用"
+            return f"已{status}日程 #{schedule_id} 的重复规则。"
 
         return "未知命令。输入 /help 查看可用命令。"
 
@@ -567,25 +651,35 @@ class AssistantAgent:
         if intent == "schedule_add":
             event_time = str(payload.get("event_time") or "").strip()
             title = str(payload.get("title") or "").strip()
-            repeat_raw = payload.get("schedule_repeat")
-            repeat_name = _normalize_schedule_repeat_value(repeat_raw) or "none"
+            interval_raw = payload.get("schedule_repeat_interval_minutes")
+            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(interval_raw)
             repeat_times_raw = payload.get("schedule_repeat_times")
             repeat_times = _normalize_schedule_repeat_times_value(repeat_times_raw)
+            if repeat_times is not None:
+                effective_repeat_times = repeat_times
+            else:
+                effective_repeat_times = -1 if interval_raw is not None else 1
             duration_raw = payload.get("schedule_duration_minutes")
             duration_minutes = _normalize_schedule_duration_minutes_value(duration_raw)
             if not event_time or not title:
                 return True
-            if repeat_raw is not None and _normalize_schedule_repeat_value(repeat_raw) is None:
+            if interval_raw is not None and repeat_interval_minutes is None:
                 return True
             if repeat_times_raw is not None and repeat_times is None:
                 return True
             if duration_raw is not None and duration_minutes is None:
                 return True
-            if repeat_name == "none" and (repeat_times or 1) > 1:
+            if repeat_interval_minutes is None and effective_repeat_times != 1:
+                return True
+            if repeat_interval_minutes is not None and effective_repeat_times == 1:
                 return True
             return re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", event_time) is None
 
         if intent in {"schedule_get", "schedule_delete"}:
+            schedule_id = payload.get("schedule_id")
+            return self._is_invalid_positive_id(schedule_id)
+
+        if intent in {"schedule_repeat_enable", "schedule_repeat_disable"}:
             schedule_id = payload.get("schedule_id")
             return self._is_invalid_positive_id(schedule_id)
 
@@ -602,23 +696,29 @@ class AssistantAgent:
             schedule_id = payload.get("schedule_id")
             event_time = str(payload.get("event_time") or "").strip()
             title = str(payload.get("title") or "").strip()
-            repeat_raw = payload.get("schedule_repeat")
-            repeat_name = _normalize_schedule_repeat_value(repeat_raw) or "none"
+            interval_raw = payload.get("schedule_repeat_interval_minutes")
+            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(interval_raw)
             repeat_times_raw = payload.get("schedule_repeat_times")
             repeat_times = _normalize_schedule_repeat_times_value(repeat_times_raw)
+            if repeat_times is not None:
+                effective_repeat_times = repeat_times
+            else:
+                effective_repeat_times = -1 if interval_raw is not None else 1
             duration_raw = payload.get("schedule_duration_minutes")
             duration_minutes = _normalize_schedule_duration_minutes_value(duration_raw)
             if self._is_invalid_positive_id(schedule_id):
                 return True
             if not event_time or not title:
                 return True
-            if repeat_raw is not None and _normalize_schedule_repeat_value(repeat_raw) is None:
+            if interval_raw is not None and repeat_interval_minutes is None:
                 return True
             if repeat_times_raw is not None and repeat_times is None:
                 return True
             if duration_raw is not None and duration_minutes is None:
                 return True
-            if repeat_name == "none" and (repeat_times or 1) > 1:
+            if repeat_interval_minutes is None and effective_repeat_times != 1:
+                return True
+            if repeat_interval_minutes is not None and effective_repeat_times == 1:
                 return True
             return re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", event_time) is None
 
@@ -755,14 +855,20 @@ class AssistantAgent:
             title = str(payload.get("title") or "").strip()
             if not event_time or not title:
                 return "我识别到你可能要添加日程，但时间或标题不完整。"
-            repeat_name = _normalize_schedule_repeat_value(payload.get("schedule_repeat")) or "none"
-            repeat_times = _normalize_schedule_repeat_times_value(payload.get("schedule_repeat_times")) or 1
+            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(
+                payload.get("schedule_repeat_interval_minutes")
+            )
+            parsed_repeat_times = _normalize_schedule_repeat_times_value(payload.get("schedule_repeat_times"))
+            if repeat_interval_minutes is not None:
+                repeat_times = parsed_repeat_times if parsed_repeat_times is not None else -1
+            else:
+                repeat_times = parsed_repeat_times or 1
             duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("schedule_duration_minutes"))
             cmd = f"/schedule add {event_time} {title}"
             if duration_minutes is not None:
                 cmd += f" --duration {duration_minutes}"
-            if repeat_name != "none":
-                cmd += f" --repeat {repeat_name} --times {repeat_times}"
+            if repeat_interval_minutes is not None:
+                cmd += f" --interval {repeat_interval_minutes} --times {repeat_times}"
             return self._handle_command(cmd)
 
         if intent == "schedule_get":
@@ -777,14 +883,20 @@ class AssistantAgent:
             title = str(payload.get("title") or "").strip()
             if schedule_id is None or not event_time or not title:
                 return "我识别到你可能要修改日程，但编号、时间或标题不完整。"
-            repeat_name = _normalize_schedule_repeat_value(payload.get("schedule_repeat")) or "none"
-            repeat_times = _normalize_schedule_repeat_times_value(payload.get("schedule_repeat_times")) or 1
+            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(
+                payload.get("schedule_repeat_interval_minutes")
+            )
+            parsed_repeat_times = _normalize_schedule_repeat_times_value(payload.get("schedule_repeat_times"))
+            if repeat_interval_minutes is not None:
+                repeat_times = parsed_repeat_times if parsed_repeat_times is not None else -1
+            else:
+                repeat_times = parsed_repeat_times or 1
             duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("schedule_duration_minutes"))
             cmd = f"/schedule update {self._to_int(schedule_id)} {event_time} {title}"
             if duration_minutes is not None:
                 cmd += f" --duration {duration_minutes}"
-            if repeat_name != "none":
-                cmd += f" --repeat {repeat_name} --times {repeat_times}"
+            if repeat_interval_minutes is not None:
+                cmd += f" --interval {repeat_interval_minutes} --times {repeat_times}"
             return self._handle_command(cmd)
 
         if intent == "schedule_delete":
@@ -792,6 +904,13 @@ class AssistantAgent:
             if schedule_id is None:
                 return "我识别到你可能要删除日程，但缺少编号。请告诉我日程 id。"
             return self._handle_command(f"/schedule delete {self._to_int(schedule_id)}")
+
+        if intent in {"schedule_repeat_enable", "schedule_repeat_disable"}:
+            schedule_id = payload.get("schedule_id")
+            if schedule_id is None:
+                return "我识别到你可能要切换重复规则，但缺少编号。请告诉我日程 id。"
+            target = "on" if intent == "schedule_repeat_enable" else "off"
+            return self._handle_command(f"/schedule repeat {self._to_int(schedule_id)} {target}")
 
         return None
 
@@ -888,11 +1007,12 @@ class AssistantAgent:
             "/todo delete <id>\n"
             "/todo done <id>\n"
             "/schedule add <YYYY-MM-DD HH:MM> <标题> "
-            "[--duration <>=1>] [--repeat <none|daily|weekly|monthly>] [--times <>=1>]\n"
+            "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]\n"
             "/schedule get <id>\n"
             "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]\n"
             "/schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
-            "[--duration <>=1>] [--repeat <none|daily|weekly|monthly>] [--times <>=1>]\n"
+            "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]\n"
+            "/schedule repeat <id> <on|off>\n"
             "/schedule delete <id>\n"
             "/schedule list\n"
             "你也可以直接说自然语言（会先做意图识别，再执行动作）。\n"
@@ -1094,19 +1214,21 @@ def _parse_todo_search_input(raw: str) -> tuple[str, str | None] | None:
     return keyword, tag
 
 
-def _parse_schedule_add_input(raw: str) -> tuple[str, str, int, str, int] | None:
+def _parse_schedule_add_input(raw: str) -> tuple[str, str, int, int | None, int] | None:
     parsed = _parse_schedule_input(raw, default_duration_minutes=60)
     if parsed is None:
         return None
-    event_time, title, duration_minutes, repeat_name, repeat_times = parsed
+    event_time, title, duration_minutes, repeat_interval_minutes, repeat_times = parsed
     if duration_minutes is None:
         return None
-    if repeat_name == "none" and repeat_times > 1:
+    if repeat_interval_minutes is None and repeat_times != 1:
         return None
-    return event_time, title, duration_minutes, repeat_name, repeat_times
+    if repeat_interval_minutes is not None and repeat_times == 1:
+        return None
+    return event_time, title, duration_minutes, repeat_interval_minutes, repeat_times
 
 
-def _parse_schedule_update_input(raw: str) -> tuple[int, str, str, int | None, str, int] | None:
+def _parse_schedule_update_input(raw: str) -> tuple[int, str, str, int | None, int | None, int] | None:
     parts = raw.strip().split(maxsplit=1)
     if len(parts) != 2:
         return None
@@ -1116,17 +1238,19 @@ def _parse_schedule_update_input(raw: str) -> tuple[int, str, str, int | None, s
     parsed = _parse_schedule_input(parts[1], default_duration_minutes=None)
     if parsed is None:
         return None
-    event_time, title, duration_minutes, repeat_name, repeat_times = parsed
-    if repeat_name == "none" and repeat_times > 1:
+    event_time, title, duration_minutes, repeat_interval_minutes, repeat_times = parsed
+    if repeat_interval_minutes is None and repeat_times != 1:
         return None
-    return schedule_id, event_time, title, duration_minutes, repeat_name, repeat_times
+    if repeat_interval_minutes is not None and repeat_times == 1:
+        return None
+    return schedule_id, event_time, title, duration_minutes, repeat_interval_minutes, repeat_times
 
 
 def _parse_schedule_input(
     raw: str,
     *,
     default_duration_minutes: int | None,
-) -> tuple[str, str, int | None, str, int] | None:
+) -> tuple[str, str, int | None, int | None, int] | None:
     text = raw.strip()
     if not text:
         return None
@@ -1142,8 +1266,17 @@ def _parse_schedule_input(
         return None
 
     duration_minutes: int | None = default_duration_minutes
-    repeat_name = "none"
+    repeat_interval_minutes: int | None = None
     repeat_times = 1
+    has_repeat_times = False
+
+    interval_match = SCHEDULE_INTERVAL_OPTION_PATTERN.search(working)
+    if interval_match:
+        parsed_interval = _normalize_schedule_interval_minutes_value(interval_match.group(2))
+        if parsed_interval is None:
+            return None
+        repeat_interval_minutes = parsed_interval
+        working = _remove_option_span(working, interval_match.span())
 
     duration_match = SCHEDULE_DURATION_OPTION_PATTERN.search(working)
     if duration_match:
@@ -1153,28 +1286,24 @@ def _parse_schedule_input(
         duration_minutes = parsed_duration
         working = _remove_option_span(working, duration_match.span())
 
-    repeat_match = SCHEDULE_REPEAT_OPTION_PATTERN.search(working)
-    if repeat_match:
-        parsed_repeat = _normalize_schedule_repeat_value(repeat_match.group(2))
-        if parsed_repeat is None:
-            return None
-        repeat_name = parsed_repeat
-        working = _remove_option_span(working, repeat_match.span())
-
     times_match = SCHEDULE_TIMES_OPTION_PATTERN.search(working)
     if times_match:
         parsed_times = _normalize_schedule_repeat_times_value(times_match.group(2))
         if parsed_times is None:
             return None
         repeat_times = parsed_times
+        has_repeat_times = True
         working = _remove_option_span(working, times_match.span())
+
+    if repeat_interval_minutes is not None and not has_repeat_times:
+        repeat_times = -1
 
     title = re.sub(r"\s+", " ", working).strip()
     if not title:
         return None
-    if re.search(r"(^|\s)--(duration|repeat|times)\b", title):
+    if re.search(r"(^|\s)--(duration|interval|times)\b", title):
         return None
-    return event_time, title, duration_minutes, repeat_name, repeat_times
+    return event_time, title, duration_minutes, repeat_interval_minutes, repeat_times
 
 
 def _parse_schedule_view_input(raw: str) -> tuple[str, str | None] | None:
@@ -1191,6 +1320,21 @@ def _parse_schedule_view_input(raw: str) -> tuple[str, str | None] | None:
     if anchor is None:
         return None
     return view_name, anchor
+
+
+def _parse_schedule_repeat_toggle_input(raw: str) -> tuple[int, bool] | None:
+    parts = raw.strip().split()
+    if len(parts) != 2:
+        return None
+    schedule_id = _parse_positive_int(parts[0])
+    if schedule_id is None:
+        return None
+    status = parts[1].strip().lower()
+    if status == "on":
+        return schedule_id, True
+    if status == "off":
+        return schedule_id, False
+    return None
 
 
 def _sanitize_tag(tag: str | None) -> str | None:
@@ -1220,13 +1364,25 @@ def _normalize_todo_view_value(value: Any) -> str | None:
     return None
 
 
-def _normalize_schedule_repeat_value(value: Any) -> str | None:
+def _normalize_schedule_interval_minutes_value(value: Any) -> int | None:
     if value is None:
         return None
-    text = str(value).strip().lower()
-    if text in SCHEDULE_REPEAT_NAMES:
-        return text
-    return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        parsed = int(value)
+        return parsed if parsed >= 1 else None
+    text = str(value).strip()
+    if not text.isdigit():
+        return None
+    parsed = int(text)
+    if parsed < 1:
+        return None
+    return parsed
 
 
 def _normalize_schedule_view_value(value: Any) -> str | None:
@@ -1244,16 +1400,22 @@ def _normalize_schedule_repeat_times_value(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
+        if value == -1:
+            return -1
         return value if value >= 1 else None
     if isinstance(value, float):
         if not value.is_integer():
             return None
         parsed = int(value)
+        if parsed == -1:
+            return -1
         return parsed if parsed >= 1 else None
     text = str(value).strip()
-    if not text.isdigit():
+    if not re.fullmatch(r"-?\d+", text):
         return None
     parsed = int(text)
+    if parsed == -1:
+        return -1
     if parsed < 1:
         return None
     return parsed
@@ -1378,29 +1540,7 @@ def _filter_schedules_by_calendar_view(
     if view_name not in SCHEDULE_VIEW_NAMES:
         return schedules
 
-    current = now or datetime.now()
-    if anchor:
-        if view_name == "month":
-            anchor_time = datetime.strptime(anchor, "%Y-%m")
-        else:
-            anchor_time = datetime.strptime(anchor, "%Y-%m-%d")
-    else:
-        anchor_time = current
-
-    if view_name == "day":
-        start = datetime.combine(anchor_time.date(), datetime.min.time())
-        end = start + timedelta(days=1)
-    elif view_name == "week":
-        week_start_date = anchor_time.date() - timedelta(days=anchor_time.weekday())
-        start = datetime.combine(week_start_date, datetime.min.time())
-        end = start + timedelta(days=7)
-    else:
-        month_start = datetime(anchor_time.year, anchor_time.month, 1)
-        if anchor_time.month == 12:
-            month_end = datetime(anchor_time.year + 1, 1, 1)
-        else:
-            month_end = datetime(anchor_time.year, anchor_time.month + 1, 1)
-        start, end = month_start, month_end
+    start, end = _resolve_schedule_view_window(view_name=view_name, anchor=anchor, now=now)
 
     filtered: list[Any] = []
     for item in schedules:
@@ -1424,34 +1564,68 @@ def _parse_due_datetime(value: str | None) -> datetime | None:
         return None
 
 
-def _build_schedule_event_times(*, event_time: str, repeat_name: str, repeat_times: int) -> list[str]:
+def _default_schedule_list_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    current = now or datetime.now()
+    start = datetime.combine(current.date() - timedelta(days=2), datetime.min.time())
+    end = start + timedelta(days=31)
+    return start, end
+
+
+def _resolve_schedule_view_window(
+    *,
+    view_name: str,
+    anchor: str | None,
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    current = now or datetime.now()
+    if anchor:
+        if view_name == "month":
+            anchor_time = datetime.strptime(anchor, "%Y-%m")
+        else:
+            anchor_time = datetime.strptime(anchor, "%Y-%m-%d")
+    else:
+        anchor_time = current
+
+    if view_name == "day":
+        start = datetime.combine(anchor_time.date(), datetime.min.time())
+        end = start + timedelta(days=1)
+        return start, end
+    if view_name == "week":
+        week_start_date = anchor_time.date() - timedelta(days=anchor_time.weekday())
+        start = datetime.combine(week_start_date, datetime.min.time())
+        end = start + timedelta(days=7)
+        return start, end
+    month_start = datetime(anchor_time.year, anchor_time.month, 1)
+    if anchor_time.month == 12:
+        month_end = datetime(anchor_time.year + 1, 1, 1)
+    else:
+        month_end = datetime(anchor_time.year, anchor_time.month + 1, 1)
+    return month_start, month_end
+
+
+def _build_schedule_event_times(
+    *,
+    event_time: str,
+    repeat_interval_minutes: int | None,
+    repeat_times: int,
+) -> list[str]:
     base = datetime.strptime(event_time, "%Y-%m-%d %H:%M")
-    times = max(repeat_times, 1)
-    if repeat_name == "none":
+    if repeat_interval_minutes is None:
         return [base.strftime("%Y-%m-%d %H:%M")]
+
+    if repeat_times == -1:
+        # Keep conflict checks deterministic with a time-bounded preview window.
+        preview_minutes = INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS * 24 * 60
+        preview_times = preview_minutes // repeat_interval_minutes + 1
+    else:
+        preview_times = max(repeat_times, 1)
 
     result: list[str] = []
     current = base
-    for _ in range(times):
+    for _ in range(preview_times):
         result.append(current.strftime("%Y-%m-%d %H:%M"))
-        if repeat_name == "daily":
-            current += timedelta(days=1)
-        elif repeat_name == "weekly":
-            current += timedelta(weeks=1)
-        elif repeat_name == "monthly":
-            current = _add_month(current, months=1)
-        else:
-            current += timedelta(days=1)
+        current += timedelta(minutes=repeat_interval_minutes)
     return result
-
-
-def _add_month(value: datetime, *, months: int) -> datetime:
-    month_index = value.month - 1 + months
-    year = value.year + month_index // 12
-    month = month_index % 12 + 1
-    max_day = monthrange(year, month)[1]
-    day = min(value.day, max_day)
-    return value.replace(year=year, month=month, day=day)
 
 
 def _now_time_text() -> str:
@@ -1480,8 +1654,14 @@ def _format_todo_meta_inline(due_at: str | None, remind_at: str | None, *, prior
     return " | " + " ".join(meta_parts)
 
 
+def _repeat_enabled_text(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "on" if value else "off"
+
+
 def _format_schedule_conflicts(conflicts: list[Any]) -> str:
-    lines = ["日程冲突：以下时间点已有日程，请调整时间后重试。"]
+    lines = ["日程冲突：以下时间段与现有日程重叠，请调整时间后重试。"]
     for item in conflicts[:5]:
         lines.append(f"- #{item.id} {item.event_time} {item.title}")
     if len(conflicts) > 5:
@@ -1505,49 +1685,6 @@ def _strip_think_blocks(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
 
 
-def _extract_intent_label(text: str) -> str | None:
-    cleaned = text.strip().lower()
-    if not cleaned:
-        return None
-
-    parsed = _try_parse_json(cleaned)
-    if isinstance(parsed, dict):
-        candidate = str(parsed.get("intent", "")).strip().lower()
-        if candidate in INTENT_LABELS:
-            return candidate
-
-    for label in INTENT_LABELS:
-        if re.search(rf"\b{re.escape(label)}\b", cleaned):
-            return label
-
-    # If the model returns only one token-like word, accept it when possible.
-    token = cleaned.split()[0]
-    if token in INTENT_LABELS:
-        return token
-
-    # Semantic fallback from model free-form output.
-    has_todo = "待办" in cleaned or "todo" in cleaned
-    has_schedule = "日程" in cleaned or "schedule" in cleaned
-
-    list_words = ("查看", "看一下", "列表", "记录", "还有", "当前", "列出", "如下", "清单", "汇总", "扫")
-    add_words = ("添加", "新增", "增加", "记下", "记录了", "创建", "已添加", "已更新", "加", "加进去")
-    done_words = ("完成", "done", "标记完成")
-
-    if has_todo and any(word in cleaned for word in list_words):
-        return "todo_list"
-    if has_todo and any(word in cleaned for word in done_words):
-        return "todo_done"
-    if has_todo and any(word in cleaned for word in add_words):
-        return "todo_add"
-
-    if has_schedule and any(word in cleaned for word in list_words):
-        return "schedule_list"
-    if has_schedule and any(word in cleaned for word in add_words):
-        return "schedule_add"
-
-    return None
-
-
 def _try_parse_json(text: str) -> dict[str, Any] | None:
     if not text:
         return None
@@ -1559,74 +1696,4 @@ def _try_parse_json(text: str) -> dict[str, Any] | None:
             return parsed
     except json.JSONDecodeError:
         pass
-    return None
-
-
-def _extract_args_from_text(text: str, intent: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "todo_content": None,
-        "todo_id": None,
-        "event_time": None,
-        "title": None,
-    }
-    cleaned = text.strip()
-
-    if intent == "todo_add":
-        extracted = _extract_todo_content(cleaned)
-        if extracted:
-            payload["todo_content"] = extracted
-        return payload
-
-    if intent == "todo_done":
-        matched = re.search(r"(?:待办|todo)\s*#?\s*(\d+)", cleaned, flags=re.IGNORECASE)
-        if matched:
-            payload["todo_id"] = int(matched.group(1))
-        return payload
-
-    if intent == "schedule_add":
-        time_match = re.search(r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}", cleaned)
-        if time_match:
-            payload["event_time"] = time_match.group(0).replace("  ", " ")
-
-        title_patterns = [
-            r"(?:事项|标题)[:：]\s*[`\"“”']?([^`\"“”'\n。]+)",
-            r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*[，, ]\s*([^。\n]+)",
-        ]
-        for pattern in title_patterns:
-            matched = re.search(pattern, cleaned)
-            if matched:
-                payload["title"] = matched.group(1).strip().strip("。")
-                break
-        return payload
-
-    return payload
-
-
-def _extract_todo_content(text: str) -> str | None:
-    candidates: list[str] = []
-
-    quoted = re.findall(r"[\"“”'`](.+?)[\"“”'`]", text)
-    candidates.extend(item.strip() for item in quoted if item.strip())
-
-    patterns = [
-        r"(?:添加|增加|新增|创建|记下|记录|加个|加一个)(?:一条|一个|条)?(?:测试)?待办[，,:：\s]*(.+)$",
-        r"(?:帮我|请)?(?:把)?待办[，,:：\s]*(.+)$",
-        r"todo[，,:：\s]*(.+)$",
-        r"把(.+?)(?:加进去|加入|记下|添加)$",
-    ]
-    for pattern in patterns:
-        matched = re.search(pattern, text, flags=re.IGNORECASE)
-        if matched:
-            value = matched.group(1).strip()
-            if value:
-                candidates.append(value)
-
-    for raw in candidates:
-        normalized = raw.strip("，,。；;：: ")
-        normalized = re.sub(r"\s+", " ", normalized).strip()
-        # Ignore obvious non-task artifacts from hallucinated analysis text.
-        if re.fullmatch(r"\.[a-z0-9]{1,8}", normalized, flags=re.IGNORECASE):
-            continue
-        if normalized:
-            return normalized
     return None

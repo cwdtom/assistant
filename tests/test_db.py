@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from assistant_app.db import AssistantDB
@@ -205,6 +206,139 @@ class AssistantDBTest(unittest.TestCase):
         self.db.add_schedule("晨会", "2026-02-20 09:00", duration_minutes=60)
         conflicts = self.db.find_schedule_conflicts(["2026-02-20 10:00"], duration_minutes=30)
         self.assertEqual(conflicts, [])
+
+    def test_list_schedules_merges_recurring_rules(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=30)
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=10080,
+                repeat_times=3,
+            )
+        )
+
+        items = self.db.list_schedules()
+        self.assertEqual(
+            [item.event_time for item in items],
+            ["2026-02-20 09:00", "2026-02-27 09:00", "2026-03-06 09:00"],
+        )
+        self.assertEqual([item.id for item in items], [schedule_id, schedule_id, schedule_id])
+
+    def test_list_schedules_does_not_truncate_finite_recurrence_without_window(self) -> None:
+        schedule_id = self.db.add_schedule("高频任务", "2026-01-01 00:00", duration_minutes=20)
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-01-01 00:00",
+            repeat_interval_minutes=60,
+            repeat_times=3000,
+        )
+
+        items = self.db.list_schedules()
+        self.assertEqual(len(items), 3000)
+        self.assertEqual(items[0].event_time, "2026-01-01 00:00")
+        self.assertEqual(items[-1].event_time, "2026-05-05 23:00")
+
+    def test_find_schedule_conflicts_with_recurring_rules(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=60)
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=10080,
+                repeat_times=4,
+            )
+        )
+
+        conflicts = self.db.find_schedule_conflicts(["2026-02-27 09:30"], duration_minutes=30)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0].event_time, "2026-02-27 09:00")
+
+    def test_recurring_schedule_can_be_disabled_and_enabled(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=60)
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=10080,
+                repeat_times=3,
+            )
+        )
+
+        self.assertTrue(self.db.set_schedule_recurrence_enabled(schedule_id, False))
+        disabled_items = self.db.list_schedules()
+        self.assertEqual([item.event_time for item in disabled_items], ["2026-02-20 09:00"])
+        disabled_conflicts = self.db.find_schedule_conflicts(["2026-02-27 09:30"], duration_minutes=30)
+        self.assertEqual(disabled_conflicts, [])
+
+        self.assertTrue(self.db.set_schedule_recurrence_enabled(schedule_id, True))
+        enabled_items = self.db.list_schedules()
+        self.assertIn("2026-02-27 09:00", [item.event_time for item in enabled_items])
+
+    def test_set_schedule_recurrence_enabled_without_rule_returns_false(self) -> None:
+        schedule_id = self.db.add_schedule("单次会", "2026-02-20 09:00", duration_minutes=60)
+        self.assertFalse(self.db.set_schedule_recurrence_enabled(schedule_id, False))
+
+    def test_set_schedule_recurrence_supports_infinite_repeat_times(self) -> None:
+        schedule_id = self.db.add_schedule("循环站会", "2026-02-20 09:00", duration_minutes=30)
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=60,
+                repeat_times=-1,
+            )
+        )
+        item = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.repeat_times, -1)
+
+    def test_list_schedules_respects_window_max_range(self) -> None:
+        now = datetime.now()
+        inside = (now + timedelta(days=5)).strftime("%Y-%m-%d 09:00")
+        outside = (now + timedelta(days=45)).strftime("%Y-%m-%d 09:00")
+        self.db.add_schedule("窗口内", inside, duration_minutes=30)
+        self.db.add_schedule("窗口外", outside, duration_minutes=30)
+
+        items = self.db.list_schedules(
+            window_start=now,
+            window_end=now + timedelta(days=90),
+            max_window_days=31,
+        )
+        titles = [item.title for item in items]
+        self.assertIn("窗口内", titles)
+        self.assertNotIn("窗口外", titles)
+
+    def test_infinite_recurrence_respects_window_bounds(self) -> None:
+        now = datetime.now().replace(minute=0, second=0, microsecond=0)
+        start_text = now.strftime("%Y-%m-%d %H:%M")
+        schedule_id = self.db.add_schedule("每小时站会", start_text, duration_minutes=20)
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time=start_text,
+            repeat_interval_minutes=60,
+            repeat_times=-1,
+        )
+
+        items = self.db.list_schedules(
+            window_start=now,
+            window_end=now + timedelta(hours=3),
+            max_window_days=31,
+        )
+        self.assertGreaterEqual(len(items), 4)
+        self.assertTrue(all(item.title == "每小时站会" for item in items))
+
+    def test_delete_schedule_removes_recurring_rules(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=60)
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-02-20 09:00",
+            repeat_interval_minutes=10080,
+            repeat_times=3,
+        )
+        self.assertTrue(self.db.delete_schedule(schedule_id))
+        self.assertEqual(self.db.list_schedules(), [])
 
     def test_schedule_crud(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")

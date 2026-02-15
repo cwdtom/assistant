@@ -30,6 +30,20 @@ class ScheduleItem:
     event_time: str
     duration_minutes: int
     created_at: str
+    repeat_interval_minutes: int | None = None
+    repeat_times: int | None = None
+    repeat_enabled: bool | None = None
+
+
+@dataclass(frozen=True)
+class RecurringScheduleRule:
+    id: int
+    schedule_id: int
+    start_time: str
+    repeat_interval_minutes: int
+    repeat_times: int
+    enabled: bool
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -53,6 +67,7 @@ class AssistantDB:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
             conn.commit()
@@ -91,6 +106,23 @@ class AssistantDB:
                 """
             )
             self._ensure_schedule_duration_column(conn)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recurring_schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schedule_id INTEGER NOT NULL UNIQUE,
+                    start_time TEXT NOT NULL,
+                    repeat_interval_minutes INTEGER NOT NULL CHECK (repeat_interval_minutes >= 1),
+                    repeat_times INTEGER NOT NULL CHECK (repeat_times = -1 OR repeat_times >= 2),
+                    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+                )
+                """
+            )
+            self._ensure_recurring_interval_column(conn)
+            self._ensure_recurring_enabled_column(conn)
+            self._ensure_recurring_repeat_times_constraint(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_history (
@@ -134,6 +166,115 @@ class AssistantDB:
             "UPDATE schedules SET duration_minutes = 60 "
             "WHERE duration_minutes IS NULL OR duration_minutes < 1"
         )
+
+    def _ensure_recurring_interval_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(recurring_schedules)").fetchall()
+        names = {row["name"] for row in columns}
+        if "repeat_interval_minutes" not in names:
+            conn.execute("ALTER TABLE recurring_schedules ADD COLUMN repeat_interval_minutes INTEGER")
+        # Migrate legacy repeat_name to minute interval when needed.
+        if "repeat_name" in names:
+            conn.execute(
+                """
+                UPDATE recurring_schedules
+                SET repeat_interval_minutes = CASE repeat_name
+                    WHEN 'daily' THEN 1440
+                    WHEN 'weekly' THEN 10080
+                    WHEN 'monthly' THEN 43200
+                    ELSE 1440
+                END
+                WHERE repeat_interval_minutes IS NULL OR repeat_interval_minutes < 1
+                """
+            )
+        conn.execute(
+            "UPDATE recurring_schedules SET repeat_interval_minutes = 1440 "
+            "WHERE repeat_interval_minutes IS NULL OR repeat_interval_minutes < 1"
+        )
+
+    def _ensure_recurring_enabled_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(recurring_schedules)").fetchall()
+        names = {row["name"] for row in columns}
+        if "enabled" not in names:
+            conn.execute("ALTER TABLE recurring_schedules ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+        conn.execute(
+            "UPDATE recurring_schedules SET enabled = 1 "
+            "WHERE enabled IS NULL OR enabled NOT IN (0, 1)"
+        )
+
+    def _ensure_recurring_repeat_times_constraint(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'recurring_schedules'
+            """
+        ).fetchone()
+        sql_text = str(row["sql"]).lower() if row and row["sql"] else ""
+        if "repeat_times = -1" in sql_text:
+            return
+
+        columns = conn.execute("PRAGMA table_info(recurring_schedules)").fetchall()
+        names = {item["name"] for item in columns}
+        interval_expr = "1440"
+        if "repeat_interval_minutes" in names and "repeat_name" in names:
+            interval_expr = (
+                "COALESCE(repeat_interval_minutes, CASE repeat_name "
+                "WHEN 'daily' THEN 1440 "
+                "WHEN 'weekly' THEN 10080 "
+                "WHEN 'monthly' THEN 43200 "
+                "ELSE 1440 END, 1440)"
+            )
+        elif "repeat_interval_minutes" in names:
+            interval_expr = "COALESCE(repeat_interval_minutes, 1440)"
+        elif "repeat_name" in names:
+            interval_expr = (
+                "CASE repeat_name "
+                "WHEN 'daily' THEN 1440 "
+                "WHEN 'weekly' THEN 10080 "
+                "WHEN 'monthly' THEN 43200 "
+                "ELSE 1440 END"
+            )
+
+        enabled_expr = "1"
+        if "enabled" in names:
+            enabled_expr = "COALESCE(enabled, 1)"
+
+        conn.execute("ALTER TABLE recurring_schedules RENAME TO recurring_schedules_old")
+        conn.execute(
+            """
+            CREATE TABLE recurring_schedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schedule_id INTEGER NOT NULL UNIQUE,
+                start_time TEXT NOT NULL,
+                repeat_interval_minutes INTEGER NOT NULL CHECK (repeat_interval_minutes >= 1),
+                repeat_times INTEGER NOT NULL CHECK (repeat_times = -1 OR repeat_times >= 2),
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO recurring_schedules (
+                id, schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at
+            )
+            SELECT
+                id,
+                schedule_id,
+                start_time,
+                {interval_expr},
+                CASE
+                    WHEN repeat_times = -1 THEN -1
+                    WHEN repeat_times IS NULL OR repeat_times < 2 THEN 2
+                    ELSE repeat_times
+                END,
+                {enabled_expr},
+                created_at
+            FROM recurring_schedules_old
+            """
+        )
+        conn.execute("DROP TABLE recurring_schedules_old")
 
     def add_todo(
         self,
@@ -367,24 +508,130 @@ class AssistantDB:
                 created_ids.append(int(cur.lastrowid))
         return created_ids
 
-    def list_schedules(self) -> list[ScheduleItem]:
+    def set_schedule_recurrence(
+        self,
+        schedule_id: int,
+        *,
+        start_time: str,
+        repeat_interval_minutes: int,
+        repeat_times: int,
+        enabled: bool = True,
+    ) -> bool:
+        if repeat_times == 1:
+            return self.clear_schedule_recurrence(schedule_id)
+        if not isinstance(repeat_interval_minutes, int) or isinstance(repeat_interval_minutes, bool):
+            return False
+        if repeat_interval_minutes < 1:
+            return False
+        if (
+            not isinstance(repeat_times, int)
+            or isinstance(repeat_times, bool)
+            or (repeat_times != -1 and repeat_times < 2)
+        ):
+            return False
+
+        timestamp = _now_iso()
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id, title, event_time, duration_minutes, created_at "
-                "FROM schedules ORDER BY event_time ASC, id ASC"
-            ).fetchall()
-        return [
-            ScheduleItem(
-                id=row["id"],
-                title=row["title"],
-                event_time=row["event_time"],
-                duration_minutes=_normalize_duration_minutes(
-                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
+            has_schedule = conn.execute("SELECT 1 FROM schedules WHERE id = ?", (schedule_id,)).fetchone() is not None
+            if not has_schedule:
+                return False
+            conn.execute(
+                """
+                INSERT INTO recurring_schedules (
+                    schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(schedule_id) DO UPDATE SET
+                    start_time = excluded.start_time,
+                    repeat_interval_minutes = excluded.repeat_interval_minutes,
+                    repeat_times = excluded.repeat_times,
+                    enabled = excluded.enabled
+                """,
+                (
+                    schedule_id,
+                    start_time,
+                    repeat_interval_minutes,
+                    repeat_times,
+                    1 if enabled else 0,
+                    timestamp,
                 ),
-                created_at=row["created_at"],
             )
-            for row in rows
-        ]
+        return True
+
+    def clear_schedule_recurrence(self, schedule_id: int) -> bool:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM recurring_schedules WHERE schedule_id = ?", (schedule_id,))
+        return True
+
+    def set_schedule_recurrence_enabled(self, schedule_id: int, enabled: bool) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE recurring_schedules SET enabled = ? WHERE schedule_id = ?",
+                (1 if enabled else 0, schedule_id),
+            )
+            return cur.rowcount > 0
+
+    def list_schedules(
+        self,
+        *,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
+        max_window_days: int = 31,
+    ) -> list[ScheduleItem]:
+        effective_window_start, effective_window_end = _normalize_schedule_window(
+            window_start=window_start,
+            window_end=window_end,
+            max_window_days=max_window_days,
+        )
+        if (
+            effective_window_start is not None
+            and effective_window_end is not None
+            and effective_window_end < effective_window_start
+        ):
+            return []
+
+        with self._connect() as conn:
+            base_items = self._list_base_schedules(conn)
+            rules = self._list_recurring_rules(conn)
+
+        rule_by_schedule_id = {rule.schedule_id: rule for rule in rules}
+        base_map = {item.id: item for item in base_items}
+        combined: list[ScheduleItem] = []
+        for base in base_items:
+            base_with_rule = _attach_recurrence_to_schedule(base, rule_by_schedule_id.get(base.id))
+            if _is_schedule_item_in_window(
+                base_with_rule,
+                window_start=effective_window_start,
+                window_end=effective_window_end,
+            ):
+                combined.append(base_with_rule)
+        for rule in rules:
+            base_item = base_map.get(rule.schedule_id)
+            if base_item is None:
+                continue
+            if not rule.enabled:
+                continue
+            expand_window_start = effective_window_start
+            expand_window_end = effective_window_end
+            expand_max_items: int | None = None
+            if rule.repeat_times == -1 and expand_window_start is None and expand_window_end is None:
+                now = datetime.now()
+                expand_window_start = now
+                expand_window_end = now + timedelta(days=max_window_days)
+                expand_max_items = 2000
+
+            combined.extend(
+                _expand_recurring_schedule_items(
+                    base=base_item,
+                    rule=rule,
+                    window_start=expand_window_start,
+                    window_end=expand_window_end,
+                    max_items=expand_max_items,
+                )
+            )
+
+        combined.sort(key=lambda item: (item.event_time, item.id))
+        return combined
 
     def find_schedule_conflicts(
         self,
@@ -402,34 +649,52 @@ class AssistantDB:
 
         normalized_duration = _normalize_duration_minutes(duration_minutes)
         candidate_ranges = [_build_schedule_time_range(event_time, normalized_duration) for event_time in unique_times]
-
-        query = "SELECT id, title, event_time, duration_minutes, created_at FROM schedules WHERE 1 = 1"
-        params: list[object] = []
-        if exclude_schedule_id is not None:
-            query += " AND id != ?"
-            params.append(exclude_schedule_id)
-        query += " ORDER BY event_time ASC, id ASC"
-
-        with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+        candidate_window_start = min(item[0] for item in candidate_ranges)
+        candidate_window_end = max(item[1] for item in candidate_ranges)
 
         conflicts: list[ScheduleItem] = []
-        seen_ids: set[int] = set()
-        for row in rows:
-            current = ScheduleItem(
-                id=int(row["id"]),
-                title=str(row["title"]),
-                event_time=str(row["event_time"]),
-                duration_minutes=_normalize_duration_minutes(
-                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
-                ),
-                created_at=str(row["created_at"]),
-            )
-            current_range = _build_schedule_time_range(current.event_time, current.duration_minutes)
-            if any(_schedule_ranges_overlap(current_range, candidate_range) for candidate_range in candidate_ranges):
-                if current.id not in seen_ids:
-                    seen_ids.add(current.id)
-                    conflicts.append(current)
+        seen_keys: set[tuple[int, str]] = set()
+        with self._connect() as conn:
+            base_items = self._list_base_schedules(conn)
+            rules = self._list_recurring_rules(conn)
+
+        rule_by_schedule_id = {rule.schedule_id: rule for rule in rules}
+        for base in base_items:
+            if exclude_schedule_id is not None and base.id == exclude_schedule_id:
+                continue
+            rule = rule_by_schedule_id.get(base.id)
+            materialized = [_attach_recurrence_to_schedule(base, rule)]
+            if rule is not None and rule.enabled:
+                window_start = candidate_window_start - timedelta(minutes=base.duration_minutes)
+                if rule.repeat_times == -1:
+                    materialized.extend(
+                        _expand_recurring_schedule_items(
+                            base=base,
+                            rule=rule,
+                            window_start=window_start,
+                            window_end=candidate_window_end,
+                        )
+                    )
+                else:
+                    materialized.extend(
+                        _expand_recurring_schedule_items(
+                            base=base,
+                            rule=rule,
+                            window_start=window_start,
+                            window_end=candidate_window_end,
+                        )
+                    )
+
+            for current in materialized:
+                current_range = _build_schedule_time_range(current.event_time, current.duration_minutes)
+                if any(
+                    _schedule_ranges_overlap(current_range, candidate_range) for candidate_range in candidate_ranges
+                ):
+                    conflict_key = (current.id, current.event_time)
+                    if conflict_key not in seen_keys:
+                        seen_keys.add(conflict_key)
+                        conflicts.append(current)
+        conflicts.sort(key=lambda item: (item.event_time, item.id))
         return conflicts
 
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
@@ -438,16 +703,38 @@ class AssistantDB:
                 "SELECT id, title, event_time, duration_minutes, created_at FROM schedules WHERE id = ?",
                 (schedule_id,),
             ).fetchone()
+            rule_row = conn.execute(
+                """
+                SELECT schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled
+                FROM recurring_schedules
+                WHERE schedule_id = ?
+                """,
+                (schedule_id,),
+            ).fetchone()
         if row is None:
             return None
-        return ScheduleItem(
-            id=row["id"],
-            title=row["title"],
-            event_time=row["event_time"],
-            duration_minutes=_normalize_duration_minutes(
-                row["duration_minutes"] if row["duration_minutes"] is not None else 60
+        rule: RecurringScheduleRule | None = None
+        if rule_row is not None:
+            rule = RecurringScheduleRule(
+                id=0,
+                schedule_id=int(rule_row["schedule_id"]),
+                start_time=str(rule_row["start_time"]),
+                repeat_interval_minutes=int(rule_row["repeat_interval_minutes"]),
+                repeat_times=int(rule_row["repeat_times"]),
+                enabled=bool(rule_row["enabled"]),
+                created_at=row["created_at"],
+            )
+        return _attach_recurrence_to_schedule(
+            ScheduleItem(
+                id=row["id"],
+                title=row["title"],
+                event_time=row["event_time"],
+                duration_minutes=_normalize_duration_minutes(
+                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
+                ),
+                created_at=row["created_at"],
             ),
-            created_at=row["created_at"],
+            rule,
         )
 
     def update_schedule(
@@ -478,12 +765,58 @@ class AssistantDB:
                 f"UPDATE schedules SET {', '.join(fields)} WHERE id = ?",
                 values,
             )
-            return cur.rowcount > 0
+            if cur.rowcount <= 0:
+                return False
+            conn.execute(
+                "UPDATE recurring_schedules SET start_time = ? WHERE schedule_id = ?",
+                (event_time, schedule_id),
+            )
+            return True
 
     def delete_schedule(self, schedule_id: int) -> bool:
         with self._connect() as conn:
+            conn.execute("DELETE FROM recurring_schedules WHERE schedule_id = ?", (schedule_id,))
             cur = conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
             return cur.rowcount > 0
+
+    def _list_base_schedules(self, conn: sqlite3.Connection) -> list[ScheduleItem]:
+        rows = conn.execute(
+            "SELECT id, title, event_time, duration_minutes, created_at "
+            "FROM schedules ORDER BY event_time ASC, id ASC"
+        ).fetchall()
+        return [
+            ScheduleItem(
+                id=int(row["id"]),
+                title=str(row["title"]),
+                event_time=str(row["event_time"]),
+                duration_minutes=_normalize_duration_minutes(
+                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
+                ),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def _list_recurring_rules(self, conn: sqlite3.Connection) -> list[RecurringScheduleRule]:
+        rows = conn.execute(
+            """
+            SELECT id, schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at
+            FROM recurring_schedules
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        return [
+            RecurringScheduleRule(
+                id=int(row["id"]),
+                schedule_id=int(row["schedule_id"]),
+                start_time=str(row["start_time"]),
+                repeat_interval_minutes=int(row["repeat_interval_minutes"]),
+                repeat_times=int(row["repeat_times"]),
+                enabled=bool(row["enabled"]) if row["enabled"] is not None else True,
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        ]
 
     def save_message(self, role: str, content: str) -> None:
         timestamp = _now_iso()
@@ -551,3 +884,140 @@ def _schedule_ranges_overlap(
     left_start, left_end = left
     right_start, right_end = right
     return left_start < right_end and right_start < left_end
+
+
+def _normalize_schedule_window(
+    *,
+    window_start: datetime | None,
+    window_end: datetime | None,
+    max_window_days: int,
+) -> tuple[datetime | None, datetime | None]:
+    normalized_max_days = max(max_window_days, 1)
+    max_delta = timedelta(days=normalized_max_days)
+
+    start = window_start
+    end = window_end
+    if start is not None and end is None:
+        end = start + max_delta
+    elif start is None and end is not None:
+        start = end - max_delta
+    elif start is not None and end is not None and end - start > max_delta:
+        end = start + max_delta
+    return start, end
+
+
+def _is_schedule_item_in_window(
+    item: ScheduleItem,
+    *,
+    window_start: datetime | None,
+    window_end: datetime | None,
+) -> bool:
+    if window_start is None and window_end is None:
+        return True
+    try:
+        event_time = datetime.strptime(item.event_time, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return False
+    if window_start is not None and event_time < window_start:
+        return False
+    if window_end is not None and event_time > window_end:
+        return False
+    return True
+
+
+def _expand_recurring_schedule_items(
+    *,
+    base: ScheduleItem,
+    rule: RecurringScheduleRule,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    max_items: int | None = None,
+) -> list[ScheduleItem]:
+    all_times = _build_repeated_event_times(
+        start_time=rule.start_time,
+        repeat_interval_minutes=rule.repeat_interval_minutes,
+        repeat_times=rule.repeat_times,
+        window_start=window_start,
+        window_end=window_end,
+        max_items=max_items,
+    )
+    expanded_times = all_times
+    if expanded_times and expanded_times[0] == base.event_time:
+        expanded_times = expanded_times[1:]
+    if not expanded_times:
+        return []
+    return [
+        ScheduleItem(
+            id=base.id,
+            title=base.title,
+            event_time=event_time,
+            duration_minutes=base.duration_minutes,
+            created_at=base.created_at,
+            repeat_interval_minutes=rule.repeat_interval_minutes,
+            repeat_times=rule.repeat_times,
+            repeat_enabled=rule.enabled,
+        )
+        for event_time in expanded_times
+    ]
+
+
+def _attach_recurrence_to_schedule(base: ScheduleItem, rule: RecurringScheduleRule | None) -> ScheduleItem:
+    if rule is None:
+        return base
+    return ScheduleItem(
+        id=base.id,
+        title=base.title,
+        event_time=base.event_time,
+        duration_minutes=base.duration_minutes,
+        created_at=base.created_at,
+        repeat_interval_minutes=rule.repeat_interval_minutes,
+        repeat_times=rule.repeat_times,
+        repeat_enabled=rule.enabled,
+    )
+
+
+def _build_repeated_event_times(
+    *,
+    start_time: str,
+    repeat_interval_minutes: int,
+    repeat_times: int,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    max_items: int | None = None,
+) -> list[str]:
+    if repeat_interval_minutes < 1:
+        return [start_time]
+    if repeat_times == 1:
+        return [start_time]
+
+    try:
+        start = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return [start_time]
+
+    if repeat_times != -1 and repeat_times < 2:
+        return [start_time]
+
+    current = start
+    occurrence_index = 0
+    if window_start is not None and current < window_start:
+        delta_minutes = int((window_start - current).total_seconds() // 60)
+        skip_steps = max(delta_minutes // repeat_interval_minutes, 0)
+        occurrence_index += skip_steps
+        current += timedelta(minutes=skip_steps * repeat_interval_minutes)
+        while current < window_start:
+            occurrence_index += 1
+            current += timedelta(minutes=repeat_interval_minutes)
+
+    result: list[str] = []
+    while True:
+        if repeat_times != -1 and occurrence_index >= repeat_times:
+            break
+        if window_end is not None and current > window_end:
+            break
+        result.append(current.strftime("%Y-%m-%d %H:%M"))
+        if max_items is not None and len(result) >= max_items:
+            break
+        occurrence_index += 1
+        current += timedelta(minutes=repeat_interval_minutes)
+    return result
