@@ -4,7 +4,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _UNSET = object()
@@ -390,6 +390,7 @@ class AssistantDB:
         self,
         event_times: list[str],
         *,
+        duration_minutes: int = 60,
         exclude_schedule_id: int | None = None,
     ) -> list[ScheduleItem]:
         if not event_times:
@@ -398,12 +399,12 @@ class AssistantDB:
         unique_times = sorted({item.strip() for item in event_times if item.strip()})
         if not unique_times:
             return []
-        placeholders = ", ".join("?" for _ in unique_times)
-        query = (
-            "SELECT id, title, event_time, duration_minutes, created_at FROM schedules "
-            f"WHERE event_time IN ({placeholders})"
-        )
-        params: list[object] = list(unique_times)
+
+        normalized_duration = _normalize_duration_minutes(duration_minutes)
+        candidate_ranges = [_build_schedule_time_range(event_time, normalized_duration) for event_time in unique_times]
+
+        query = "SELECT id, title, event_time, duration_minutes, created_at FROM schedules WHERE 1 = 1"
+        params: list[object] = []
         if exclude_schedule_id is not None:
             query += " AND id != ?"
             params.append(exclude_schedule_id)
@@ -411,18 +412,25 @@ class AssistantDB:
 
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [
-            ScheduleItem(
-                id=row["id"],
-                title=row["title"],
-                event_time=row["event_time"],
+
+        conflicts: list[ScheduleItem] = []
+        seen_ids: set[int] = set()
+        for row in rows:
+            current = ScheduleItem(
+                id=int(row["id"]),
+                title=str(row["title"]),
+                event_time=str(row["event_time"]),
                 duration_minutes=_normalize_duration_minutes(
                     row["duration_minutes"] if row["duration_minutes"] is not None else 60
                 ),
-                created_at=row["created_at"],
+                created_at=str(row["created_at"]),
             )
-            for row in rows
-        ]
+            current_range = _build_schedule_time_range(current.event_time, current.duration_minutes)
+            if any(_schedule_ranges_overlap(current_range, candidate_range) for candidate_range in candidate_ranges):
+                if current.id not in seen_ids:
+                    seen_ids.add(current.id)
+                    conflicts.append(current)
+        return conflicts
 
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
         with self._connect() as conn:
@@ -528,3 +536,18 @@ def _normalize_duration_minutes(duration_minutes: int) -> int:
     if duration_minutes < 1:
         raise ValueError("duration_minutes must be >= 1")
     return duration_minutes
+
+
+def _build_schedule_time_range(event_time: str, duration_minutes: int) -> tuple[datetime, datetime]:
+    start = datetime.strptime(event_time, "%Y-%m-%d %H:%M")
+    end = start + timedelta(minutes=duration_minutes)
+    return start, end
+
+
+def _schedule_ranges_overlap(
+    left: tuple[datetime, datetime],
+    right: tuple[datetime, datetime],
+) -> bool:
+    left_start, left_end = left
+    right_start, right_end = right
+    return left_start < right_end and right_start < left_end

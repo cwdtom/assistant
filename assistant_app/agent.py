@@ -404,7 +404,10 @@ class AssistantAgent:
                 repeat_name=repeat_name,
                 repeat_times=repeat_times,
             )
-            conflicts = self.db.find_schedule_conflicts(event_times)
+            conflicts = self.db.find_schedule_conflicts(
+                event_times,
+                duration_minutes=duration_minutes,
+            )
             if conflicts:
                 return _format_schedule_conflicts(conflicts)
             created_ids = self.db.add_schedules(
@@ -439,7 +442,11 @@ class AssistantAgent:
                 repeat_name=repeat_name,
                 repeat_times=repeat_times,
             )
-            conflicts = self.db.find_schedule_conflicts(event_times, exclude_schedule_id=schedule_id)
+            conflicts = self.db.find_schedule_conflicts(
+                event_times,
+                duration_minutes=applied_duration_minutes,
+                exclude_schedule_id=schedule_id,
+            )
             if conflicts:
                 return _format_schedule_conflicts(conflicts)
             updated = self.db.update_schedule(

@@ -185,14 +185,26 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual([item.duration_minutes for item in items], [30, 30])
 
     def test_find_schedule_conflicts(self) -> None:
-        self.db.add_schedule("晨会", "2026-02-20 09:00")
-        second_id = self.db.add_schedule("周会", "2026-02-21 09:00")
+        self.db.add_schedule("晨会", "2026-02-20 09:00", duration_minutes=60)
+        second_id = self.db.add_schedule("周会", "2026-02-21 09:00", duration_minutes=60)
 
-        conflicts = self.db.find_schedule_conflicts(["2026-02-20 09:00", "2026-02-21 09:00"])
+        conflicts = self.db.find_schedule_conflicts(
+            ["2026-02-20 09:30", "2026-02-21 09:30"],
+            duration_minutes=30,
+        )
         self.assertEqual([item.title for item in conflicts], ["晨会", "周会"])
 
-        excluded = self.db.find_schedule_conflicts(["2026-02-21 09:00"], exclude_schedule_id=second_id)
+        excluded = self.db.find_schedule_conflicts(
+            ["2026-02-21 09:30"],
+            duration_minutes=30,
+            exclude_schedule_id=second_id,
+        )
         self.assertEqual(excluded, [])
+
+    def test_find_schedule_conflicts_boundary_non_overlap(self) -> None:
+        self.db.add_schedule("晨会", "2026-02-20 09:00", duration_minutes=60)
+        conflicts = self.db.find_schedule_conflicts(["2026-02-20 10:00"], duration_minutes=30)
+        self.assertEqual(conflicts, [])
 
     def test_schedule_crud(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")

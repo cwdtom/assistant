@@ -53,7 +53,7 @@ python main.py
 - 日程支持 `duration_minutes` 字段（单位分钟，新增默认 `60`；更新时不传则保留原值）
 - 日程支持重复创建（daily/weekly/monthly + times）
 - 日程支持日历视图（day/week/month）
-- 日程新增/修改时会做冲突检测（同一时间点存在日程会提示冲突）
+- 日程新增/修改时会做冲突检测（时间区间重叠会提示冲突，会考虑时长）
 - 待办支持关键词搜索（可选按标签范围搜索）
 - 待办支持视图（all/today/overdue/upcoming/inbox）
 - 待办支持 `priority` 字段（默认 `0`，数值越小优先级越高，最小为 `0`）

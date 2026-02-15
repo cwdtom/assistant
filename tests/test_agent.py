@@ -275,6 +275,16 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("日程冲突", conflict)
         self.assertIn("2026-02-20 09:30", conflict)
 
+    def test_slash_schedule_conflict_detection_with_duration_overlap(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 60")
+
+        overlap_conflict = agent.handle_input("/schedule add 2026-02-20 10:00 周会 --duration 30")
+        self.assertIn("日程冲突", overlap_conflict)
+
+        non_overlap_ok = agent.handle_input("/schedule add 2026-02-20 10:30 复盘 --duration 30")
+        self.assertIn("已添加日程 #2", non_overlap_ok)
+
     def test_slash_schedule_conflict_detection_with_repeat(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-27 09:30 固定会")
