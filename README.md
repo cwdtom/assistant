@@ -45,11 +45,13 @@ python main.py
 - `/todo done <id>`
 - `/schedule add <YYYY-MM-DD HH:MM> <标题> [--repeat <none|daily|weekly|monthly>] [--times <>=1>]`
 - `/schedule get <id>`
+- `/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]`
 - `/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--repeat <none|daily|weekly|monthly>] [--times <>=1>]`
 - `/schedule delete <id>`
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
 - 日程支持重复创建（daily/weekly/monthly + times）
+- 日程支持日历视图（day/week/month）
 - 待办支持关键词搜索（可选按标签范围搜索）
 - 待办支持视图（all/today/overdue/upcoming/inbox）
 - 待办支持 `priority` 字段（默认 `0`，数值越小优先级越高，最小为 `0`）
@@ -68,6 +70,7 @@ python main.py
   - `查看 work 标签的待办`
   - `添加日程 2026-02-15 09:30 站会`
   - `添加日程 2026-02-15 09:30 站会，每周重复三次`
+  - `查看 2026-02-15 这一周的日程`
   - `查看日程 1`
   - `把日程 1 改到 2026-02-16 09:30 站会`
   - `删除日程 1`
@@ -81,6 +84,11 @@ python main.py
 - `overdue`：已逾期且未完成
 - `upcoming`：未来 7 天到期且未完成
 - `inbox`：未设置截止时间且未完成
+
+## 日历视图说明
+- `day`：按天查看日程，参数格式 `YYYY-MM-DD`
+- `week`：按周查看日程（周一到周日），参数格式 `YYYY-MM-DD`
+- `month`：按月查看日程，参数格式 `YYYY-MM`
 
 ## 测试
 ```bash

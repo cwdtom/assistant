@@ -31,6 +31,8 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "title": None,
         "schedule_repeat": None,
         "schedule_repeat_times": None,
+        "schedule_view": None,
+        "schedule_view_date": None,
     }
     payload.update(overrides)
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -260,6 +262,29 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("2026-02-21 10:00", list_resp)
         self.assertIn("2026-02-28 10:00", list_resp)
 
+    def test_slash_schedule_calendar_view_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/schedule add 2026-02-15 10:00 复盘")
+        agent.handle_input("/schedule add 2026-02-16 10:00 周会")
+        agent.handle_input("/schedule add 2026-03-01 10:00 月初会")
+
+        day_resp = agent.handle_input("/schedule view day 2026-02-15")
+        self.assertIn("日历视图(day, 2026-02-15)", day_resp)
+        self.assertIn("复盘", day_resp)
+        self.assertNotIn("周会", day_resp)
+
+        week_resp = agent.handle_input("/schedule view week 2026-02-16")
+        self.assertNotIn("复盘", week_resp)
+        self.assertIn("周会", week_resp)
+        self.assertNotIn("月初会", week_resp)
+
+        month_resp = agent.handle_input("/schedule view month 2026-03")
+        self.assertIn("月初会", month_resp)
+        self.assertNotIn("复盘", month_resp)
+
+        invalid = agent.handle_input("/schedule view quarter 2026-02")
+        self.assertIn("用法", invalid)
+
     def test_nl_todo_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -318,6 +343,23 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("2026-02-20 09:30", list_resp)
         self.assertIn("2026-02-27 09:30", list_resp)
         self.assertIn("2026-03-06 09:30", list_resp)
+
+    def test_nl_schedule_view_via_intent_model(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("schedule_view", schedule_view="week", schedule_view_date="2026-02-16"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_schedule("复盘", "2026-02-15 10:00")
+        self.db.add_schedule("周会", "2026-02-16 10:00")
+        self.db.add_schedule("月会", "2026-03-01 10:00")
+
+        result = agent.handle_input("看一下 2 月 16 日那周的日程")
+        self.assertNotIn("复盘", result)
+        self.assertIn("周会", result)
+        self.assertNotIn("月会", result)
+        self.assertEqual(len(fake_llm.calls), 1)
 
     def test_nl_todo_search_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -578,6 +620,18 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("帮我加一个重复日程")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
+    def test_schedule_view_invalid_date_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("schedule_view", schedule_view="month", schedule_view_date="2026-02-15"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("看 2026-02-15 的月视图")
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 

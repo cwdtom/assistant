@@ -29,6 +29,7 @@ INTENT_LABELS = (
     "schedule_add",
     "schedule_get",
     "schedule_list",
+    "schedule_view",
     "schedule_update",
     "schedule_delete",
     "chat",
@@ -37,6 +38,7 @@ INTENT_JSON_RETRY_COUNT = 2
 INTENT_SERVICE_UNAVAILABLE = "__intent_service_unavailable__"
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_REPEAT_NAMES = ("none", "daily", "weekly", "monthly")
+SCHEDULE_VIEW_NAMES = ("day", "week", "month")
 
 INTENT_ANALYZE_PROMPT = """
 你是 CLI 助手的意图识别器。你必须只输出一个 json 对象，不能输出任何其他内容。
@@ -53,6 +55,7 @@ INTENT_ANALYZE_PROMPT = """
 - schedule_add
 - schedule_get
 - schedule_list
+- schedule_view
 - schedule_update
 - schedule_delete
 - chat
@@ -71,7 +74,9 @@ INTENT_ANALYZE_PROMPT = """
   "event_time": "YYYY-MM-DD HH:MM|null",
   "title": "string|null",
   "schedule_repeat": "none|daily|weekly|monthly|null",
-  "schedule_repeat_times": "number|null"
+  "schedule_repeat_times": "number|null",
+  "schedule_view": "day|week|month|null",
+  "schedule_view_date": "YYYY-MM-DD|YYYY-MM|null"
 }}
 
 规则:
@@ -86,6 +91,8 @@ INTENT_ANALYZE_PROMPT = """
 - todo_priority 必须是 >=0 的整数，无法确定就填 null
 - schedule_repeat 如出现必须是 none/daily/weekly/monthly
 - schedule_repeat_times 如出现必须是 >=1 的整数
+- schedule_view 如出现必须是 day/week/month
+- schedule_view_date 仅用于 schedule_view。day/week 用 YYYY-MM-DD，month 用 YYYY-MM
 - todo_remind_time 仅在有 todo_due_time 时可填写
 - schedule_add/schedule_update 需要 event_time 和 title
 - event_time 必须是 YYYY-MM-DD HH:MM，无法确定就填 null
@@ -346,6 +353,22 @@ class AssistantAgent:
             )
             return f"日程列表:\n{table}"
 
+        if command.startswith("/schedule view "):
+            view_parsed = _parse_schedule_view_input(command.removeprefix("/schedule view ").strip())
+            if view_parsed is None:
+                return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]"
+            view_name, anchor = view_parsed
+            items = _filter_schedules_by_calendar_view(self.db.list_schedules(), view_name=view_name, anchor=anchor)
+            if not items:
+                return f"{view_name} 视图下暂无日程。"
+            table = _render_table(
+                headers=["ID", "时间", "标题", "创建时间"],
+                rows=[[str(item.id), item.event_time, item.title, item.created_at] for item in items],
+            )
+            if anchor:
+                return f"日历视图({view_name}, {anchor}):\n{table}"
+            return f"日历视图({view_name}):\n{table}"
+
         if command.startswith("/schedule get "):
             schedule_id = _parse_positive_int(command.removeprefix("/schedule get ").strip())
             if schedule_id is None:
@@ -520,6 +543,15 @@ class AssistantAgent:
             schedule_id = payload.get("schedule_id")
             return self._is_invalid_positive_id(schedule_id)
 
+        if intent == "schedule_view":
+            view_name = _normalize_schedule_view_value(payload.get("schedule_view"))
+            date_text = str(payload.get("schedule_view_date") or "").strip()
+            if view_name is None:
+                return True
+            if not date_text:
+                return False
+            return _normalize_schedule_view_anchor(view_name=view_name, value=date_text) is None
+
         if intent == "schedule_update":
             schedule_id = payload.get("schedule_id")
             event_time = str(payload.get("event_time") or "").strip()
@@ -631,6 +663,17 @@ class AssistantAgent:
 
         if intent == "schedule_list":
             return self._handle_command("/schedule list")
+
+        if intent == "schedule_view":
+            view_name = _normalize_schedule_view_value(payload.get("schedule_view"))
+            if view_name is None:
+                return "我识别到你可能要查看日历视图，但视图类型不完整。"
+            anchor_raw = str(payload.get("schedule_view_date") or "").strip()
+            anchor = _normalize_schedule_view_anchor(view_name=view_name, value=anchor_raw) if anchor_raw else None
+            cmd = f"/schedule view {view_name}"
+            if anchor is not None:
+                cmd += f" {anchor}"
+            return self._handle_command(cmd)
 
         if intent == "todo_add":
             content = str(payload.get("todo_content") or "").strip()
@@ -791,6 +834,7 @@ class AssistantAgent:
             "/schedule add <YYYY-MM-DD HH:MM> <标题> "
             "[--repeat <none|daily|weekly|monthly>] [--times <>=1>]\n"
             "/schedule get <id>\n"
+            "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]\n"
             "/schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
             "[--repeat <none|daily|weekly|monthly>] [--times <>=1>]\n"
             "/schedule delete <id>\n"
@@ -1062,6 +1106,22 @@ def _parse_schedule_input(raw: str) -> tuple[str, str, str, int] | None:
     return event_time, title, repeat_name, repeat_times
 
 
+def _parse_schedule_view_input(raw: str) -> tuple[str, str | None] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    parts = text.split(maxsplit=1)
+    view_name = _normalize_schedule_view_value(parts[0])
+    if view_name is None:
+        return None
+    if len(parts) == 1:
+        return view_name, None
+    anchor = _normalize_schedule_view_anchor(view_name=view_name, value=parts[1].strip())
+    if anchor is None:
+        return None
+    return view_name, anchor
+
+
 def _sanitize_tag(tag: str | None) -> str | None:
     if tag is None:
         return None
@@ -1098,6 +1158,15 @@ def _normalize_schedule_repeat_value(value: Any) -> str | None:
     return None
 
 
+def _normalize_schedule_view_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in SCHEDULE_VIEW_NAMES:
+        return text
+    return None
+
+
 def _normalize_schedule_repeat_times_value(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -1117,6 +1186,25 @@ def _normalize_schedule_repeat_times_value(value: Any) -> int | None:
     if parsed < 1:
         return None
     return parsed
+
+
+def _normalize_schedule_view_anchor(*, view_name: str, value: str) -> str | None:
+    text = value.strip()
+    if not text:
+        return None
+    if view_name in {"day", "week"}:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return None
+        return parsed.strftime("%Y-%m-%d")
+    if view_name == "month":
+        try:
+            parsed = datetime.strptime(text, "%Y-%m")
+        except ValueError:
+            return None
+        return parsed.strftime("%Y-%m")
+    return None
 
 
 def _normalize_todo_priority_value(value: Any) -> int | None:
@@ -1185,6 +1273,50 @@ def _filter_todos_by_view(todos: list[Any], *, view_name: str, now: datetime | N
                 filtered.append(item)
             continue
 
+    return filtered
+
+
+def _filter_schedules_by_calendar_view(
+    schedules: list[Any],
+    *,
+    view_name: str,
+    anchor: str | None,
+    now: datetime | None = None,
+) -> list[Any]:
+    if view_name not in SCHEDULE_VIEW_NAMES:
+        return schedules
+
+    current = now or datetime.now()
+    if anchor:
+        if view_name == "month":
+            anchor_time = datetime.strptime(anchor, "%Y-%m")
+        else:
+            anchor_time = datetime.strptime(anchor, "%Y-%m-%d")
+    else:
+        anchor_time = current
+
+    if view_name == "day":
+        start = datetime.combine(anchor_time.date(), datetime.min.time())
+        end = start + timedelta(days=1)
+    elif view_name == "week":
+        week_start_date = anchor_time.date() - timedelta(days=anchor_time.weekday())
+        start = datetime.combine(week_start_date, datetime.min.time())
+        end = start + timedelta(days=7)
+    else:
+        month_start = datetime(anchor_time.year, anchor_time.month, 1)
+        if anchor_time.month == 12:
+            month_end = datetime(anchor_time.year + 1, 1, 1)
+        else:
+            month_end = datetime(anchor_time.year, anchor_time.month + 1, 1)
+        start, end = month_start, month_end
+
+    filtered: list[Any] = []
+    for item in schedules:
+        event_time = _parse_due_datetime(item.event_time)
+        if event_time is None:
+            continue
+        if start <= event_time < end:
+            filtered.append(item)
     return filtered
 
 
