@@ -21,6 +21,7 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "intent": intent,
         "todo_content": None,
         "todo_tag": None,
+        "todo_priority": None,
         "todo_due_time": None,
         "todo_remind_time": None,
         "todo_id": None,
@@ -61,6 +62,7 @@ class AssistantAgentTest(unittest.TestCase):
         result = agent.handle_input("/help")
 
         self.assertIn("/todo add", result)
+        self.assertIn("--priority <>=0>", result)
         self.assertIn("/todo update", result)
         self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
@@ -73,10 +75,12 @@ class AssistantAgentTest(unittest.TestCase):
         add_resp = agent.handle_input("/todo add 买牛奶")
         self.assertIn("已添加待办", add_resp)
         self.assertIn("标签:default", add_resp)
+        self.assertIn("优先级:0", add_resp)
 
         list_resp = agent.handle_input("/todo list")
         self.assertIn("买牛奶", list_resp)
         self.assertIn("| 标签 |", list_resp)
+        self.assertIn("优先级", list_resp)
         self.assertIn("| default |", list_resp)
         self.assertIn("创建时间", list_resp)
         self.assertIn("| - | - | - |", list_resp)
@@ -106,7 +110,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         get_resp = agent.handle_input("/todo get 1")
         self.assertIn("待办详情:", get_resp)
-        self.assertIn("| work | 写周报 |", get_resp)
+        self.assertIn("| work | 0 | 写周报 |", get_resp)
 
         update_resp = agent.handle_input("/todo update 1 写周报v2 --tag review")
         self.assertIn("已更新待办 #1 [标签:review]: 写周报v2", update_resp)
@@ -143,6 +147,27 @@ class AssistantAgentTest(unittest.TestCase):
         invalid_resp = agent.handle_input("/todo add 只有提醒 --remind 2026-02-25 09:00")
         self.assertIn("用法", invalid_resp)
 
+    def test_slash_todo_priority_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        add_resp = agent.handle_input("/todo add 写季度总结 --tag work --priority 2")
+        self.assertIn("优先级:2", add_resp)
+
+        get_resp = agent.handle_input("/todo get 1")
+        self.assertIn("| work | 2 | 写季度总结 |", get_resp)
+
+        update_resp = agent.handle_input("/todo update 1 写季度总结v2 --priority 0")
+        self.assertIn("优先级:0", update_resp)
+
+        list_resp = agent.handle_input("/todo list")
+        self.assertIn("| 1 | 待办 | work | 0 | 写季度总结v2 |", list_resp)
+
+        invalid_add = agent.handle_input("/todo add 非法优先级 --priority -1")
+        self.assertIn("用法", invalid_add)
+
+        invalid_update = agent.handle_input("/todo update 1 非法更新 --priority -3")
+        self.assertIn("用法", invalid_update)
+
     def test_slash_schedule_full_crud_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
@@ -165,7 +190,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_todo_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _intent_json("todo_add", todo_content="买牛奶", todo_tag="life"),
+                _intent_json("todo_add", todo_content="买牛奶", todo_tag="life", todo_priority=1),
                 _intent_json("todo_list", todo_tag="life"),
             ]
         )
@@ -178,6 +203,7 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("看一下我的待办")
         self.assertIn("买牛奶", list_resp)
         self.assertIn("| life |", list_resp)
+        self.assertIn("| 1 | 买牛奶 |", list_resp)
         self.assertNotIn("修 bug", list_resp)
         self.assertEqual(len(fake_llm.calls), 2)
 
@@ -204,6 +230,7 @@ class AssistantAgentTest(unittest.TestCase):
                     "todo_update",
                     todo_content="买牛奶和面包",
                     todo_tag="life",
+                    todo_priority=2,
                     todo_due_time="2026-02-26 20:00",
                     todo_remind_time="2026-02-26 19:30",
                     todo_id=1,
@@ -222,6 +249,7 @@ class AssistantAgentTest(unittest.TestCase):
         assert todo is not None
         self.assertEqual(todo.content, "买牛奶和面包")
         self.assertEqual(todo.tag, "life")
+        self.assertEqual(todo.priority, 2)
         self.assertEqual(todo.due_at, "2026-02-26 20:00")
         self.assertEqual(todo.remind_at, "2026-02-26 19:30")
 
@@ -369,6 +397,18 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("提醒我写周报")
+        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertEqual(len(fake_llm.calls), 3)
+
+    def test_todo_add_with_negative_priority_retries_then_unavailable(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _intent_json("todo_add", todo_content="整理文档", todo_priority=-2),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+
+        response = agent.handle_input("添加一个待办，优先级负数")
         self.assertIn("意图识别服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 

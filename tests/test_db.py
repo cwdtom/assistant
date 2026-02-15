@@ -24,6 +24,7 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(todos), 1)
         self.assertEqual(todos[0].content, "写单元测试")
         self.assertEqual(todos[0].tag, "default")
+        self.assertEqual(todos[0].priority, 0)
         self.assertFalse(todos[0].done)
         self.assertIsNone(todos[0].completed_at)
         self.assertIsNone(todos[0].due_at)
@@ -39,15 +40,16 @@ class AssistantDBTest(unittest.TestCase):
         self.assertIsNotNone(todos[0].completed_at)
 
     def test_todo_crud(self) -> None:
-        todo_id = self.db.add_todo("写周报", tag="work")
+        todo_id = self.db.add_todo("写周报", tag="work", priority=2)
 
         item = self.db.get_todo(todo_id)
         self.assertIsNotNone(item)
         assert item is not None
         self.assertEqual(item.content, "写周报")
         self.assertEqual(item.tag, "work")
+        self.assertEqual(item.priority, 2)
 
-        updated = self.db.update_todo(todo_id, content="写周报v2", tag="review", done=True)
+        updated = self.db.update_todo(todo_id, content="写周报v2", tag="review", priority=1, done=True)
         self.assertTrue(updated)
 
         changed = self.db.get_todo(todo_id)
@@ -55,6 +57,7 @@ class AssistantDBTest(unittest.TestCase):
         assert changed is not None
         self.assertEqual(changed.content, "写周报v2")
         self.assertEqual(changed.tag, "review")
+        self.assertEqual(changed.priority, 1)
         self.assertTrue(changed.done)
 
         deleted = self.db.delete_todo(todo_id)
@@ -105,6 +108,22 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(work_todos), 1)
         self.assertEqual(work_todos[0].content, "修复 bug")
         self.assertEqual(work_todos[0].tag, "work")
+
+    def test_todo_priority_sort(self) -> None:
+        self.db.add_todo("低优先级", priority=3)
+        self.db.add_todo("最高优先级", priority=0)
+        self.db.add_todo("中优先级", priority=1)
+
+        todos = self.db.list_todos()
+        self.assertEqual([item.content for item in todos], ["最高优先级", "中优先级", "低优先级"])
+        self.assertEqual([item.priority for item in todos], [0, 1, 3])
+
+    def test_todo_priority_must_be_non_negative(self) -> None:
+        with self.assertRaises(ValueError):
+            self.db.add_todo("非法优先级", priority=-1)
+
+        todo_id = self.db.add_todo("合法优先级", priority=1)
+        self.assertFalse(self.db.update_todo(todo_id, priority=-1))
 
     def test_schedule_order(self) -> None:
         self.db.add_schedule("晚上的会", "2026-02-20 20:00")

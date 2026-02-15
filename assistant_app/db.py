@@ -15,6 +15,7 @@ class TodoItem:
     id: int
     content: str
     tag: str
+    priority: int
     done: bool
     created_at: str
     completed_at: str | None
@@ -65,6 +66,7 @@ class AssistantDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     content TEXT NOT NULL,
                     tag TEXT NOT NULL DEFAULT 'default',
+                    priority INTEGER NOT NULL DEFAULT 0 CHECK (priority >= 0),
                     done INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
@@ -75,6 +77,7 @@ class AssistantDB:
             )
             self._ensure_todo_tag_column(conn)
             self._ensure_todo_extra_columns(conn)
+            self._ensure_todo_priority_column(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schedules (
@@ -112,10 +115,18 @@ class AssistantDB:
         if "remind_at" not in names:
             conn.execute("ALTER TABLE todos ADD COLUMN remind_at TEXT")
 
+    def _ensure_todo_priority_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(todos)").fetchall()
+        names = {row["name"] for row in columns}
+        if "priority" not in names:
+            conn.execute("ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE todos SET priority = 0 WHERE priority IS NULL OR priority < 0")
+
     def add_todo(
         self,
         content: str,
         tag: str = "default",
+        priority: int = 0,
         due_at: str | None = None,
         remind_at: str | None = None,
     ) -> int:
@@ -123,13 +134,14 @@ class AssistantDB:
             raise ValueError("remind_at requires due_at")
         timestamp = _now_iso()
         normalized_tag = _normalize_tag(tag)
+        normalized_priority = _normalize_priority(priority)
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO todos (content, tag, done, created_at, completed_at, due_at, remind_at)
-                VALUES (?, ?, 0, ?, NULL, ?, ?)
+                INSERT INTO todos (content, tag, priority, done, created_at, completed_at, due_at, remind_at)
+                VALUES (?, ?, ?, 0, ?, NULL, ?, ?)
                 """,
-                (content, normalized_tag, timestamp, due_at, remind_at),
+                (content, normalized_tag, normalized_priority, timestamp, due_at, remind_at),
             )
             if cur.lastrowid is None:
                 raise RuntimeError("failed to insert todo")
@@ -141,18 +153,18 @@ class AssistantDB:
             if normalized_tag is None:
                 rows = conn.execute(
                     """
-                    SELECT id, content, tag, done, created_at, completed_at, due_at, remind_at
+                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
                     FROM todos
-                    ORDER BY id ASC
+                    ORDER BY priority ASC, id ASC
                     """
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """
-                    SELECT id, content, tag, done, created_at, completed_at, due_at, remind_at
+                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
                     FROM todos
                     WHERE tag = ?
-                    ORDER BY id ASC
+                    ORDER BY priority ASC, id ASC
                     """,
                     (normalized_tag,),
                 ).fetchall()
@@ -161,6 +173,7 @@ class AssistantDB:
                 id=row["id"],
                 content=row["content"],
                 tag=row["tag"] or "default",
+                priority=_normalize_priority(row["priority"] if row["priority"] is not None else 0),
                 done=bool(row["done"]),
                 created_at=row["created_at"],
                 completed_at=row["completed_at"],
@@ -174,7 +187,7 @@ class AssistantDB:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, content, tag, done, created_at, completed_at, due_at, remind_at
+                SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
                 FROM todos
                 WHERE id = ?
                 """,
@@ -186,6 +199,7 @@ class AssistantDB:
             id=row["id"],
             content=row["content"],
             tag=row["tag"] or "default",
+            priority=_normalize_priority(row["priority"] if row["priority"] is not None else 0),
             done=bool(row["done"]),
             created_at=row["created_at"],
             completed_at=row["completed_at"],
@@ -199,6 +213,7 @@ class AssistantDB:
         *,
         content: str | None = None,
         tag: str | None = None,
+        priority: int | object = _UNSET,
         done: bool | None = None,
         due_at: str | None | object = _UNSET,
         remind_at: str | None | object = _UNSET,
@@ -216,6 +231,13 @@ class AssistantDB:
         if tag is not None:
             fields.append("tag = ?")
             values.append(_normalize_tag(tag))
+        if priority is not _UNSET:
+            if not isinstance(priority, int) or isinstance(priority, bool):
+                return False
+            if priority < 0:
+                return False
+            fields.append("priority = ?")
+            values.append(_normalize_priority(priority))
         if done is not None:
             fields.append("done = ?")
             values.append(1 if done else 0)
@@ -349,3 +371,11 @@ def _normalize_tag(tag: str | None) -> str:
     if not normalized:
         return "default"
     return normalized
+
+
+def _normalize_priority(priority: int) -> int:
+    if not isinstance(priority, int) or isinstance(priority, bool):
+        raise ValueError("priority must be an integer >= 0")
+    if priority < 0:
+        raise ValueError("priority must be >= 0")
+    return priority
