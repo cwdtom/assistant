@@ -20,27 +20,6 @@ TODO_VIEW_OPTION_PATTERN = re.compile(r"(^|\s)--view\s+(\S+)")
 TODO_PRIORITY_OPTION_PATTERN = re.compile(r"(^|\s)--priority\s+(-?\d+)")
 TODO_DUE_OPTION_PATTERN = re.compile(r"(^|\s)--due\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
 TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
-INTENT_LABELS = (
-    "todo_add",
-    "todo_get",
-    "todo_list",
-    "todo_view",
-    "todo_search",
-    "todo_update",
-    "todo_delete",
-    "todo_done",
-    "schedule_add",
-    "schedule_get",
-    "schedule_list",
-    "schedule_view",
-    "schedule_update",
-    "schedule_repeat_enable",
-    "schedule_repeat_disable",
-    "schedule_delete",
-    "chat",
-)
-INTENT_JSON_RETRY_COUNT = 2
-INTENT_SERVICE_UNAVAILABLE = "__intent_service_unavailable__"
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
 INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
@@ -50,71 +29,6 @@ PLAN_OBSERVATION_CHAR_LIMIT = 10000
 PLAN_OBSERVATION_HISTORY_LIMIT = 100
 PLAN_CONTINUOUS_FAILURE_LIMIT = 2
 TASK_CANCEL_COMMAND = "取消当前任务"
-
-INTENT_ANALYZE_PROMPT = """
-你是 CLI 助手的意图识别器。你必须只输出一个 json 对象，不能输出任何其他内容。
-
-可选 intent:
-- todo_add
-- todo_get
-- todo_list
-- todo_view
-- todo_search
-- todo_update
-- todo_delete
-- todo_done
-- schedule_add
-- schedule_get
-- schedule_list
-- schedule_view
-- schedule_update
-- schedule_repeat_enable
-- schedule_repeat_disable
-- schedule_delete
-- chat
-
-输出 JSON 字段固定为:
-{{
-  "intent": "one_of_supported_intents",
-  "todo_content": "string|null",
-  "todo_tag": "string|null",
-  "todo_view": "all|today|overdue|upcoming|inbox|null",
-  "todo_priority": "number|null",
-  "todo_due_time": "YYYY-MM-DD HH:MM|null",
-  "todo_remind_time": "YYYY-MM-DD HH:MM|null",
-  "todo_id": "number|null",
-  "schedule_id": "number|null",
-  "event_time": "YYYY-MM-DD HH:MM|null",
-  "title": "string|null",
-  "schedule_repeat_interval_minutes": "number|null",
-  "schedule_repeat_times": "number|null",
-  "schedule_duration_minutes": "number|null",
-  "schedule_view": "day|week|month|null",
-  "schedule_view_date": "YYYY-MM-DD|YYYY-MM|null"
-}}
-
-规则:
-- 只在用户明确要操作待办/日程时，返回对应 intent，否则 intent=chat
-- 与 intent 无关的字段必须填 null
-- 缺少或不确定的字段填 null
-- todo_get/todo_update/todo_delete/todo_done 需要 todo_id
-- schedule_get/schedule_update/schedule_delete 需要 schedule_id
-- schedule_repeat_enable/schedule_repeat_disable 需要 schedule_id
-- todo_update 需要 todo_content
-- todo_view 需要 todo_view 字段
-- todo_search 需要 todo_content
-- todo_priority 必须是 >=0 的整数，无法确定就填 null
-- schedule_repeat_interval_minutes 如出现必须是 >=1 的整数
-- 常见换算：每小时=60，每天=1440，每周=10080（按分钟填写）
-- schedule_repeat_times 如出现必须是 -1（无限）或 >=1 的整数
-- schedule_duration_minutes 如出现必须是 >=1 的整数
-- schedule_view 如出现必须是 day/week/month
-- schedule_view_date 仅用于 schedule_view。day/week 用 YYYY-MM-DD，month 用 YYYY-MM
-- todo_remind_time 仅在有 todo_due_time 时可填写
-- schedule_add/schedule_update 需要 event_time 和 title
-- event_time 必须是 YYYY-MM-DD HH:MM，无法确定就填 null
-- todo_due_time/todo_remind_time 必须是 YYYY-MM-DD HH:MM，无法确定就填 null
-""".strip()
 
 PLAN_REPLAN_PROMPT = """
 你是 CLI 助手的计划执行器，需要通过 plan -> act -> observe -> replan 的循环解决用户目标。
@@ -299,14 +213,6 @@ class AssistantAgent:
 
             task.planner_failure_rounds = 0
 
-            legacy_payload = planner_payload.get("legacy_intent_payload")
-            if isinstance(legacy_payload, dict):
-                self._emit_progress("检测到 legacy intent 流程，尝试兼容执行。")
-                legacy_response = self._dispatch_intent(legacy_payload)
-                if legacy_response is not None:
-                    return self._finalize_planner_task(task, legacy_response)
-                return self._finalize_planner_task(task, self._handle_chat(current_user_text))
-
             decision = planner_payload.get("decision")
             if not isinstance(decision, dict):
                 return self._finalize_planner_task(task, self._planner_unavailable_text())
@@ -361,9 +267,6 @@ class AssistantAgent:
                         ),
                     )
                     if task.ask_user_repeat_count >= PLAN_CONTINUOUS_FAILURE_LIMIT:
-                        fallback = self._try_legacy_dispatch_from_task_context(task)
-                        if fallback is not None:
-                            return self._finalize_planner_task(task, fallback)
                         return self._finalize_planner_task(
                             task,
                             "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
@@ -384,9 +287,6 @@ class AssistantAgent:
                         ),
                     )
                     if task.ask_user_repeat_count >= PLAN_CONTINUOUS_FAILURE_LIMIT:
-                        fallback = self._try_legacy_dispatch_from_task_context(task)
-                        if fallback is not None:
-                            return self._finalize_planner_task(task, fallback)
                         return self._finalize_planner_task(
                             task,
                             "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
@@ -394,9 +294,6 @@ class AssistantAgent:
                     continue
                 ask_turns = sum(1 for line in task.clarification_history if line.startswith("助手提问:"))
                 if ask_turns >= 6:
-                    fallback = self._try_legacy_dispatch_from_task_context(task)
-                    if fallback is not None:
-                        return self._finalize_planner_task(task, fallback)
                     return self._finalize_planner_task(
                         task,
                         "澄清次数过多，我仍无法稳定重规划。请直接使用 /todo 或 /schedule 命令。",
@@ -445,12 +342,6 @@ class AssistantAgent:
             if not isinstance(payload, dict):
                 continue
 
-            legacy_payload = self._normalize_legacy_payload(payload)
-            if legacy_payload is not None:
-                if self._intent_requires_retry(legacy_payload):
-                    continue
-                return {"legacy_intent_payload": legacy_payload}
-
             decision = _normalize_planner_decision(payload)
             if decision is not None:
                 return {"decision": decision}
@@ -495,27 +386,6 @@ class AssistantAgent:
             except Exception:
                 pass
         return self.llm_client.reply(messages)
-
-    def _normalize_legacy_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        if "intent" not in payload:
-            return None
-        normalized = dict(payload)
-        intent = str(normalized.get("intent", "")).strip().lower()
-        if intent not in INTENT_LABELS:
-            intent = "chat"
-        normalized["intent"] = intent
-        return normalized
-
-    def _try_legacy_dispatch_from_task_context(self, task: PendingPlanTask) -> str | None:
-        if not self.llm_client:
-            return None
-        context_lines = [f"原始目标: {task.goal}", *task.clarification_history[-6:]]
-        merged_text = "\n".join(context_lines)
-        payload = self._analyze_intent(merged_text)
-        response = self._dispatch_intent(payload)
-        if response is not None:
-            return response
-        return None
 
     def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
         if action_tool == "todo":
@@ -616,7 +486,7 @@ class AssistantAgent:
 
     @staticmethod
     def _planner_unavailable_text() -> str:
-        return "抱歉，当前意图识别服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
+        return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
 
     def _emit_progress(self, message: str) -> None:
         callback = self._progress_callback
@@ -1085,420 +955,6 @@ class AssistantAgent:
 
         return "未知命令。输入 /help 查看可用命令。"
 
-    def _analyze_intent(self, text: str) -> dict[str, Any]:
-        if not self.llm_client:
-            return {"intent": "chat"}
-
-        messages = [
-            {"role": "system", "content": INTENT_ANALYZE_PROMPT},
-            {"role": "user", "content": text},
-        ]
-        max_attempts = 1 + INTENT_JSON_RETRY_COUNT
-
-        for _ in range(max_attempts):
-            try:
-                raw = self._llm_reply_for_intent(messages)
-            except Exception:
-                continue
-
-            cleaned = _strip_think_blocks(raw).strip()
-            payload = _try_parse_json(cleaned)
-            if isinstance(payload, dict):
-                intent = str(payload.get("intent", "")).strip().lower()
-                if intent not in INTENT_LABELS:
-                    intent = "chat"
-                payload["intent"] = intent
-                if self._intent_requires_retry(payload):
-                    continue
-                return payload
-
-        return {"intent": INTENT_SERVICE_UNAVAILABLE}
-
-    def _intent_requires_retry(self, payload: dict[str, Any]) -> bool:
-        intent = str(payload.get("intent", "chat")).strip().lower()
-
-        if intent == "todo_add":
-            content = str(payload.get("todo_content") or "").strip()
-            due_time = str(payload.get("todo_due_time") or "").strip()
-            remind_time = str(payload.get("todo_remind_time") or "").strip()
-            priority_raw = payload.get("todo_priority")
-            priority = _normalize_todo_priority_value(priority_raw)
-            if not content:
-                return True
-            if priority_raw is not None and priority is None:
-                return True
-            if due_time and not _is_valid_datetime_text(due_time):
-                return True
-            if remind_time and not _is_valid_datetime_text(remind_time):
-                return True
-            if remind_time and not due_time:
-                return True
-            return False
-
-        if intent in {"todo_get", "todo_delete", "todo_done"}:
-            todo_id = payload.get("todo_id")
-            return self._is_invalid_positive_id(todo_id)
-
-        if intent == "todo_view":
-            view_name = _normalize_todo_view_value(payload.get("todo_view"))
-            return view_name is None
-
-        if intent == "todo_search":
-            keyword = str(payload.get("todo_content") or "").strip()
-            return not keyword
-
-        if intent == "todo_update":
-            todo_id = payload.get("todo_id")
-            content = str(payload.get("todo_content") or "").strip()
-            due_time = str(payload.get("todo_due_time") or "").strip()
-            remind_time = str(payload.get("todo_remind_time") or "").strip()
-            priority_raw = payload.get("todo_priority")
-            priority = _normalize_todo_priority_value(priority_raw)
-            if self._is_invalid_positive_id(todo_id) or not content:
-                return True
-            if priority_raw is not None and priority is None:
-                return True
-            if due_time and not _is_valid_datetime_text(due_time):
-                return True
-            if remind_time and not _is_valid_datetime_text(remind_time):
-                return True
-            if remind_time and not due_time:
-                current = self.db.get_todo(self._to_int(todo_id))
-                if current is None or not current.due_at:
-                    return True
-            return False
-
-        if intent == "schedule_add":
-            event_time = str(payload.get("event_time") or "").strip()
-            title = str(payload.get("title") or "").strip()
-            interval_raw = payload.get("schedule_repeat_interval_minutes")
-            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(interval_raw)
-            repeat_times_raw = payload.get("schedule_repeat_times")
-            repeat_times = _normalize_schedule_repeat_times_value(repeat_times_raw)
-            if repeat_times is not None:
-                effective_repeat_times = repeat_times
-            else:
-                effective_repeat_times = -1 if interval_raw is not None else 1
-            duration_raw = payload.get("schedule_duration_minutes")
-            duration_minutes = _normalize_schedule_duration_minutes_value(duration_raw)
-            if not event_time or not title:
-                return True
-            if interval_raw is not None and repeat_interval_minutes is None:
-                return True
-            if repeat_times_raw is not None and repeat_times is None:
-                return True
-            if duration_raw is not None and duration_minutes is None:
-                return True
-            if repeat_interval_minutes is None and effective_repeat_times != 1:
-                return True
-            if repeat_interval_minutes is not None and effective_repeat_times == 1:
-                return True
-            return re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", event_time) is None
-
-        if intent in {"schedule_get", "schedule_delete"}:
-            schedule_id = payload.get("schedule_id")
-            return self._is_invalid_positive_id(schedule_id)
-
-        if intent in {"schedule_repeat_enable", "schedule_repeat_disable"}:
-            schedule_id = payload.get("schedule_id")
-            return self._is_invalid_positive_id(schedule_id)
-
-        if intent == "schedule_view":
-            view_name = _normalize_schedule_view_value(payload.get("schedule_view"))
-            date_text = str(payload.get("schedule_view_date") or "").strip()
-            if view_name is None:
-                return True
-            if not date_text:
-                return False
-            return _normalize_schedule_view_anchor(view_name=view_name, value=date_text) is None
-
-        if intent == "schedule_update":
-            schedule_id = payload.get("schedule_id")
-            event_time = str(payload.get("event_time") or "").strip()
-            title = str(payload.get("title") or "").strip()
-            interval_raw = payload.get("schedule_repeat_interval_minutes")
-            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(interval_raw)
-            repeat_times_raw = payload.get("schedule_repeat_times")
-            repeat_times = _normalize_schedule_repeat_times_value(repeat_times_raw)
-            if repeat_times is not None:
-                effective_repeat_times = repeat_times
-            else:
-                effective_repeat_times = -1 if interval_raw is not None else 1
-            duration_raw = payload.get("schedule_duration_minutes")
-            duration_minutes = _normalize_schedule_duration_minutes_value(duration_raw)
-            if self._is_invalid_positive_id(schedule_id):
-                return True
-            if not event_time or not title:
-                return True
-            if interval_raw is not None and repeat_interval_minutes is None:
-                return True
-            if repeat_times_raw is not None and repeat_times is None:
-                return True
-            if duration_raw is not None and duration_minutes is None:
-                return True
-            if repeat_interval_minutes is None and effective_repeat_times != 1:
-                return True
-            if repeat_interval_minutes is not None and effective_repeat_times == 1:
-                return True
-            return re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", event_time) is None
-
-        return False
-
-    def _is_invalid_positive_id(self, value: Any) -> bool:
-        if value is None:
-            return True
-        try:
-            return self._to_int(value) <= 0
-        except (TypeError, ValueError):
-            return True
-
-    def _llm_reply_for_intent(self, messages: list[dict[str, str]]) -> str:
-        if self.llm_client is None:
-            return ""
-
-        reply_json = getattr(self.llm_client, "reply_json", None)
-        if callable(reply_json):
-            try:
-                return str(reply_json(messages))
-            except Exception:
-                # Some OpenAI-compatible providers don't support response_format.
-                pass
-        return self.llm_client.reply(messages)
-
-    def _dispatch_intent(self, payload: dict[str, Any]) -> str | None:
-        intent = str(payload.get("intent", "chat")).lower()
-
-        if intent == INTENT_SERVICE_UNAVAILABLE:
-            return "抱歉，当前意图识别服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
-
-        if intent == "todo_view":
-            view_name = _normalize_todo_view_value(payload.get("todo_view"))
-            if view_name is None:
-                return "我识别到你可能要查看待办视图，但视图名称不完整。"
-            tag = _normalize_todo_tag_value(payload.get("todo_tag"))
-            cmd = f"/todo list --view {view_name}"
-            if tag is not None:
-                cmd += f" --tag {tag}"
-            return self._handle_command(cmd)
-
-        if intent == "todo_list":
-            tag = _normalize_todo_tag_value(payload.get("todo_tag"))
-            if tag is None:
-                return self._handle_command("/todo list")
-            return self._handle_command(f"/todo list --tag {tag}")
-
-        if intent == "todo_search":
-            keyword = str(payload.get("todo_content") or "").strip()
-            if not keyword:
-                return "我识别到你可能要搜索待办，但缺少关键词。"
-            tag = _normalize_todo_tag_value(payload.get("todo_tag"))
-            cmd = f"/todo search {keyword}"
-            if tag is not None:
-                cmd += f" --tag {tag}"
-            return self._handle_command(cmd)
-
-        if intent == "todo_get":
-            todo_id = payload.get("todo_id")
-            if todo_id is None:
-                return "我识别到你可能要查看待办，但缺少编号。请告诉我待办 id。"
-            return self._handle_command(f"/todo get {self._to_int(todo_id)}")
-
-        if intent == "todo_update":
-            todo_id = payload.get("todo_id")
-            content = str(payload.get("todo_content") or "").strip()
-            if todo_id is None or not content:
-                return "我识别到你可能要修改待办，但编号或内容不完整。"
-            tag = _normalize_todo_tag_value(payload.get("todo_tag"))
-            priority = _normalize_todo_priority_value(payload.get("todo_priority"))
-            due_time_raw = str(payload.get("todo_due_time") or "").strip()
-            remind_time_raw = str(payload.get("todo_remind_time") or "").strip()
-            due_time = _normalize_datetime_text(due_time_raw) if due_time_raw else None
-            remind_time = _normalize_datetime_text(remind_time_raw) if remind_time_raw else None
-            cmd = f"/todo update {self._to_int(todo_id)} {content}"
-            if tag is not None:
-                cmd += f" --tag {tag}"
-            if priority is not None:
-                cmd += f" --priority {priority}"
-            if due_time:
-                cmd += f" --due {due_time}"
-            if remind_time:
-                cmd += f" --remind {remind_time}"
-            return self._handle_command(cmd)
-
-        if intent == "todo_delete":
-            todo_id = payload.get("todo_id")
-            if todo_id is None:
-                return "我识别到你可能要删除待办，但缺少编号。请告诉我待办 id。"
-            return self._handle_command(f"/todo delete {self._to_int(todo_id)}")
-
-        if intent == "schedule_list":
-            return self._handle_command("/schedule list")
-
-        if intent == "schedule_view":
-            view_name = _normalize_schedule_view_value(payload.get("schedule_view"))
-            if view_name is None:
-                return "我识别到你可能要查看日历视图，但视图类型不完整。"
-            anchor_raw = str(payload.get("schedule_view_date") or "").strip()
-            anchor = _normalize_schedule_view_anchor(view_name=view_name, value=anchor_raw) if anchor_raw else None
-            cmd = f"/schedule view {view_name}"
-            if anchor is not None:
-                cmd += f" {anchor}"
-            return self._handle_command(cmd)
-
-        if intent == "todo_add":
-            content = str(payload.get("todo_content") or "").strip()
-            if not content:
-                return "我识别到你可能要添加待办，但缺少内容。请再说具体事项。"
-            tag = _normalize_todo_tag_value(payload.get("todo_tag")) or "default"
-            priority = _normalize_todo_priority_value(payload.get("todo_priority"))
-            due_time_raw = str(payload.get("todo_due_time") or "").strip()
-            remind_time_raw = str(payload.get("todo_remind_time") or "").strip()
-            due_time = _normalize_datetime_text(due_time_raw) if due_time_raw else None
-            remind_time = _normalize_datetime_text(remind_time_raw) if remind_time_raw else None
-            cmd = f"/todo add {content} --tag {tag}"
-            if priority is not None:
-                cmd += f" --priority {priority}"
-            if due_time:
-                cmd += f" --due {due_time}"
-            if remind_time:
-                cmd += f" --remind {remind_time}"
-            return self._handle_command(cmd)
-
-        if intent == "todo_done":
-            todo_id = payload.get("todo_id")
-            if todo_id is None:
-                return "我识别到你可能要完成待办，但缺少编号。请告诉我待办 id。"
-            return self._handle_command(f"/todo done {self._to_int(todo_id)}")
-
-        if intent == "schedule_add":
-            event_time = str(payload.get("event_time") or "").strip()
-            title = str(payload.get("title") or "").strip()
-            if not event_time or not title:
-                return "我识别到你可能要添加日程，但时间或标题不完整。"
-            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(
-                payload.get("schedule_repeat_interval_minutes")
-            )
-            parsed_repeat_times = _normalize_schedule_repeat_times_value(payload.get("schedule_repeat_times"))
-            if repeat_interval_minutes is not None:
-                repeat_times = parsed_repeat_times if parsed_repeat_times is not None else -1
-            else:
-                repeat_times = parsed_repeat_times or 1
-            duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("schedule_duration_minutes"))
-            cmd = f"/schedule add {event_time} {title}"
-            if duration_minutes is not None:
-                cmd += f" --duration {duration_minutes}"
-            if repeat_interval_minutes is not None:
-                cmd += f" --interval {repeat_interval_minutes} --times {repeat_times}"
-            return self._handle_command(cmd)
-
-        if intent == "schedule_get":
-            schedule_id = payload.get("schedule_id")
-            if schedule_id is None:
-                return "我识别到你可能要查看日程，但缺少编号。请告诉我日程 id。"
-            return self._handle_command(f"/schedule get {self._to_int(schedule_id)}")
-
-        if intent == "schedule_update":
-            schedule_id = payload.get("schedule_id")
-            event_time = str(payload.get("event_time") or "").strip()
-            title = str(payload.get("title") or "").strip()
-            if schedule_id is None or not event_time or not title:
-                return "我识别到你可能要修改日程，但编号、时间或标题不完整。"
-            repeat_interval_minutes = _normalize_schedule_interval_minutes_value(
-                payload.get("schedule_repeat_interval_minutes")
-            )
-            parsed_repeat_times = _normalize_schedule_repeat_times_value(payload.get("schedule_repeat_times"))
-            if repeat_interval_minutes is not None:
-                repeat_times = parsed_repeat_times if parsed_repeat_times is not None else -1
-            else:
-                repeat_times = parsed_repeat_times or 1
-            duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("schedule_duration_minutes"))
-            cmd = f"/schedule update {self._to_int(schedule_id)} {event_time} {title}"
-            if duration_minutes is not None:
-                cmd += f" --duration {duration_minutes}"
-            if repeat_interval_minutes is not None:
-                cmd += f" --interval {repeat_interval_minutes} --times {repeat_times}"
-            return self._handle_command(cmd)
-
-        if intent == "schedule_delete":
-            schedule_id = payload.get("schedule_id")
-            if schedule_id is None:
-                return "我识别到你可能要删除日程，但缺少编号。请告诉我日程 id。"
-            return self._handle_command(f"/schedule delete {self._to_int(schedule_id)}")
-
-        if intent in {"schedule_repeat_enable", "schedule_repeat_disable"}:
-            schedule_id = payload.get("schedule_id")
-            if schedule_id is None:
-                return "我识别到你可能要切换重复规则，但缺少编号。请告诉我日程 id。"
-            target = "on" if intent == "schedule_repeat_enable" else "off"
-            return self._handle_command(f"/schedule repeat {self._to_int(schedule_id)} {target}")
-
-        return None
-
-    @staticmethod
-    def _to_int(value: Any) -> int:
-        if isinstance(value, bool):
-            return 0
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        value_str = str(value).strip()
-        if not value_str:
-            return 0
-        return int(float(value_str))
-
-    def _handle_chat(self, text: str) -> str:
-        if not self.llm_client:
-            return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
-
-        self.db.save_message("user", text)
-
-        messages = [
-            {
-                "role": "system",
-                "content": self._build_system_prompt(),
-            }
-        ]
-
-        for item in self.db.recent_messages(limit=8):
-            messages.append({"role": item.role, "content": item.content})
-
-        try:
-            answer = self.llm_client.reply(messages)
-        except Exception as exc:  # noqa: BLE001
-            return f"调用模型失败: {exc}"
-
-        answer = _strip_think_blocks(answer).strip()
-        if not answer:
-            answer = "我这次没有拿到有效回复，可以再试一次。"
-
-        self.db.save_message("assistant", answer)
-        return answer
-
-    def _build_system_prompt(self) -> str:
-        todos = [item for item in self.db.list_todos() if not item.done][:5]
-        schedules = self.db.list_schedules()[:5]
-
-        todo_lines = (
-            "\n".join(
-                (
-                    f"- {item.id}. [{item.tag}] {item.content}"
-                    f"{_format_todo_meta_inline(item.due_at, item.remind_at, priority=item.priority)}"
-                )
-                for item in todos
-            )
-            or "- 无"
-        )
-        schedule_lines = "\n".join(f"- {item.event_time} {item.title}" for item in schedules) or "- 无"
-
-        return (
-            "你是一个中文优先的个人助手。回答尽量简洁、可执行。\n"
-            "你可以参考当前用户的本地事项：\n"
-            f"待办（未完成）:\n{todo_lines}\n"
-            f"日程（按时间排序）:\n{schedule_lines}\n"
-            "如果用户问到计划安排，优先结合这些事项给建议。"
-        )
-
     @staticmethod
     def _todo_view_list_text() -> str:
         return (
@@ -1535,8 +991,8 @@ class AssistantAgent:
             "/schedule repeat <id> <on|off>\n"
             "/schedule delete <id>\n"
             "/schedule list\n"
-            "你也可以直接说自然语言（会先做意图识别，再执行动作）。\n"
-            "其他文本会直接发给 AI。"
+            "你也可以直接说自然语言（会走 plan -> act -> observe -> replan 循环）。\n"
+            "当前版本仅支持计划链路，不再走 chat 直聊分支。"
         )
 
 

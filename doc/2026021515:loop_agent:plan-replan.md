@@ -1,47 +1,38 @@
 ## a. Commit message
-- 未提交（本轮已完成开发与测试，待你确认后再提交）
+- 待提交（建议：`refactor: enforce pure plan-only flow and remove legacy intent/chat path`）
 
 ## b. Modified Files and Summary of Changes
 - `assistant_app/agent.py`
-  - 新增 plan-replan 主循环（非 slash 输入默认进入）
-  - 新增四类工具路由：todo/schedule/internet_search/ask_user
-  - 新增 ask_user 进程内 pending 会话态（可跨 slash 命令继续）
-  - 新增 max_steps=20 兜底、planner 失败兜底、`取消当前任务` 终止机制
-  - 新增“用户澄清后必须先执行一次 replan 工具动作”约束，避免 ask_user 重复追问死循环
-  - 新增可选进度回调（progress callback），输出步骤进度、计划列表、动作结果与完成情况
-  - 保留 legacy intent JSON 兼容路径，避免现有用例回归
+  - 删除 legacy intent/chat 兼容链路（不再解析 `intent`、不再做 legacy fallback）
+  - 自然语言输入统一走 plan -> act -> observe -> replan 主循环
+  - 保留并强化工具契约上下文：todo/schedule/internet_search/ask_user
+  - planner 不可用提示统一为“计划执行服务暂时不可用”
 - `assistant_app/cli.py`
-  - 移除“正在思考...”等待动画
-  - 接入 agent 进度回调，在 CLI 交互中逐步输出执行进程
+  - CLI 继续保持“步骤进度 + 计划列表 + 执行结果 + 完成情况”的过程化输出（无“正在思考”）
+  - 进度信息使用淡灰色前缀输出，便于区分助手结果文本
 - `assistant_app/search.py`
-  - 新增搜索解耦抽象（`SearchProvider`）
-  - 新增 `BingSearchProvider` 默认实现（标准库 urllib）
-  - 新增 Bing 结果轻量提取与标准化结构 `SearchResult`
+  - 保持 SearchProvider 抽象与 Bing 默认实现解耦，方便后续替换搜索源
 - `tests/test_agent.py`
-  - 新增 plan-replan 相关测试：多步工具执行、ask_user 澄清、pending 与 slash 共存
-  - 新增 internet_search 工具测试、max_steps 兜底测试、取消任务测试
-  - 新增“澄清后禁止立即再次 ask_user”的回归测试
-  - 新增 progress callback 输出回归测试
-- `tests/test_cli.py`
-  - 更新反馈测试为“进度输出”断言，确认不再依赖等待动画文案
+  - 去除对 legacy intent/chat 分支行为的依赖，改为纯 planner 返回契约测试
+  - 更新自然语言用例为 continue+done 的 plan-only 交互序列
+  - 更新服务不可用断言文案为“计划执行服务”
+  - 调整无效命令场景：通过 planner 观察后 done 收敛，避免旧链路语义
 - `README.md`
-  - 更新自然语言机制说明为 plan-replan
-  - 补充 ask_user / Bing 搜索 / 20 步兜底说明
-  - 更新 CLI 反馈机制说明为“输出每一步进度”
+  - 明确“纯 plan-only”机制（移除 legacy intent=chat 描述）
+  - 首页能力描述改为“自然语言任务执行（plan-only）”
 
 ## c. Reasons and Purposes of Each Modification
-- 从单轮 intent 执行升级为循环代理，提升多目标任务与信息不完整场景的处理能力。
-- 引入 ask_user 让代理在缺参时主动澄清，减少错误动作。
-- 引入 internet_search 并做 provider 解耦，满足联网检索需求且便于后续替换搜索后端。
-- 保留 legacy 兼容，确保当前已有命令和自然语言测试不回归。
+- 满足“纯 plan-only”要求：杜绝 chat/intent 分叉，统一模型行为和调试路径。
+- 降低维护成本：删除双链路后，工具契约、进度输出、失败兜底都集中在同一执行框架中。
+- 提升测试可解释性：测试直接对 planner 契约建模，减少旧 intent 结构对新架构的干扰。
 
 ## d. Potential Issues in Current Code
-- Bing HTML 结构可能变化，解析规则需后续根据线上表现调整。
-- observation 上限提升到 10000 * 100 后，真实运行时可能增加 token 开销。
-- planner 若长期返回低质量 JSON，仍会触发兜底而非无限重试（这是设计取舍）。
-- 进度输出较详细，在超长任务场景会增加 CLI 输出量（可后续引入 verbosity 配置）。
+- 若 planner 长期输出低质量 continue（例如重复无效命令），仍可能消耗多步后触发步数上限。
+- internet_search 目前默认依赖 Bing 页面结构，解析规则后续可能需要随页面变化调整。
+- 目前 done 文本质量仍依赖模型，若总结不充分，用户可能需要再发一轮查询查看细节。
 
 ## e. Unit Test Report
 - 执行命令：`python3 -m unittest discover -s tests -p "test_*.py"`
-- 结果：`Ran 101 tests ... OK`
-- lint：`python3 -m ruff check assistant_app tests` -> `All checks passed!`
+- 结果：`Ran 105 tests ... OK`
+- 执行命令：`python3 -m ruff check assistant_app tests`
+- 结果：`All checks passed!`

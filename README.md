@@ -1,7 +1,7 @@
 # CLI AI Personal Assistant (MVP)
 
 一个中文优先的本地 CLI 个人助手，支持：
-- AI 对话（DeepSeek 优先，兼容 OpenAI-compatible API）
+- 自然语言任务执行（plan-only，DeepSeek 优先，兼容 OpenAI-compatible API）
 - 待办管理
 - 日程管理
 
@@ -91,7 +91,7 @@ python main.py
   - `删除日程 1`
   - `查看待办`
   - `查看日程`
-- 直接输入任意文本：会先进入 plan-replan 流程；若模型返回 legacy intent=chat 则转为 AI 对话
+- 直接输入任意文本：始终进入 plan-replan 流程（纯 plan-only，不再走 legacy intent/chat 分支）
 
 ## 视图说明
 - `all`：全部待办（含已完成）

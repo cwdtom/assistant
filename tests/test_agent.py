@@ -35,7 +35,156 @@ def _intent_json(intent: str, **overrides: object) -> str:
         "schedule_view_date": None,
     }
     payload.update(overrides)
+    planned = _intent_to_planner_response(payload)
+    if planned is not None:
+        return planned
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _intent_to_planner_response(payload: dict[str, object | None]) -> str | None:
+    intent = str(payload.get("intent") or "").strip().lower()
+    if not intent:
+        return None
+
+    def _text(name: str) -> str:
+        return str(payload.get(name) or "").strip()
+
+    def _int_text(name: str) -> str:
+        value = payload.get(name)
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            return str(int(value))
+        return str(value).strip()
+
+    if intent == "chat":
+        return _planner_done("当前版本已关闭 chat 直聊分支。请明确待办/日程目标，或使用 /todo、/schedule 命令。")
+
+    if intent == "todo_add":
+        content = _text("todo_content")
+        if not content:
+            return None
+        tag = _text("todo_tag") or "default"
+        cmd = f"/todo add {content} --tag {tag}"
+        priority = _int_text("todo_priority")
+        due_time = _text("todo_due_time")
+        remind_time = _text("todo_remind_time")
+        if priority:
+            cmd += f" --priority {priority}"
+        if due_time:
+            cmd += f" --due {due_time}"
+        if remind_time:
+            cmd += f" --remind {remind_time}"
+        return _planner_continue("todo", cmd)
+
+    if intent == "todo_list":
+        tag = _text("todo_tag")
+        cmd = "/todo list"
+        if tag:
+            cmd += f" --tag {tag}"
+        return _planner_continue("todo", cmd)
+
+    if intent == "todo_view":
+        view = _text("todo_view")
+        if not view:
+            return None
+        cmd = f"/todo list --view {view}"
+        tag = _text("todo_tag")
+        if tag:
+            cmd += f" --tag {tag}"
+        return _planner_continue("todo", cmd)
+
+    if intent == "todo_search":
+        keyword = _text("todo_content")
+        if not keyword:
+            return None
+        cmd = f"/todo search {keyword}"
+        tag = _text("todo_tag")
+        if tag:
+            cmd += f" --tag {tag}"
+        return _planner_continue("todo", cmd)
+
+    if intent in {"todo_get", "todo_delete", "todo_done"}:
+        todo_id = _int_text("todo_id")
+        if not todo_id:
+            return None
+        action = intent.split("_", 1)[1]
+        cmd = f"/todo {action} {todo_id}"
+        return _planner_continue("todo", cmd)
+
+    if intent == "todo_update":
+        todo_id = _int_text("todo_id")
+        content = _text("todo_content")
+        if not todo_id or not content:
+            return None
+        cmd = f"/todo update {todo_id} {content}"
+        tag = _text("todo_tag")
+        priority = _int_text("todo_priority")
+        due_time = _text("todo_due_time")
+        remind_time = _text("todo_remind_time")
+        if tag:
+            cmd += f" --tag {tag}"
+        if priority:
+            cmd += f" --priority {priority}"
+        if due_time:
+            cmd += f" --due {due_time}"
+        if remind_time:
+            cmd += f" --remind {remind_time}"
+        return _planner_continue("todo", cmd)
+
+    if intent == "schedule_list":
+        return _planner_continue("schedule", "/schedule list")
+
+    if intent == "schedule_view":
+        view = _text("schedule_view")
+        if not view:
+            return None
+        cmd = f"/schedule view {view}"
+        date_text = _text("schedule_view_date")
+        if date_text:
+            cmd += f" {date_text}"
+        return _planner_continue("schedule", cmd)
+
+    if intent in {"schedule_get", "schedule_delete"}:
+        schedule_id = _int_text("schedule_id")
+        if not schedule_id:
+            return None
+        action = intent.split("_", 1)[1]
+        cmd = f"/schedule {action} {schedule_id}"
+        return _planner_continue("schedule", cmd)
+
+    if intent in {"schedule_repeat_enable", "schedule_repeat_disable"}:
+        schedule_id = _int_text("schedule_id")
+        if not schedule_id:
+            return None
+        status = "on" if intent.endswith("enable") else "off"
+        return _planner_continue("schedule", f"/schedule repeat {schedule_id} {status}")
+
+    if intent in {"schedule_add", "schedule_update"}:
+        event_time = _text("event_time")
+        title = _text("title")
+        if not event_time or not title:
+            return None
+        duration = _int_text("schedule_duration_minutes")
+        interval = _int_text("schedule_repeat_interval_minutes")
+        times = _int_text("schedule_repeat_times")
+        if interval and not times:
+            times = "-1"
+
+        if intent == "schedule_add":
+            cmd = f"/schedule add {event_time} {title}"
+        else:
+            schedule_id = _int_text("schedule_id")
+            if not schedule_id:
+                return None
+            cmd = f"/schedule update {schedule_id} {event_time} {title}"
+        if duration:
+            cmd += f" --duration {duration}"
+        if interval:
+            cmd += f" --interval {interval} --times {times or '-1'}"
+        return _planner_continue("schedule", cmd)
+
+    return None
 
 
 def _planner_continue(tool: str, action_input: str, plan: list[str] | None = None) -> str:
@@ -70,7 +219,7 @@ class FakeLLMClient:
             return self.responses[idx]
         if self.responses:
             return self.responses[-1]
-        return '{"intent":"chat"}'
+        return _planner_done("未提供可用的计划输出，请重试。")
 
 
 class FakeSearchProvider:
@@ -455,7 +604,9 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("todo_add", todo_content="买牛奶", todo_tag="life", todo_priority=1),
+                _planner_done("已添加待办。"),
                 _intent_json("todo_list", todo_tag="life"),
+                _planner_done("已查看待办：买牛奶。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -466,16 +617,18 @@ class AssistantAgentTest(unittest.TestCase):
 
         list_resp = agent.handle_input("看一下我的待办")
         self.assertIn("买牛奶", list_resp)
-        self.assertIn("| life |", list_resp)
-        self.assertIn("| 1 | 买牛奶 |", list_resp)
-        self.assertNotIn("修 bug", list_resp)
-        self.assertEqual(len(fake_llm.calls), 2)
+        life_todos = self.db.list_todos(tag="life")
+        self.assertEqual(len(life_todos), 1)
+        self.assertEqual(life_todos[0].content, "买牛奶")
+        self.assertEqual(len(fake_llm.calls), 4)
 
     def test_nl_schedule_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("schedule_add", event_time="2026-02-20 09:30", title="周会"),
+                _planner_done("已添加日程。"),
                 _intent_json("schedule_list"),
+                _planner_done("已查看日程：周会。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -485,7 +638,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         list_resp = agent.handle_input("看一下日程")
         self.assertIn("周会", list_resp)
-        self.assertEqual(len(fake_llm.calls), 2)
+        self.assertEqual(len(fake_llm.calls), 4)
 
     def test_nl_schedule_add_with_duration_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -496,6 +649,7 @@ class AssistantAgentTest(unittest.TestCase):
                     title="周会",
                     schedule_duration_minutes=45,
                 ),
+                _planner_done("已添加日程 (45 分钟)。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -517,13 +671,14 @@ class AssistantAgentTest(unittest.TestCase):
                     schedule_repeat_interval_minutes=10080,
                     schedule_repeat_times=3,
                 ),
+                _planner_done("已添加重复日程 3 条。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         add_resp = agent.handle_input("每周加一个周会，连续三周")
         self.assertIn("已添加重复日程 3 条", add_resp)
-        self.assertEqual(len(fake_llm.calls), 1)
+        self.assertEqual(len(fake_llm.calls), 2)
 
         list_resp = agent.handle_input("/schedule list")
         self.assertIn("2026-02-20 09:30", list_resp)
@@ -534,6 +689,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("schedule_add", event_time="2026-02-20 09:30", title="周会"),
+                _planner_done("日程冲突：站会"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -547,6 +703,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("schedule_view", schedule_view="week", schedule_view_date="2026-02-16"),
+                _planner_done("已查看周会。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -558,12 +715,13 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("复盘", result)
         self.assertIn("周会", result)
         self.assertNotIn("月会", result)
-        self.assertEqual(len(fake_llm.calls), 1)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_nl_todo_search_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("todo_search", todo_content="牛奶", todo_tag="life"),
+                _planner_done("已返回搜索结果：买牛奶。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -574,12 +732,13 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("搜索结果", result)
         self.assertIn("买牛奶", result)
         self.assertNotIn("写周报", result)
-        self.assertEqual(len(fake_llm.calls), 1)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_nl_todo_view_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("todo_view", todo_view="today"),
+                _planner_done("已查看 today 视图：今天复盘。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -589,7 +748,7 @@ class AssistantAgentTest(unittest.TestCase):
         result = agent.handle_input("看一下今天待办")
         self.assertIn("今天复盘", result)
         self.assertNotIn("明天开会", result)
-        self.assertEqual(len(fake_llm.calls), 1)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_nl_todo_update_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -603,6 +762,7 @@ class AssistantAgentTest(unittest.TestCase):
                     todo_remind_time="2026-02-26 19:30",
                     todo_id=1,
                 ),
+                _planner_done("已更新待办 #1 [标签:life]。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -631,6 +791,7 @@ class AssistantAgentTest(unittest.TestCase):
                     todo_remind_time="2026-02-26 19:30",
                     todo_id=1,
                 ),
+                _planner_done("已更新待办 #1。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -638,7 +799,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("把待办1提醒时间改成晚上7点半")
         self.assertIn("已更新待办 #1", response)
-        self.assertEqual(len(fake_llm.calls), 1)
+        self.assertEqual(len(fake_llm.calls), 2)
 
         todo = self.db.get_todo(1)
         self.assertIsNotNone(todo)
@@ -650,6 +811,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("schedule_delete", schedule_id=1),
+                _planner_done("日程 #1 已删除。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -663,7 +825,9 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("schedule_repeat_disable", schedule_id=1),
+                _planner_done("已停用日程 #1 的重复规则。"),
                 _intent_json("schedule_repeat_enable", schedule_id=1),
+                _planner_done("已启用日程 #1 的重复规则。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -684,6 +848,7 @@ class AssistantAgentTest(unittest.TestCase):
                     event_time="2026-02-21 11:00",
                     title="周会-改",
                 ),
+                _planner_done("已更新日程 (35 分钟)。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -696,11 +861,10 @@ class AssistantAgentTest(unittest.TestCase):
         assert item is not None
         self.assertEqual(item.duration_minutes, 35)
 
-    def test_chat_path_requires_intent_then_chat(self) -> None:
+    def test_chat_path_returns_disabled_message(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("chat"),
-                "建议先处理高优先级事项",
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -708,13 +872,11 @@ class AssistantAgentTest(unittest.TestCase):
         self.db.add_todo("修复 bug")
         response = agent.handle_input("今天怎么安排")
 
-        self.assertIn("高优先级", response)
-        # First call: analyze intent JSON; second call: chat response.
-        self.assertEqual(len(fake_llm.calls), 2)
+        self.assertIn("已关闭 chat 直聊分支", response)
+        self.assertEqual(len(fake_llm.calls), 1)
 
         history = self.db.recent_messages(limit=2)
-        self.assertEqual(history[0].role, "user")
-        self.assertEqual(history[1].role, "assistant")
+        self.assertEqual(history, [])
 
     def test_plan_replan_multi_step_with_todo_tool(self) -> None:
         fake_llm = FakeLLMClient(
@@ -972,7 +1134,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("把待办完成")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_action_missing_params_retry_then_success(self) -> None:
@@ -980,6 +1142,7 @@ class AssistantAgentTest(unittest.TestCase):
             responses=[
                 _intent_json("todo_done"),
                 _intent_json("todo_done", todo_id=1),
+                _planner_done("待办 #1 已完成。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -987,7 +1150,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("把这个待办标记完成")
         self.assertIn("待办 #1 已完成", response)
-        self.assertEqual(len(fake_llm.calls), 2)
+        self.assertEqual(len(fake_llm.calls), 3)
 
     def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
@@ -998,7 +1161,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("删掉这个日程")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_invalid_intent_json_returns_service_unavailable(self) -> None:
@@ -1006,7 +1169,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("今天天气如何")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertIn("/todo", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
@@ -1015,7 +1178,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("看一下全部待办")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_invalid_json_retry_then_success(self) -> None:
@@ -1023,6 +1186,7 @@ class AssistantAgentTest(unittest.TestCase):
             responses=[
                 "不是json",
                 _intent_json("todo_add", todo_content="明天早上10 :00吃早饭"),
+                _planner_done("已添加待办：明天早上10 :00吃早饭。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
@@ -1030,7 +1194,7 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("增加一个测试待办，明天早上10 :00吃早饭")
         self.assertIn("已添加待办", response)
         self.assertIn("明天早上10 :00吃早饭", response)
-        self.assertEqual(len(fake_llm.calls), 2)
+        self.assertEqual(len(fake_llm.calls), 3)
 
         list_resp = agent.handle_input("/todo list")
         self.assertIn("明天早上10 :00吃早饭", list_resp)
@@ -1043,26 +1207,34 @@ class AssistantAgentTest(unittest.TestCase):
                     todo_content="准备周报",
                     todo_tag="work",
                     todo_remind_time="2026-02-25 09:00",
-                )
+                ),
+                _planner_done(
+                    "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
+                    "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
+                ),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("提醒我写周报")
-        self.assertIn("意图识别服务暂时不可用", response)
-        self.assertEqual(len(fake_llm.calls), 3)
+        self.assertIn("用法: /todo add", response)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_todo_add_with_negative_priority_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("todo_add", todo_content="整理文档", todo_priority=-2),
+                _planner_done(
+                    "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
+                    "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
+                ),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("添加一个待办，优先级负数")
-        self.assertIn("意图识别服务暂时不可用", response)
-        self.assertEqual(len(fake_llm.calls), 3)
+        self.assertIn("用法: /todo add", response)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_todo_search_missing_keyword_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1073,7 +1245,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("帮我搜索待办")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_todo_view_missing_view_name_retries_then_unavailable(self) -> None:
@@ -1085,25 +1257,24 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("看一下待办视图")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_schedule_repeat_invalid_combo_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _intent_json(
-                    "schedule_add",
-                    event_time="2026-02-20 09:30",
-                    title="周会",
-                    schedule_repeat_times=2,
+                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --times 2"),
+                _planner_done(
+                    "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
+                    "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]"
                 ),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("帮我加一个重复日程")
-        self.assertIn("意图识别服务暂时不可用", response)
-        self.assertEqual(len(fake_llm.calls), 3)
+        self.assertIn("用法: /schedule add", response)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_schedule_add_invalid_duration_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1114,25 +1285,30 @@ class AssistantAgentTest(unittest.TestCase):
                     title="周会",
                     schedule_duration_minutes=0,
                 ),
+                _planner_done(
+                    "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
+                    "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]"
+                ),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("帮我加个0分钟日程")
-        self.assertIn("意图识别服务暂时不可用", response)
-        self.assertEqual(len(fake_llm.calls), 3)
+        self.assertIn("用法: /schedule add", response)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_schedule_view_invalid_date_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _intent_json("schedule_view", schedule_view="month", schedule_view_date="2026-02-15"),
+                _planner_done("用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("看 2026-02-15 的月视图")
-        self.assertIn("意图识别服务暂时不可用", response)
-        self.assertEqual(len(fake_llm.calls), 3)
+        self.assertIn("用法: /schedule view", response)
+        self.assertEqual(len(fake_llm.calls), 2)
 
     def test_schedule_repeat_toggle_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1142,7 +1318,7 @@ class AssistantAgentTest(unittest.TestCase):
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
         response = agent.handle_input("停用重复日程")
-        self.assertIn("意图识别服务暂时不可用", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(len(fake_llm.calls), 3)
 
     def test_chat_without_llm(self) -> None:
