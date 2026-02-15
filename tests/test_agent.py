@@ -797,6 +797,27 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertTrue(any("已执行 2/2" in item for item in progress_logs))
         self.assertFalse(any("已执行 2/1" in item for item in progress_logs))
 
+    def test_plan_progress_list_not_repeated_when_plan_unchanged(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_continue("todo", "/todo list", plan=["步骤A", "步骤B"]),
+                _planner_continue("todo", "/todo list", plan=["步骤A", "步骤B"]),
+                _planner_done("完成。", plan=["步骤A", "步骤B"]),
+            ]
+        )
+        progress_logs: list[str] = []
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=fake_llm,
+            search_provider=FakeSearchProvider(),
+            progress_callback=progress_logs.append,
+        )
+
+        response = agent.handle_input("测试不重复输出计划列表")
+        self.assertIn("完成", response)
+        plan_logs = [item for item in progress_logs if "计划列表" in item]
+        self.assertEqual(len(plan_logs), 1)
+
     def test_plan_replan_prompt_contains_tool_contract(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[

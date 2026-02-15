@@ -216,6 +216,7 @@ class PendingPlanTask:
     must_execute_tool_before_next_ask: bool = False
     successful_steps: int = 0
     failed_steps: int = 0
+    last_reported_plan_signature: tuple[str, ...] | None = None
 
 
 class AssistantAgent:
@@ -626,6 +627,10 @@ class AssistantAgent:
     def _emit_plan_progress(self, task: PendingPlanTask) -> None:
         if not task.latest_plan:
             return
+        signature = tuple(task.latest_plan)
+        if task.last_reported_plan_signature == signature:
+            return
+        task.last_reported_plan_signature = signature
         done_count = min(task.successful_steps, len(task.latest_plan))
         lines = ["计划列表："]
         for idx, item in enumerate(task.latest_plan, start=1):
