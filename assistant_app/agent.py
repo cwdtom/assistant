@@ -9,6 +9,13 @@ from typing import Any
 
 from assistant_app.db import AssistantDB
 from assistant_app.llm import LLMClient
+from assistant_app.planner_plan_replan import (
+    PLAN_ONCE_PROMPT,
+    REPLAN_PROMPT,
+    normalize_plan_decision,
+    normalize_replan_decision,
+)
+from assistant_app.planner_thought import THOUGHT_PROMPT, normalize_thought_decision
 from assistant_app.search import BingSearchProvider, SearchProvider, SearchResult
 
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
@@ -36,93 +43,43 @@ DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 DEFAULT_INTERNET_SEARCH_TOP_K = 3
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
 
-PLAN_ONCE_PROMPT = """
-你是 CLI 助手的 plan 模块，只负责在任务开始时生成执行计划。
-你每次必须只输出一个 JSON 对象，禁止输出额外文本。
-
-输出 JSON 格式：
-{
-  "status": "planned",
-  "plan": ["步骤1", "步骤2"]
-}
-
-规则：
-- 只输出 planned，不要输出 done
-- plan 至少包含 1 项，且应按执行顺序排列
-- 不要输出工具动作，只给步骤描述
-""".strip()
-
-THOUGHT_PROMPT = """
-你是 CLI 助手的 thought 模块，需要基于当前计划项做一步决策。
-你每次必须只输出一个 JSON 对象，禁止输出额外文本。
-
-可用工具：
-1) todo: 执行 /todo 或 /view 命令
-2) schedule: 执行 /schedule 命令
-3) internet_search: 搜索互联网，输入为搜索词
-4) ask_user: 向用户提问澄清，输入为单个问题
-
-输出 JSON 格式：
-{
-  "status": "continue|step_done|ask_user|done",
-  "current_step": "string",
-  "next_action": {
-    "tool": "todo|schedule|internet_search",
-    "input": "string"
-  } | null,
-  "question": "string|null",
-  "response": "string|null"
-}
-
-规则：
-- status=continue: next_action 必须存在，question/response 为空
-- status=step_done: 标记当前计划项完成，next_action/question 为空
-- status=ask_user: question 必填，next_action/response 为空
-- status=done: response 必填，next_action/question 为空
-- todo/schedule 的 next_action.input 必须是可直接执行的合法命令
-""".strip()
-
-REPLAN_PROMPT = """
-你是 CLI 助手的 replan 模块，只在用户澄清后更新计划。
-你每次必须只输出一个 JSON 对象，禁止输出额外文本。
-
-输出 JSON 格式：
-{
-  "status": "replanned",
-  "plan": ["更新后的步骤1", "更新后的步骤2"]
-}
-
-规则：
-- 只输出 replanned，不要输出 done
-- 新计划要融合用户澄清信息
-- 若信息仍不足，可保留待澄清步骤，但不要直接提问
-""".strip()
-
 PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
     "todo": [
-        "/todo add <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]",
+        "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
+        "[--due <YYYY-MM-DD HH:MM，本地时间>] [--remind <YYYY-MM-DD HH:MM，本地时间>]",
         "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]",
         "/todo get <id>",
         "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
-        "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]",
+        "[--due <YYYY-MM-DD HH:MM，本地时间>] [--remind <YYYY-MM-DD HH:MM，本地时间>]",
         "/todo done <id>",
         "/todo delete <id>",
         "/todo search <关键词> [--tag <标签>]",
         "/view <all|today|overdue|upcoming|inbox> [--tag <标签>]",
     ],
     "schedule": [
-        "/schedule add <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
-        "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]",
+        "/schedule add <YYYY-MM-DD HH:MM，本地时间> <标题> [--duration <>=1，单位:分钟>] "
+        "[--remind <YYYY-MM-DD HH:MM，本地时间>] [--interval <>=1，单位:分钟>] "
+        "[--times <-1|>=2，单位:次>] [--remind-start <YYYY-MM-DD HH:MM，本地时间>]",
         "/schedule list",
         "/schedule get <id>",
-        "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]",
-        "/schedule update <id> <YYYY-MM-DD HH:MM> <标题> [--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
-        "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]",
+        "/schedule view <day|week|month> [day/week 参数: YYYY-MM-DD；month 参数: YYYY-MM]",
+        "/schedule update <id> <YYYY-MM-DD HH:MM，本地时间> <标题> [--duration <>=1，单位:分钟>] "
+        "[--remind <YYYY-MM-DD HH:MM，本地时间>] [--interval <>=1，单位:分钟>] "
+        "[--times <-1|>=2，单位:次>] [--remind-start <YYYY-MM-DD HH:MM，本地时间>]",
         "/schedule repeat <id> <on|off>",
         "/schedule delete <id>",
     ],
     "internet_search": ["<关键词>"],
     "ask_user": ["<单个澄清问题>"],
+}
+
+PLAN_TIME_UNIT_CONTRACT: dict[str, str] = {
+    "timestamp_format": "所有绝对时间都使用本地时间格式 YYYY-MM-DD HH:MM（24 小时制）。",
+    "schedule_duration_unit": "--duration 单位是分钟；例如 3 小时必须转换为 180。",
+    "schedule_interval_unit": "--interval 单位是分钟；例如 每天=1440，每周=10080。",
+    "schedule_repeat_times_unit": "--times 单位是次数；-1 表示无限重复，>=2 表示有限重复次数。",
+    "schedule_view_anchor": "schedule view: day/week 使用 YYYY-MM-DD；month 使用 YYYY-MM。",
+    "todo_due_remind_unit": "todo 的 --due/--remind 都是本地绝对时间，不接受“3小时后”等相对表达。",
 }
 
 
@@ -142,7 +99,8 @@ class PendingPlanTask:
     step_count: int = 0
     plan_initialized: bool = False
     awaiting_clarification: bool = False
-    needs_replan_after_clarification: bool = False
+    # True means outer loop should run replan before next thought cycle.
+    needs_replan: bool = False
     latest_plan: list[str] = field(default_factory=list)
     current_plan_index: int = 0
     last_thought_snapshot: str | None = None
@@ -150,6 +108,8 @@ class PendingPlanTask:
     last_ask_user_question: str | None = None
     last_ask_user_clarification_len: int = 0
     ask_user_repeat_count: int = 0
+    post_plan_done_count: int = 0
+    pending_final_response: str | None = None
     successful_steps: int = 0
     failed_steps: int = 0
     last_reported_plan_signature: tuple[str, ...] | None = None
@@ -212,71 +172,136 @@ class AssistantAgent:
             self._pending_plan_task = None
             pending_task.clarification_history.append(f"用户补充: {text}")
             pending_task.awaiting_clarification = False
-            pending_task.needs_replan_after_clarification = True
-            return self._run_plan_thought_loop(task=pending_task, current_user_text=text)
+            pending_task.needs_replan = True
+            return self._run_outer_plan_loop(task=pending_task)
 
         task = PendingPlanTask(goal=text)
-        return self._run_plan_thought_loop(task=task, current_user_text=text)
+        return self._run_outer_plan_loop(task=task)
 
-    def _run_plan_thought_loop(self, task: PendingPlanTask, current_user_text: str) -> str:
+    def _run_outer_plan_loop(self, task: PendingPlanTask) -> str:
         while True:
             if task.step_count >= self._plan_replan_max_steps:
                 return self._finalize_planner_task(task, self._format_step_limit_response(task))
 
-            planned_total_text = self._progress_total_text(task)
-            current_plan_total = self._current_plan_total_text(task)
-            plan_suffix = f"（当前计划 {current_plan_total} 步）" if current_plan_total is not None else ""
-            progress_text = (
-                f"步骤进度：已执行 {task.step_count}/{planned_total_text}，"
-                f"开始第 {task.step_count + 1} 步决策。{plan_suffix}"
-            )
-            self._emit_progress(progress_text)
+            self._emit_decision_progress(task)
 
             if not task.plan_initialized:
-                plan_payload = self._request_plan_payload(task)
-                if plan_payload is None:
+                if not self._initialize_plan_once(task):
                     return self._finalize_planner_task(task, self._planner_unavailable_text())
-                plan_decision = plan_payload.get("decision")
-                if not isinstance(plan_decision, dict):
-                    return self._finalize_planner_task(task, self._planner_unavailable_text())
-                task.latest_plan = [str(item).strip() for item in plan_decision.get("plan", []) if str(item).strip()]
-                task.plan_initialized = True
-                task.current_plan_index = 0
-                self._emit_progress(f"规划完成：共 {len(task.latest_plan)} 步。")
-                self._emit_plan_progress(task)
 
             if task.awaiting_clarification:
                 self._pending_plan_task = task
                 return "请确认：请补充必要信息。"
 
-            if task.needs_replan_after_clarification:
-                task.step_count += 1
-                replan_payload = self._request_replan_payload(task)
-                if replan_payload is None:
-                    task.planner_failure_rounds += 1
-                    self._append_observation(
-                        task,
-                        PlannerObservation(
-                            tool="replan",
-                            input_text="plan",
-                            ok=False,
-                            result="replan 输出不符合 JSON 契约。",
-                        ),
-                    )
-                    if task.planner_failure_rounds >= self._plan_continuous_failure_limit:
-                        return self._finalize_planner_task(task, self._planner_unavailable_text())
-                    self._emit_progress("重规划失败：模型输出不符合契约，准备重试。")
-                    continue
+            replan_outcome = self._run_replan_gate(task)
+            if replan_outcome == "retry":
+                continue
+            if replan_outcome == "unavailable":
+                return self._finalize_planner_task(task, self._planner_unavailable_text())
+            if replan_outcome == "done":
+                final_response = task.pending_final_response or self._planner_unavailable_text()
+                task.pending_final_response = None
+                return self._finalize_planner_task(task, final_response)
 
-                task.planner_failure_rounds = 0
-                replan_decision = replan_payload.get("decision")
-                if not isinstance(replan_decision, dict):
-                    return self._finalize_planner_task(task, self._planner_unavailable_text())
-                task.latest_plan = [str(item).strip() for item in replan_decision.get("plan", []) if str(item).strip()]
-                task.current_plan_index = 0
-                task.needs_replan_after_clarification = False
-                self._emit_progress(f"重规划完成：共 {len(task.latest_plan)} 步。")
-                self._emit_plan_progress(task)
+            loop_outcome, payload = self._run_inner_react_loop(task)
+            if loop_outcome == "replan":
+                continue
+            if loop_outcome == "ask_user":
+                self._pending_plan_task = task
+                return payload or "请确认：请补充必要信息。"
+            if loop_outcome == "done_candidate":
+                task.pending_final_response = payload
+                task.needs_replan = True
+                continue
+            if loop_outcome == "step_limit":
+                return self._finalize_planner_task(task, self._format_step_limit_response(task))
+            return self._finalize_planner_task(task, self._planner_unavailable_text())
+
+    def _emit_decision_progress(self, task: PendingPlanTask) -> None:
+        planned_total_text = self._progress_total_text(task)
+        current_plan_total = self._current_plan_total_text(task)
+        plan_suffix = f"（当前计划 {current_plan_total} 步）" if current_plan_total is not None else ""
+        progress_text = (
+            f"步骤进度：已执行 {task.step_count}/{planned_total_text}，"
+            f"开始第 {task.step_count + 1} 步决策。{plan_suffix}"
+        )
+        self._emit_progress(progress_text)
+
+    def _initialize_plan_once(self, task: PendingPlanTask) -> bool:
+        plan_payload = self._request_plan_payload(task)
+        if plan_payload is None:
+            return False
+        plan_decision = plan_payload.get("decision")
+        if not isinstance(plan_decision, dict):
+            return False
+        task.latest_plan = [str(item).strip() for item in plan_decision.get("plan", []) if str(item).strip()]
+        task.plan_initialized = True
+        task.current_plan_index = 0
+        self._emit_progress(f"规划完成：共 {len(task.latest_plan)} 步。")
+        self._emit_plan_progress(task)
+        return True
+
+    def _run_replan_gate(self, task: PendingPlanTask) -> str:
+        if not task.needs_replan:
+            return "skipped"
+
+        task.step_count += 1
+        replan_payload = self._request_replan_payload(task)
+        if replan_payload is None:
+            task.planner_failure_rounds += 1
+            self._append_observation(
+                task,
+                PlannerObservation(
+                    tool="replan",
+                    input_text="plan",
+                    ok=False,
+                    result="replan 输出不符合 JSON 契约。",
+                ),
+            )
+            if task.planner_failure_rounds >= self._plan_continuous_failure_limit:
+                return "unavailable"
+            self._emit_progress("重规划失败：模型输出不符合契约，准备重试。")
+            return "retry"
+
+        task.planner_failure_rounds = 0
+        replan_decision = replan_payload.get("decision")
+        if not isinstance(replan_decision, dict):
+            return "unavailable"
+        status = str(replan_decision.get("status") or "").strip().lower()
+        if status == "done":
+            response = str(replan_decision.get("response") or "").strip()
+            if response:
+                task.pending_final_response = response
+            task.needs_replan = False
+            return "done"
+        previous_plan = list(task.latest_plan)
+        previous_index = task.current_plan_index
+        updated_plan = [str(item).strip() for item in replan_decision.get("plan", []) if str(item).strip()]
+        if previous_plan and updated_plan == previous_plan:
+            # Preserve task progress when replan keeps full plan unchanged.
+            next_index = min(previous_index, len(updated_plan))
+        elif previous_plan and updated_plan == previous_plan[min(previous_index, len(previous_plan)) :]:
+            # If replan returns only remaining steps, restart from first remaining item.
+            next_index = 0
+        else:
+            next_index = 0
+        task.latest_plan = updated_plan
+        task.current_plan_index = next_index
+        task.needs_replan = False
+        task.pending_final_response = None
+        self._emit_progress(f"重规划完成：共 {len(task.latest_plan)} 步。")
+        self._emit_plan_progress(task)
+        return "ok"
+
+    def _run_inner_react_loop(self, task: PendingPlanTask) -> tuple[str, str | None]:
+        emit_progress = False
+        while True:
+            if task.step_count >= self._plan_replan_max_steps:
+                return "step_limit", None
+
+            if emit_progress:
+                self._emit_decision_progress(task)
+            emit_progress = True
 
             self._emit_current_plan_item_progress(task)
             task.step_count += 1
@@ -293,14 +318,14 @@ class AssistantAgent:
                     ),
                 )
                 if task.planner_failure_rounds >= self._plan_continuous_failure_limit:
-                    return self._finalize_planner_task(task, self._planner_unavailable_text())
+                    return "unavailable", None
                 self._emit_progress("思考失败：模型输出不符合契约，准备重试。")
                 continue
 
             task.planner_failure_rounds = 0
             thought_decision = thought_payload.get("decision")
             if not isinstance(thought_decision, dict):
-                return self._finalize_planner_task(task, self._planner_unavailable_text())
+                return "unavailable", None
 
             status = str(thought_decision.get("status") or "").strip().lower()
             current_step = str(thought_decision.get("current_step") or "").strip()
@@ -311,15 +336,44 @@ class AssistantAgent:
             if status == "done":
                 response = str(thought_decision.get("response") or "").strip()
                 if response:
-                    return self._finalize_planner_task(task, response)
-                return self._finalize_planner_task(task, self._planner_unavailable_text())
-
-            if status == "step_done":
+                    self._append_observation(
+                        task,
+                        PlannerObservation(
+                            tool="thought",
+                            input_text=current_step or "done",
+                            ok=True,
+                            result=f"子任务结论: {response}",
+                        ),
+                    )
+                    task.pending_final_response = response
+                # done means current subtask is completed; advance plan cursor before replan.
                 if task.latest_plan:
                     task.current_plan_index = min(task.current_plan_index + 1, len(task.latest_plan))
-                continue
+                if (
+                    task.latest_plan
+                    and task.current_plan_index >= len(task.latest_plan)
+                    and not response
+                ):
+                    task.post_plan_done_count += 1
+                    self._append_observation(
+                        task,
+                        PlannerObservation(
+                            tool="thought",
+                            input_text="done",
+                            ok=False,
+                            result="计划项已全部完成，但 thought 未输出子任务结论。",
+                        ),
+                    )
+                    if task.post_plan_done_count >= self._plan_continuous_failure_limit:
+                        return "done_candidate", self._post_plan_missing_done_text(task)
+                    self._emit_progress("计划步骤已全部完成，等待 replan 给出最终结论。")
+                else:
+                    task.post_plan_done_count = 0
+                task.needs_replan = True
+                return "replan", None
 
             if status == "ask_user":
+                task.post_plan_done_count = 0
                 question = str(thought_decision.get("question") or "").strip()
                 if not question:
                     self._append_observation(
@@ -347,25 +401,21 @@ class AssistantAgent:
                         ),
                     )
                     if task.ask_user_repeat_count >= self._plan_continuous_failure_limit:
-                        return self._finalize_planner_task(
-                            task,
+                        return (
+                            "done_candidate",
                             "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
                         )
                     continue
                 ask_turns = sum(1 for line in task.clarification_history if line.startswith("助手提问:"))
                 if ask_turns >= 6:
-                    return self._finalize_planner_task(
-                        task,
-                        "澄清次数过多，我仍无法稳定重规划。请直接使用 /todo 或 /schedule 命令。",
-                    )
+                    return "done_candidate", "澄清次数过多，我仍无法稳定重规划。请直接使用 /todo 或 /schedule 命令。"
                 task.ask_user_repeat_count = 0
                 task.last_ask_user_question = question
                 task.last_ask_user_clarification_len = len(task.clarification_history)
                 task.clarification_history.append(f"助手提问: {question}")
                 task.awaiting_clarification = True
                 self._emit_progress(f"步骤动作：ask_user -> {question}")
-                self._pending_plan_task = task
-                return f"请确认：{question}"
+                return "ask_user", f"请确认：{question}"
 
             next_action = thought_decision.get("next_action")
             if not isinstance(next_action, dict):
@@ -379,6 +429,7 @@ class AssistantAgent:
                     ),
                 )
                 continue
+            task.post_plan_done_count = 0
             action_tool = str(next_action.get("tool") or "").strip().lower()
             action_input = str(next_action.get("input") or "").strip()
             self._emit_progress(f"步骤动作：{action_tool} -> {action_input}")
@@ -406,21 +457,21 @@ class AssistantAgent:
             return None
 
         planner_messages = self._build_plan_messages(task)
-        return self._request_payload_with_retry(planner_messages, _normalize_plan_decision)
+        return self._request_payload_with_retry(planner_messages, normalize_plan_decision)
 
     def _request_thought_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
         if not self.llm_client:
             return None
 
         planner_messages = self._build_thought_messages(task)
-        return self._request_payload_with_retry(planner_messages, _normalize_thought_decision)
+        return self._request_payload_with_retry(planner_messages, normalize_thought_decision)
 
     def _request_replan_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
         if not self.llm_client:
             return None
 
         planner_messages = self._build_replan_messages(task)
-        return self._request_payload_with_retry(planner_messages, _normalize_replan_decision)
+        return self._request_payload_with_retry(planner_messages, normalize_replan_decision)
 
     def _request_payload_with_retry(
         self,
@@ -485,8 +536,10 @@ class AssistantAgent:
             "max_steps": self._plan_replan_max_steps,
             "latest_plan": task.latest_plan,
             "current_plan_index": task.current_plan_index,
+            "pending_final_response": task.pending_final_response,
             "observations": observations,
             "tool_contract": PLAN_TOOL_CONTRACT,
+            "time_unit_contract": PLAN_TIME_UNIT_CONTRACT,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
         return context_payload
@@ -613,6 +666,21 @@ class AssistantAgent:
     @staticmethod
     def _planner_unavailable_text() -> str:
         return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
+
+    @staticmethod
+    def _post_plan_missing_done_text(task: PendingPlanTask) -> str:
+        latest_success = next((item for item in reversed(task.observations) if item.ok), None)
+        if latest_success is not None:
+            preview = _truncate_text(latest_success.result.replace("\n", " "), 200)
+            return (
+                "计划步骤已执行完毕，但模型未返回可用的子任务结论。\n"
+                f"最近一次成功结果：{preview}\n"
+                "我会继续交给 replan 决策是否收口，你也可以直接使用 /todo、/schedule 命令查看结果。"
+            )
+        return (
+            "计划步骤已执行完毕，但模型未返回可用的子任务结论。"
+            "我会继续交给 replan 决策是否收口，你也可以直接使用 /todo、/schedule 命令查看结果。"
+        )
 
     def _emit_progress(self, message: str) -> None:
         callback = self._progress_callback
@@ -1993,112 +2061,6 @@ def _try_parse_json(text: str) -> dict[str, Any] | None:
             return parsed
     except json.JSONDecodeError:
         pass
-    return None
-
-
-def _normalize_plan_items(payload: dict[str, Any]) -> list[str]:
-    raw_plan = payload.get("plan")
-    plan_items: list[str] = []
-    if isinstance(raw_plan, list):
-        for item in raw_plan:
-            text = str(item).strip()
-            if text:
-                plan_items.append(text)
-    return plan_items
-
-
-def _normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
-    status = str(payload.get("status") or "").strip().lower()
-    plan_items = _normalize_plan_items(payload)
-    if status == "planned":
-        if not plan_items:
-            return None
-        return {"status": "planned", "plan": plan_items}
-    return None
-
-
-def _normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
-    status = str(payload.get("status") or "").strip().lower()
-    current_step = str(payload.get("current_step") or "").strip()
-    if not current_step:
-        plan_items = _normalize_plan_items(payload)
-        if plan_items:
-            current_step = plan_items[0]
-
-    if status == "continue":
-        next_action = payload.get("next_action")
-        if not isinstance(next_action, dict):
-            return None
-        tool = str(next_action.get("tool") or "").strip().lower()
-        input_text = str(next_action.get("input") or "").strip()
-        if tool not in {"todo", "schedule", "internet_search", "ask_user"}:
-            return None
-        if not input_text:
-            return None
-        response_text = str(payload.get("response") or "").strip()
-        if response_text:
-            return None
-        if tool == "ask_user":
-            return {
-                "status": "ask_user",
-                "current_step": current_step,
-                "next_action": None,
-                "question": input_text,
-                "response": None,
-            }
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {"tool": tool, "input": input_text},
-            "question": None,
-            "response": None,
-        }
-
-    if status == "step_done":
-        return {
-            "status": "step_done",
-            "current_step": current_step,
-            "next_action": None,
-            "question": None,
-            "response": str(payload.get("response") or "").strip() or None,
-        }
-
-    if status == "ask_user":
-        question = str(payload.get("question") or "").strip()
-        if not question:
-            return None
-        return {
-            "status": "ask_user",
-            "current_step": current_step,
-            "next_action": None,
-            "question": question,
-            "response": None,
-        }
-
-    if status == "done":
-        next_action = payload.get("next_action")
-        if next_action is not None:
-            return None
-        response_text = str(payload.get("response") or "").strip()
-        if not response_text:
-            return None
-        return {
-            "status": "done",
-            "current_step": current_step,
-            "next_action": None,
-            "question": None,
-            "response": response_text,
-        }
-    return None
-
-
-def _normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
-    status = str(payload.get("status") or "").strip().lower()
-    plan_items = _normalize_plan_items(payload)
-    if status == "replanned":
-        if not plan_items:
-            return None
-        return {"status": "replanned", "plan": plan_items}
     return None
 
 

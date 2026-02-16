@@ -85,8 +85,10 @@ python main.py
 - 进入 CLI 和退出 CLI 时，会自动清空当前终端显示历史（scrollback）
 - 自然语言任务会实时输出循环进度：步骤进度、计划列表、工具执行结果与完成情况
 - 支持自然语言命令（plan -> thought -> act -> observe -> replan 循环）
-- plan 仅在每个新任务开始时执行一次；replan 仅在用户澄清后触发
+- plan 仅在每个新任务开始时执行一次；每个子任务的 thought->act->observe 循环完成后会触发 replan 跟进进度（澄清恢复后也会触发），并由 replan 决定外层是继续还是收口输出
 - thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/ask_user 四种动作间切换
+- thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search`
+- planner 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认使用 Bing 作为搜索源，返回 Top-3 摘要和链接（实现解耦，可替换 provider）
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”

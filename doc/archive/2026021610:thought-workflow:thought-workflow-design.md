@@ -20,6 +20,16 @@
 2. `thought`/`replan` 的解析失败（JSON 失败、字段校验失败）也计步，不可忽略。
 3. 步数上限检查必须放在每轮主循环开头，命中后本轮不再执行 thought/replan/tool。
 
+### 1.2 需求修订（2026-02-16）
+
+新增修订口径（覆盖 1.0 版本“replan 仅澄清后触发”的约束）：
+
+1. 严格采用双层语义：
+   - 外层：`plan -> reAct -> done or replan`
+   - 内层：`thought -> act -> observe`
+2. `replan` 触发时机调整为：每个子任务内层 `thought->act->observe` 循环完成后触发一次，用于跟进任务进度。
+3. 用户澄清恢复任务后同样需要触发 replan，但不再是唯一触发条件。
+
 ---
 
 ## 2. 新流程定义
@@ -28,29 +38,29 @@
 
 #### 初始用户输入（非 slash）
 
-`INPUT -> PLAN_ONCE -> THOUGHT_LOOP -> (ACT -> OBSERVE -> THOUGHT_LOOP)* -> DONE`
+`INPUT -> PLAN_ONCE -> (THOUGHT_LOOP -> ACT -> OBSERVE -> REPLAN)* -> DONE`
 
 - `PLAN_ONCE`：只执行一次，生成完整计划列表。
 - `THOUGHT_LOOP`：围绕“当前计划项”做决策。
 - `ACT/OBSERVE`：执行工具并记录 observation。
-- 当 thought 判断目标已完成时输出 done。
+- 当 thought 判断“当前子任务”完成时输出 done，并交由 replan 决定是否最终收口。
 
 #### 发生澄清场景
 
-`THOUGHT_LOOP -> ASK_USER -> WAIT_USER -> REPLAN_ON_CLARIFICATION -> THOUGHT_LOOP`
+`THOUGHT_LOOP -> ASK_USER -> WAIT_USER -> REPLAN -> THOUGHT_LOOP`
 
 - `ASK_USER`：仅当信息不足时触发。
 - `WAIT_USER`：等待用户补充。
-- `REPLAN_ON_CLARIFICATION`：仅在收到用户澄清后触发一次，更新后续计划，再回到 thought 顺序执行。
+- `REPLAN`：每个子任务的内层执行（thought->act->observe）循环完成后触发；澄清恢复后也会触发。
 
 ### 2.2 核心约束（需求冻结）
 
-1. 非澄清场景下，不触发 replan。
+1. 每个子任务内层执行（thought->act->observe）循环完成后，都触发一次 replan。
 2. plan/replan 产物都是“完整计划列表”；thought 负责逐项推进。
 3. thought 必须按计划顺序执行（可在单个计划项内多轮 thought-act-observe，直到该项完成/阻塞）。
 4. `plan` 仅在“创建新任务后的首次非 slash 输入”触发一次；同一任务内不重复 plan。
 5. 计步口径：`thought` 和 `replan` 都计步；`todo/schedule/internet_search` 计步；`ask_user` 不计步。
-6. 连续失败达到阈值时，thought 必须二选一：`ask_user` 或 `done(失败总结)`，禁止无限空转。
+6. 连续失败达到阈值时，thought 必须二选一：`ask_user` 或 `done(子任务结束信号)`，禁止无限空转。
 7. 等待澄清期间，若用户输入 slash 命令，则先执行 slash，再保持当前 pending 任务不丢失。
 
 ### 2.3 计步口径（明确）
@@ -89,12 +99,12 @@
   - done（全部目标完成）
 - 特点：不改写全局计划，仅推进执行。
 
-### 3.3 Replan 模块（仅澄清后）
+### 3.3 Replan 模块（每个子任务完成后）
 
-- 触发时机：仅用户回答 ask_user 后。
+- 触发时机：每个子任务内层执行完成后；用户回答 ask_user 恢复任务后同样触发。
 - 输入：原 goal + 新澄清 + 截至当前 observation + 剩余计划。
 - 输出：更新后的计划列表（执行游标在系统侧默认重置为 0）。
-- 特点：不是“每步重规划”，而是“澄清后一次重规划”。
+- 特点：用于跟进执行进度、吸收 observation，并动态更新后续计划。
 
 ---
 
@@ -106,7 +116,7 @@
 - `plan_items: list[str]`：当前有效计划列表。
 - `current_plan_index: int`：当前执行到第几个计划项。
 - `awaiting_clarification: bool`：是否处于 ask_user 等待态。
-- `needs_replan_after_clarification: bool`：收到澄清后是否需要触发 replan。
+- `needs_replan: bool`：是否需要在下一轮触发 replan（由“澄清恢复”或“完成一次工具执行”置为 true）。
 - `last_thought_snapshot: str | None`：最近一次 thought 摘要（用于进度日志，可选）。
 
 保留现有：
@@ -134,13 +144,13 @@
 规则：
 
 1. plan 只负责产出计划，不直接产出最终用户答复。
-2. 若任务可直接结束，也应通过 thought 的 `status=done` 统一收口。
+2. 若任务接近完成，thought 可给出 `status=done` 作为“子任务结束信号”，最终是否收口由 replan 统一决定。
 
 ### 5.2 Thought 契约（循环）
 
 ```json
 {
-  "status": "continue|step_done|ask_user|done",
+  "status": "continue|ask_user|done",
   "current_step": "string",
   "next_action": {
     "tool": "todo|schedule|internet_search",
@@ -156,42 +166,36 @@
 1. `status=continue`
    - 必填：`current_step`、`next_action.tool`、`next_action.input`
    - 必须为空：`question`、`response`
-2. `status=step_done`
-   - 必填：`current_step`
-   - 必须为空：`next_action`、`question`
-   - `response` 可为空（默认）或用于当前步骤简短总结
-3. `status=ask_user`
+2. `status=ask_user`
    - 必填：`current_step`、`question`
    - 必须为空：`next_action`、`response`
-4. `status=done`
-   - 必填：`response`
+3. `status=done`
    - 必须为空：`next_action`、`question`
-   - `current_step` 可选（用于最终答复附带上下文）
+   - `response` 可选（用于子任务结论，传给 replan 上下文）
 
 最终答复规则（统一收口）：
 
-- 只有 thought 的 `status=done` 可以产出最终用户答复（plan/replan 不直接返回最终答复）。
-- 当计划项游标走到末尾时，不直接返回；需要再调用一次 thought，让模型显式输出 `done`。
+- thought 的 `status=done` 仅表示“子任务完成”；最终用户答复由 replan 决定（`status=done` 收口或 `status=replanned` 继续）。
+- 当计划项游标走到末尾时，不直接返回；需先进入 replan 决策是否收口。
 
-### 5.3 Replan 契约（澄清后）
+### 5.3 Replan 契约（每个子任务完成后）
 
 ```json
 {
-  "status": "replanned",
-  "plan": ["更新后的步骤1", "更新后的步骤2"]
+  "status": "replanned|done",
+  "plan": ["更新后的步骤1", "更新后的步骤2"],
+  "response": "string|null"
 }
 ```
 
 补充规则：
 
-1. 仅在 `needs_replan_after_clarification=true` 时允许调用 replan。
+1. 仅在 `needs_replan=true` 时允许调用 replan。
 2. replan 成功后必须原子更新：
-   - `plan_items`（替换为新计划）
-   - `current_plan_index`（默认重置为 0，后续可扩展为模型返回游标）
-   - `needs_replan_after_clarification=false`
-3. 若 replan 返回空计划（`plan=[]`）：
-   - 视为合法但不可直接结束；
-   - 需立即进入一次 thought，要求输出 `done` 或 `ask_user`。
+   - `status=replanned` 时：替换 `plan_items`，并根据剩余计划对齐 `current_plan_index`
+   - `status=done` 时：输出最终 `response` 并结束外层循环
+   - `needs_replan=false`
+3. `status=replanned` 时 plan 不可为空；`status=done` 时 `response` 必填。
 
 ---
 
@@ -205,38 +209,36 @@ else:
         task = new task
         plan_once(task)
 
-    while True:
+    while True:  # 外层：计划推进
         if step_count >= max_steps:
             return step_limit_fallback
 
         if task.awaiting_clarification:
             suspend and wait user input
 
-        if task.needs_replan_after_clarification:
-            replan(task)  # only here
+        if task.needs_replan:
+            replan(task)
             step_count += 1
 
-        thought = think_for_current_step(task)
-        step_count += 1
+        while True:  # 内层：当前子任务 reAct
+            thought = think_for_current_step(task)
+            step_count += 1
 
-        if thought.ask_user:
-            task.awaiting_clarification = True
-            return "请确认：..."
+            if thought.ask_user:
+                task.awaiting_clarification = True
+                return "请确认：..."
 
-        if thought.step_done:
-            task.current_plan_index += 1
-            if all steps completed:
-                # 不直接返回，要求再来一轮 thought 显式给出 done
-                continue
-            continue
+            if thought.done:
+                task.current_plan_index += 1
+                if thought.response:
+                    task.pending_final_response = thought.response
+                task.needs_replan = True
+                break  # 子任务完成，回外层做 replan
 
-        if thought.done:
-            return final response
-
-        action_result = execute_tool(thought.next_action)
-        step_count += 1
-        append_observation(action_result)
-        update_step_metrics()
+            action_result = execute_tool(thought.next_action)
+            step_count += 1
+            append_observation(action_result)
+            update_step_metrics()
 ```
 
 ---
@@ -250,7 +252,7 @@ else:
 3. `思考决策：执行动作/步骤完成/请求澄清/任务完成`
 4. `步骤动作：tool -> input`
 5. `步骤结果：成功|失败`
-6. `重规划完成：共 M 步`（仅澄清后）
+6. `重规划完成：共 M 步`（每个子任务内层完成后）
 
 注意：仍不输出模型原始推理链，不引入公开 CoT。
 
@@ -271,10 +273,10 @@ else:
 
 ## 9. 风险与应对
 
-### 9.1 风险：计划一旦偏差，缺少中途 replan
+### 9.1 风险：子任务级 replan 频率提升导致模型调用开销增加
 
-- 影响：工具失败后可能在错误计划上空转。
-- 应对：thought 可在连续失败阈值后强制 ask_user，借澄清触发 replan。
+- 影响：每个子任务完成后都重规划，token 与时延上升。
+- 应对：保持 replan 输出结构轻量；必要时增加“低变化场景跳过重规划”策略阈值。
 
 ### 9.2 风险：状态机复杂度上升
 
@@ -293,10 +295,10 @@ else:
 ### 10.1 新增测试
 
 1. 首次输入只触发一次 plan（后续不重复调 plan）。
-2. 无澄清场景下，永不触发 replan。
-3. ask_user 后输入澄清，仅触发一次 replan。
+2. 无澄清场景下，完成一个子任务循环后会触发 replan。
+3. ask_user 后输入澄清，恢复执行时同样触发 replan。
 4. thought 可按顺序推进多个计划项直至完成。
-5. 工具失败后 thought 继续同计划项处理（不立即 replan）。
+5. 工具失败后会记录 observation，并继续留在子任务内层循环；子任务完成后再触发 replan。
 6. `thought` 与 `replan` 会计入 `step_count`，并参与上限判定。
 7. 超步数上限时仍返回“已完成部分 + 未完成原因 + 下一步建议”。
 8. 空计划（`plan=[]`）场景会触发 thought 显式输出 `done/ask_user`，不会直接崩溃或卡死。
@@ -319,8 +321,8 @@ else:
    - 首次只调 plan；动作仍走旧接口，验证不回归。
 3. **阶段 C：thought_loop 接入**
    - 以 thought 决策替代“每步 planner 决策”。
-4. **阶段 D：澄清后 replan 接入**
-   - 限制 replan 触发条件为“用户澄清后”。
+4. **阶段 D：子任务后 replan 接入**
+   - 将 replan 触发条件收敛为“每个子任务内层完成后 + 澄清恢复后”。
 5. **阶段 E：清理旧接口与文档/测试同步**
    - 删除旧 planner 单契约逻辑，统一三契约。
 
@@ -328,4 +330,4 @@ else:
 
 ## 12. 本文档结论
 
-在“plan 仅首次、replan 仅澄清后”的约束下，推荐将当前单一 planner 拆为三职责模块，并以 thought 作为执行编排核心。该方案可满足需求，同时保留 slash 命令直通与现有工具契约，后续编码应采用分阶段迁移以降低回归风险。
+在“plan 仅首次、每个子任务完成后 replan 跟进进度”的约束下，推荐将当前单一 planner 拆为三职责模块，并以 thought 作为执行编排核心。该方案可满足需求，同时保留 slash 命令直通与现有工具契约，后续编码应采用分阶段迁移以降低回归风险。

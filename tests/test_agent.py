@@ -12,10 +12,11 @@ from assistant_app.agent import (
     _try_parse_json,
 )
 from assistant_app.db import AssistantDB
+from assistant_app.planner_thought import normalize_thought_decision
 from assistant_app.search import SearchResult
 
 
-def _planner_continue(tool: str, action_input: str, plan: list[str] | None = None) -> str:
+def _thought_continue(tool: str, action_input: str, plan: list[str] | None = None) -> str:
     payload = {
         "status": "continue",
         "plan": plan or ["执行下一步"],
@@ -25,21 +26,21 @@ def _planner_continue(tool: str, action_input: str, plan: list[str] | None = Non
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _planner_planned(plan: list[str] | None = None) -> str:
+def _thought_ask_user(question: str, current_step: str = "待澄清") -> str:
     payload = {
-        "status": "planned",
-        "plan": plan or ["执行下一步"],
+        "status": "ask_user",
+        "current_step": current_step,
+        "next_action": None,
+        "question": question,
+        "response": None,
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _planner_step_done(current_step: str, response: str | None = None) -> str:
+def _planner_planned(plan: list[str] | None = None) -> str:
     payload = {
-        "status": "step_done",
-        "current_step": current_step,
-        "next_action": None,
-        "question": None,
-        "response": response,
+        "status": "planned",
+        "plan": plan or ["执行下一步"],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -62,6 +63,48 @@ def _planner_done(response: str, plan: list[str] | None = None) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _planner_done_without_response(current_step: str = "执行完成") -> str:
+    payload = {
+        "status": "done",
+        "current_step": current_step,
+        "next_action": None,
+        "question": None,
+        "response": None,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _extract_phase_from_messages(messages: list[dict[str, str]]) -> str:
+    if not messages:
+        return ""
+    payload = _try_parse_json(messages[-1].get("content", ""))
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("phase") or "").strip().lower()
+
+
+def _fallback_replan_from_messages(messages: list[dict[str, str]]) -> str:
+    if not messages:
+        return _planner_done("已完成。")
+    payload = _try_parse_json(messages[-1].get("content", ""))
+    if not isinstance(payload, dict):
+        return _planner_done("已完成。")
+    pending_final = str(payload.get("pending_final_response") or "").strip()
+    if pending_final:
+        return _planner_done(pending_final)
+    raw_plan = payload.get("latest_plan")
+    if isinstance(raw_plan, list):
+        plan = [str(item).strip() for item in raw_plan if str(item).strip()]
+        if plan:
+            raw_index = payload.get("current_plan_index")
+            if isinstance(raw_index, int) and 0 <= raw_index < len(plan):
+                remaining = plan[raw_index:]
+                if remaining:
+                    return _planner_replanned(remaining)
+            return _planner_replanned(plan)
+    return _planner_done("已完成。")
+
+
 class FakeLLMClient:
     def __init__(self, responses: list[str] | None = None) -> None:
         self.responses = responses or []
@@ -71,6 +114,26 @@ class FakeLLMClient:
 
     def reply(self, messages: list[dict[str, str]]) -> str:
         self.calls.append(messages)
+        phase = _extract_phase_from_messages(messages)
+
+        if phase == "replan":
+            if self._cursor < len(self.responses):
+                candidate = self.responses[self._cursor]
+                parsed = _try_parse_json(candidate)
+                if isinstance(parsed, dict):
+                    status = str(parsed.get("status") or "").strip().lower()
+                    if status in {"replanned", "done"}:
+                        self.model_call_count += 1
+                        self._cursor += 1
+                        return candidate
+                    # Backward-compatible tests may omit explicit replanned payload.
+                    if status in {"planned", "continue"}:
+                        return _fallback_replan_from_messages(messages)
+                self.model_call_count += 1
+                self._cursor += 1
+                return candidate
+            return _fallback_replan_from_messages(messages)
+
         self.model_call_count += 1
         if self._cursor < len(self.responses):
             result = self.responses[self._cursor]
@@ -499,10 +562,10 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life --priority 1"),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life --priority 1"),
                 _planner_done("已添加待办。"),
                 _planner_planned(["查看待办", "总结结果"]),
-                _planner_continue("todo", "/todo list --tag life"),
+                _thought_continue("todo", "/todo list --tag life"),
                 _planner_done("已查看待办：买牛奶。"),
             ]
         )
@@ -523,10 +586,10 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会"),
+                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会"),
                 _planner_done("已添加日程。"),
                 _planner_planned(["查看日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule list"),
+                _thought_continue("schedule", "/schedule list"),
                 _planner_done("已查看日程：周会。"),
             ]
         )
@@ -543,7 +606,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --duration 45"),
+                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --duration 45"),
                 _planner_done("已添加日程 (45 分钟)。"),
             ]
         )
@@ -560,7 +623,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增重复日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --interval 10080 --times 3"),
+                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --interval 10080 --times 3"),
                 _planner_done("已添加重复日程 3 条。"),
             ]
         )
@@ -579,7 +642,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会"),
+                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会"),
                 _planner_done("日程冲突：站会"),
             ]
         )
@@ -594,7 +657,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["查看周视图", "总结结果"]),
-                _planner_continue("schedule", "/schedule view week 2026-02-16"),
+                _thought_continue("schedule", "/schedule view week 2026-02-16"),
                 _planner_done("已查看周会。"),
             ]
         )
@@ -613,7 +676,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["搜索待办", "总结结果"]),
-                _planner_continue("todo", "/todo search 牛奶 --tag life"),
+                _thought_continue("todo", "/todo search 牛奶 --tag life"),
                 _planner_done("已返回搜索结果：买牛奶。"),
             ]
         )
@@ -631,7 +694,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["查看 today 视图", "总结结果"]),
-                _planner_continue("todo", "/todo list --view today"),
+                _thought_continue("todo", "/todo list --view today"),
                 _planner_done("已查看 today 视图：今天复盘。"),
             ]
         )
@@ -648,7 +711,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["更新待办", "总结结果"]),
-                _planner_continue(
+                _thought_continue(
                     "todo",
                     "/todo update 1 买牛奶和面包 --tag life --priority 2 "
                     "--due 2026-02-26 20:00 --remind 2026-02-26 19:30",
@@ -676,7 +739,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["更新待办提醒", "总结结果"]),
-                _planner_continue("todo", "/todo update 1 准备周报 --tag work --remind 2026-02-26 19:30"),
+                _thought_continue("todo", "/todo update 1 准备周报 --tag work --remind 2026-02-26 19:30"),
                 _planner_done("已更新待办 #1。"),
             ]
         )
@@ -697,7 +760,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["删除日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule delete 1"),
+                _thought_continue("schedule", "/schedule delete 1"),
                 _planner_done("日程 #1 已删除。"),
             ]
         )
@@ -712,10 +775,10 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["停用重复", "总结结果"]),
-                _planner_continue("schedule", "/schedule repeat 1 off"),
+                _thought_continue("schedule", "/schedule repeat 1 off"),
                 _planner_done("已停用日程 #1 的重复规则。"),
                 _planner_planned(["启用重复", "总结结果"]),
-                _planner_continue("schedule", "/schedule repeat 1 on"),
+                _thought_continue("schedule", "/schedule repeat 1 on"),
                 _planner_done("已启用日程 #1 的重复规则。"),
             ]
         )
@@ -732,7 +795,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["更新日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule update 1 2026-02-21 11:00 周会-改"),
+                _thought_continue("schedule", "/schedule update 1 2026-02-21 11:00 周会-改"),
                 _planner_done("已更新日程 (35 分钟)。"),
             ]
         )
@@ -768,8 +831,8 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增待办", "查看列表", "总结"]),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life"),
-                _planner_continue("todo", "/todo list --tag life"),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life"),
+                _thought_continue("todo", "/todo list --tag life"),
                 _planner_done("已完成：新增并查看了 life 标签待办。"),
             ]
         )
@@ -784,11 +847,46 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(todo.tag, "life")
         self.assertEqual(fake_llm.model_call_count, 4)
 
+    def test_replan_runs_after_each_subtask_loop(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["查看今天日程"]),
+                _thought_continue("schedule", "/schedule view day 2026-02-16"),
+                _planner_done_without_response("查看今天日程"),
+                _planner_replanned(["总结结果"]),
+                _planner_done("已查看今天日程。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        self.db.add_schedule("周会", "2026-02-16 09:00")
+
+        response = agent.handle_input("看一下今天的日程")
+        self.assertIn("已查看今天日程", response)
+        phases = [_extract_phase_from_messages(call) for call in fake_llm.calls]
+        self.assertGreaterEqual(len(phases), 5)
+        self.assertEqual(phases[:5], ["plan", "thought", "thought", "replan", "thought"])
+
+    def test_thought_done_only_marks_subtask_and_replan_decides_final(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["汇总结果"]),
+                _planner_done_without_response("汇总结果"),
+                _planner_done("最终结论：今天有 1 条日程。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        self.db.add_schedule("站会", "2026-02-16 10:00")
+
+        response = agent.handle_input("看一下今天的日程并总结")
+        self.assertIn("最终结论", response)
+        phases = [_extract_phase_from_messages(call) for call in fake_llm.calls]
+        self.assertEqual(phases[:3], ["plan", "thought", "replan"])
+
     def test_plan_replan_emits_progress_messages(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["添加待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life"),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life"),
                 _planner_done("已完成添加。"),
             ]
         )
@@ -810,7 +908,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["添加待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life", plan=["添加待办", "总结结果"]),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life", plan=["添加待办", "总结结果"]),
                 _planner_done("完成。", plan=["添加待办", "总结结果"]),
             ]
         )
@@ -826,12 +924,12 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("完成", response)
         self.assertTrue(any("当前计划项：1/2 - 添加待办" in item for item in progress_logs))
 
-    def test_plan_replan_step_done_advances_current_plan_item(self) -> None:
+    def test_plan_replan_done_advances_current_plan_item(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["整理输入", "执行添加"]),
-                _planner_step_done("整理输入"),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life", plan=["整理输入", "执行添加"]),
+                _planner_done_without_response("整理输入"),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life", plan=["整理输入", "执行添加"]),
                 _planner_done("完成。", plan=["整理输入", "执行添加"]),
             ]
         )
@@ -846,17 +944,43 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("先整理再创建待办")
         self.assertIn("完成", response)
         self.assertTrue(any("当前计划项：1/2 - 整理输入" in item for item in progress_logs))
-        self.assertTrue(any("当前计划项：2/2 - 执行添加" in item for item in progress_logs))
+        self.assertTrue(
+            any("当前计划项：2/2 - 执行添加" in item for item in progress_logs)
+            or any("当前计划项：1/1 - 执行添加" in item for item in progress_logs)
+        )
         todo = self.db.get_todo(1)
         self.assertIsNotNone(todo)
         assert todo is not None
         self.assertEqual(todo.content, "买牛奶")
 
+    def test_done_loop_after_plan_completed_returns_guarded_summary(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["查看待办"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done_without_response("查看待办"),
+                _planner_done_without_response("查看待办"),
+                _planner_done_without_response("查看待办"),
+            ]
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=fake_llm,
+            search_provider=FakeSearchProvider(),
+            plan_replan_max_steps=100,
+            plan_continuous_failure_limit=2,
+        )
+
+        response = agent.handle_input("看一下全部待办")
+        self.assertIn("计划步骤已执行完毕，但模型未返回可用的子任务结论", response)
+        self.assertNotIn("已达到最大执行步数", response)
+        self.assertEqual(fake_llm.model_call_count, 6)
+
     def test_plan_replan_progress_uses_planned_steps_not_max_only(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["添加待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life", plan=["添加待办", "总结结果"]),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life", plan=["添加待办", "总结结果"]),
                 _planner_done("完成。", plan=["添加待办", "总结结果"]),
             ]
         )
@@ -877,8 +1001,8 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["步骤A", "步骤B", "步骤C"]),
-                _planner_continue("todo", "/todo list", plan=["步骤A", "步骤B", "步骤C"]),
-                _planner_continue("todo", "/todo list", plan=["收尾"]),
+                _thought_continue("todo", "/todo list", plan=["步骤A", "步骤B", "步骤C"]),
+                _thought_continue("todo", "/todo list", plan=["收尾"]),
                 _planner_done("完成。", plan=["收尾"]),
             ]
         )
@@ -899,8 +1023,8 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["步骤A", "步骤B"]),
-                _planner_continue("todo", "/todo list", plan=["步骤A", "步骤B"]),
-                _planner_continue("todo", "/todo list", plan=["步骤A", "步骤B"]),
+                _thought_continue("todo", "/todo list", plan=["步骤A", "步骤B"]),
+                _thought_continue("todo", "/todo list", plan=["步骤A", "步骤B"]),
                 _planner_done("完成。", plan=["步骤A", "步骤B"]),
             ]
         )
@@ -934,14 +1058,17 @@ class AssistantAgentTest(unittest.TestCase):
         planner_user_payload = json.loads(first_messages[1]["content"])
         self.assertIn("tool_contract", planner_user_payload)
         self.assertIn("schedule", planner_user_payload["tool_contract"])
+        self.assertIn("time_unit_contract", planner_user_payload)
+        self.assertIn("schedule_duration_unit", planner_user_payload["time_unit_contract"])
+        self.assertIn("180", planner_user_payload["time_unit_contract"]["schedule_duration_unit"])
 
     def test_plan_replan_ask_user_flow(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认标签", "创建待办", "总结"]),
-                _planner_continue("ask_user", "这个待办要用什么标签？"),
+                _thought_ask_user("这个待办要用什么标签？", current_step="确认标签"),
                 _planner_replanned(["创建待办", "总结"]),
-                _planner_continue("todo", "/todo add 买牛奶 --tag life"),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life"),
                 _planner_done("已按 life 标签添加待办。"),
             ]
         )
@@ -961,10 +1088,16 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认 project 信息", "执行创建", "总结结果"]),
-                _planner_continue("ask_user", "请提供待办tag project的名称，以便我为您创建高优先级的项目。"),
+                _thought_ask_user(
+                    "请提供待办tag project的名称，以便我为您创建高优先级的项目。",
+                    current_step="确认 project 信息",
+                ),
                 _planner_replanned(["补充信息确认", "执行创建", "总结结果"]),
-                _planner_continue("ask_user", "请提供待办tag project的名称，以便我为您创建高优先级的项目。"),
-                _planner_continue("todo", "/todo add loop agent实现 --tag project --priority 0"),
+                _thought_ask_user(
+                    "请提供待办tag project的名称，以便我为您创建高优先级的项目。",
+                    current_step="补充信息确认",
+                ),
+                _thought_continue("todo", "/todo add loop agent实现 --tag project --priority 0"),
                 _planner_done("已创建 project 标签待办：loop agent实现。"),
             ]
         )
@@ -985,11 +1118,11 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认标签", "确认优先级", "创建待办", "总结"]),
-                _planner_continue("ask_user", "请确认标签是什么？"),
+                _thought_ask_user("请确认标签是什么？", current_step="确认标签"),
                 _planner_replanned(["确认优先级", "创建待办", "总结"]),
-                _planner_continue("ask_user", "还需要你再确认优先级。"),
+                _thought_ask_user("还需要你再确认优先级。", current_step="确认优先级"),
                 _planner_replanned(["创建待办", "总结"]),
-                _planner_continue("todo", "/todo add loop agent实现 --tag project --priority 0"),
+                _thought_continue("todo", "/todo add loop agent实现 --tag project --priority 0"),
                 _planner_done("已完成待办创建。"),
             ]
         )
@@ -1012,9 +1145,9 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认视图类型", "查看日程", "总结"]),
-                _planner_continue("ask_user", "你要看 day 还是 week 视图？"),
+                _thought_ask_user("你要看 day 还是 week 视图？", current_step="确认视图类型"),
                 _planner_replanned(["查看日程", "总结"]),
-                _planner_continue("schedule", "/schedule list"),
+                _thought_continue("schedule", "/schedule list"),
                 _planner_done("已查看当前窗口内日程。"),
             ]
         )
@@ -1055,7 +1188,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["收集信息", "执行创建"]),
-                _planner_continue("ask_user", "请确认标签是什么？", plan=["收集信息", "执行创建"]),
+                _thought_ask_user("请确认标签是什么？", current_step="收集信息"),
                 "not-json",
             ]
         )
@@ -1074,11 +1207,23 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("已达到最大执行步数（2）", second)
         self.assertEqual(fake_llm.model_call_count, 3)
 
+    def test_thought_contract_rejects_continue_with_ask_user_tool(self) -> None:
+        decision = normalize_thought_decision(
+            {
+                "status": "continue",
+                "current_step": "需要澄清",
+                "next_action": {"tool": "ask_user", "input": "补充标签信息"},
+                "question": None,
+                "response": None,
+            }
+        )
+        self.assertIsNone(decision)
+
     def test_plan_replan_internet_search_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["搜索资料", "总结结果"]),
-                _planner_continue("internet_search", "OpenAI Responses API"),
+                _thought_continue("internet_search", "OpenAI Responses API"),
                 _planner_done("我找到了 3 条相关资料。"),
             ]
         )
@@ -1100,7 +1245,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["循环查看待办"]),
-                _planner_continue("todo", "/todo list"),
+                _thought_continue("todo", "/todo list"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
@@ -1113,7 +1258,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认目标待办", "执行更新"]),
-                _planner_continue("ask_user", "你想操作哪个待办 id？"),
+                _thought_ask_user("你想操作哪个待办 id？", current_step="确认目标待办"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
@@ -1139,8 +1284,8 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认待办编号", "执行完成", "总结结果"]),
-                _planner_continue("todo", "/todo done"),
-                _planner_continue("todo", "/todo done 1"),
+                _thought_continue("todo", "/todo done"),
+                _thought_continue("todo", "/todo done 1"),
                 _planner_done("待办 #1 已完成。"),
             ]
         )
@@ -1185,7 +1330,7 @@ class AssistantAgentTest(unittest.TestCase):
             responses=[
                 "不是json",
                 _planner_planned(["新增待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 明天早上10 :00吃早饭"),
+                _thought_continue("todo", "/todo add 明天早上10 :00吃早饭"),
                 _planner_done("已添加待办：明天早上10 :00吃早饭。"),
             ]
         )
@@ -1203,7 +1348,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 准备周报 --tag work --remind 2026-02-25 09:00"),
+                _thought_continue("todo", "/todo add 准备周报 --tag work --remind 2026-02-25 09:00"),
                 _planner_done(
                     "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
                     "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
@@ -1220,7 +1365,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增待办", "总结结果"]),
-                _planner_continue("todo", "/todo add 整理文档 --priority -2"),
+                _thought_continue("todo", "/todo add 整理文档 --priority -2"),
                 _planner_done(
                     "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
                     "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
@@ -1261,7 +1406,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --times 2"),
+                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --times 2"),
                 _planner_done(
                     "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
                     "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]"
@@ -1278,7 +1423,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增日程", "总结结果"]),
-                _planner_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --duration 0"),
+                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --duration 0"),
                 _planner_done(
                     "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
                     "[--duration <>=1>] [--interval <>=1>] [--times <-1|>=2>]"
@@ -1295,7 +1440,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["查看月视图", "总结结果"]),
-                _planner_continue("schedule", "/schedule view month 2026-02-15"),
+                _thought_continue("schedule", "/schedule view month 2026-02-15"),
                 _planner_done("用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]"),
             ]
         )

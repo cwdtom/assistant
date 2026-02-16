@@ -6,7 +6,9 @@
 
 ## 2. 当前系统形态（重要）
 
-- 自然语言输入：统一走 plan->thought 主循环；仅在用户澄清后触发 replan（不再走 chat/legacy intent 分支）。
+- 自然语言输入：统一走 plan->thought 主循环；每个子任务的 thought->act->observe 循环完成后触发 replan 跟进进度，并由 replan 决定外层继续或结束（不再走 chat/legacy intent 分支）。
+- thought 契约：`status=ask_user` 负责澄清提问；`status=continue` 仅允许 todo/schedule/internet_search 工具动作。
+- planner 上下文包含 `time_unit_contract`，明确时长/间隔/次数/日期格式单位，供 plan/thought/replan 共用。
 - slash 命令：`/todo`、`/schedule`、`/view` 仍走确定性命令执行路径。
 - 搜索：默认 Bing，实现已解耦为 `SearchProvider` 可替换。
 - CLI 反馈：输出灰色“进度>”过程日志（可通过 env 关闭颜色）。
@@ -16,7 +18,11 @@
 - `assistant_app/cli.py`
   - CLI 启动、进度输出、配置注入。
 - `assistant_app/agent.py`
-  - plan/thought/replan 主循环、工具执行、slash 命令路由。
+  - 外层流程编排（plan 初始化、inner reAct 驱动、replan 收口判定）、工具执行、slash 命令路由。
+- `assistant_app/planner_plan_replan.py`
+  - plan/replan 的提示词与 JSON 契约归一化逻辑。
+- `assistant_app/planner_thought.py`
+  - thought 的提示词与 JSON 契约归一化逻辑。
 - `assistant_app/config.py`
   - `.env` 与环境变量加载（含策略参数）。
 - `assistant_app/db.py`
@@ -78,5 +84,6 @@ python3 -m ruff check assistant_app tests
 ## 8. 后续 session 建议做法
 
 1. 先看本文件 + 根 `README.md`，再按需翻历史文档。
-2. 修改行为时优先补单测（`tests/test_agent.py` / `tests/test_cli.py` / `tests/test_config.py`）。
-3. 涉及命令语义或配置项，务必同步更新 `README.md` 与 `.env.example`。
+2. `doc/archive/` 下文档是历史快照，不保证与当前实现逐行一致；实现口径以 `README.md`、本文件和源码为准。
+3. 修改行为时优先补单测（`tests/test_agent.py` / `tests/test_cli.py` / `tests/test_config.py`）。
+4. 涉及命令语义或配置项，务必同步更新 `README.md` 与 `.env.example`。

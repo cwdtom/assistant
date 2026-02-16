@@ -261,3 +261,165 @@
 4. 达到 20 步可正确兜底
 5. 现有 slash 命令与核心测试不回归
 6. README 与 doc 文档同步更新
+
+---
+
+## 14. 完整时序图（当前实现：plan -> thought -> act -> observe -> replan）
+
+> 说明：以下时序图对齐当前实现口径：  
+> 1) `plan` 仅在任务首次输入时触发；  
+> 2) `replan` 在每个子任务的 thought->act->observe 循环完成后触发（用户澄清恢复后同样触发）；  
+> 3) `thought/replan/tool` 都计步，`plan_once` 与 `ask_user` 等待不计步；  
+> 4) 每轮循环开头先检查步数上限。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant A as AssistantAgent
+    participant P as PendingPlanTask(状态)
+    participant L as LLM
+    participant T as Tool(todo/schedule/search)
+
+    U->>A: handle_input(text)
+
+    alt text == TASK_CANCEL_COMMAND
+        A->>A: 若有 pending_task 则清空
+        A-->>U: 已取消当前任务 / 当前没有进行中的任务
+    else text 以 "/" 开头
+        A->>A: 执行确定性命令路径 _handle_command()
+        Note over A,P: pending_task 不会被清空（若存在）
+        A-->>U: slash 命令执行结果
+    else 非 slash 自然语言
+        alt 未配置 LLM
+            A-->>U: 当前未配置 LLM
+        else 存在 pending_task(用户在回答澄清)
+            A->>P: clarification_history += 用户补充
+            A->>P: awaiting_clarification=false
+            A->>P: needs_replan=true
+            A->>A: _run_outer_plan_loop(task=pending_task)
+        else 新任务
+            A->>P: 创建 task(goal=text)
+            A->>A: _run_outer_plan_loop(task=new_task)
+        end
+
+        loop while True（主循环）
+            A->>P: 检查 step_count >= max_steps ?
+            alt 达到上限
+                A->>A: 生成 step-limit fallback
+                A-->>U: 已达到最大执行步数 + 已完成部分 + 未完成原因 + 下一步建议
+            else 未超限
+                A->>A: 输出进度日志（步骤进度）
+
+                opt plan 尚未初始化（仅首次）
+                    A->>L: 请求 PLAN payload (phase=plan)
+                    loop 请求重试(最多 1+retry_count 次)
+                        L-->>A: JSON
+                        A->>A: parse + normalize_plan_decision(status=planned)
+                    end
+                    alt plan 失败（含解析/字段校验失败）
+                        A-->>U: 计划执行服务暂时不可用
+                    else plan 成功
+                        A->>P: latest_plan=plan_items
+                        A->>P: current_plan_index=0
+                        A->>P: plan_initialized=true
+                        A->>A: 输出“规划完成/计划列表”
+                    end
+                end
+
+                alt awaiting_clarification == true
+                    A->>A: 保存 pending_task
+                    A-->>U: 请确认：请补充必要信息
+                else 继续
+                    opt needs_replan == true（每个子任务内层完成后/澄清恢复后）
+                        A->>P: step_count += 1（replan 计步）
+                        A->>L: 请求 REPLAN payload (phase=replan)
+                        loop 请求重试(最多 1+retry_count 次)
+                            L-->>A: JSON
+                            A->>A: parse + normalize_replan_decision(status=replanned)
+                        end
+                        alt replan 失败（含解析/字段校验失败）
+                            A->>P: planner_failure_rounds += 1
+                            A->>P: observation += replan失败
+                            alt 连续失败达到阈值
+                                A-->>U: 计划执行服务暂时不可用
+                            else 未到阈值
+                                A->>A: 输出“重规划失败，准备重试”
+                                Note over A,P: 回到 while 开头
+                            end
+                        else replan 成功
+                            A->>P: latest_plan=新计划
+                            A->>P: current_plan_index=0
+                            A->>P: needs_replan=false
+                            A->>P: planner_failure_rounds=0
+                            A->>A: 输出“重规划完成/计划列表”
+                        end
+                    end
+
+                    A->>A: 输出当前计划项 i/N
+                    A->>P: step_count += 1（thought 计步）
+                    A->>L: 请求 THOUGHT payload (phase=thought)
+                    loop 请求重试(最多 1+retry_count 次)
+                        L-->>A: JSON
+                        A->>A: parse + normalize_thought_decision
+                    end
+
+                    alt thought 失败（含解析/字段校验失败）
+                        A->>P: planner_failure_rounds += 1
+                        A->>P: observation += thought失败
+                        alt 连续失败达到阈值
+                            A-->>U: 计划执行服务暂时不可用
+                        else 未到阈值
+                            A->>A: 输出“思考失败，准备重试”
+                            Note over A,P: 回到 while 开头
+                        end
+                    else thought 成功
+                        A->>P: planner_failure_rounds=0
+                        A->>A: 根据 status 分支
+
+                        alt status == done
+                            A->>P: current_plan_index = min(index+1, len(plan))
+                            A->>P: 若有 response 则写入 pending_final_response
+                            A->>P: needs_replan=true
+                            Note over A,P: 跳出内层，交给外层 replan 决策是否收口
+                        else status == ask_user
+                            alt question 缺失
+                                A->>P: observation += ask_user缺字段
+                                Note over A,P: 回到 while 开头
+                            else 重复提问且用户已补充
+                                A->>P: ask_user_repeat_count += 1
+                                A->>P: observation += 重复提问
+                                alt 重复达到阈值
+                                    A-->>U: 无法完成重规划，请直接用 /todo 或 /schedule
+                                else 未到阈值
+                                    Note over A,P: 回到 while 开头
+                                end
+                            else 澄清轮次过多
+                                A-->>U: 澄清次数过多，请直接用 /todo 或 /schedule
+                            else 合法 ask_user
+                                A->>P: clarification_history += 助手提问
+                                A->>P: awaiting_clarification=true
+                                A->>P: 记录 last_ask_user_question
+                                A->>A: 保存 pending_task
+                                A-->>U: 请确认：{question}
+                            end
+                        else status == continue（执行动作）
+                            alt next_action 无效
+                                A->>P: observation += next_action无效
+                                Note over A,P: 回到 while 开头
+                            else next_action 有效
+                                A->>P: step_count += 1（tool 执行计步）
+                                A->>T: 执行 tool(input)
+                                T-->>A: result(ok/failed)
+                                A->>P: 追加 observation（截断后）
+                                A->>P: successful_steps/failed_steps 更新
+                                A->>A: 输出动作结果与完成情况
+                                Note over A,P: 回到 while 开头
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+```
