@@ -84,10 +84,12 @@ python main.py
 - 待办列表和待办详情均展示标签、优先级、创建时间、完成时间、截止时间、提醒时间（提醒需配合截止时间）
 - 进入 CLI 和退出 CLI 时，会自动清空当前终端显示历史（scrollback）
 - 自然语言任务会实时输出循环进度：步骤进度、计划列表、工具执行结果与完成情况
-- 支持自然语言命令（plan -> act -> observe -> replan 循环），模型会在 todo/schedule/internet_search/ask_user 四种工具中逐步决策
+- 支持自然语言命令（plan -> thought -> act -> observe -> replan 循环）
+- plan 仅在每个新任务开始时执行一次；replan 仅在用户澄清后触发
+- thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/ask_user 四种动作间切换
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认使用 Bing 作为搜索源，返回 Top-3 摘要和链接（实现解耦，可替换 provider）
-- 自然语言任务默认最多执行 20 个工具步骤，超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
+- 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`
   - `查看待办 1`
@@ -106,7 +108,7 @@ python main.py
   - `删除日程 1`
   - `查看待办`
   - `查看日程`
-- 直接输入任意文本：始终进入 plan-replan 流程（纯 plan-only，不再走 legacy intent/chat 分支）
+- 直接输入任意文本：始终进入 plan->thought->act->observe->replan 流程（纯 plan-only，不再走 legacy intent/chat 分支）
 
 ## 视图说明
 - `all`：全部待办（含已完成）

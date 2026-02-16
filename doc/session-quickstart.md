@@ -2,11 +2,11 @@
 
 ## 1. 项目一句话
 
-本项目是一个本地优先 CLI 个人助手：支持待办/日程管理，并通过 **plan -> act -> observe -> replan**（纯 plan-only）处理自然语言任务。
+本项目是一个本地优先 CLI 个人助手：支持待办/日程管理，并通过 **plan -> thought -> act -> observe -> replan**（纯 plan-only）处理自然语言任务。
 
 ## 2. 当前系统形态（重要）
 
-- 自然语言输入：统一走 plan-replan 循环（不再走 chat/legacy intent 分支）。
+- 自然语言输入：统一走 plan->thought 主循环；仅在用户澄清后触发 replan（不再走 chat/legacy intent 分支）。
 - slash 命令：`/todo`、`/schedule`、`/view` 仍走确定性命令执行路径。
 - 搜索：默认 Bing，实现已解耦为 `SearchProvider` 可替换。
 - CLI 反馈：输出灰色“进度>”过程日志（可通过 env 关闭颜色）。
@@ -16,7 +16,7 @@
 - `assistant_app/cli.py`
   - CLI 启动、进度输出、配置注入。
 - `assistant_app/agent.py`
-  - plan-replan 主循环、工具执行、slash 命令路由。
+  - plan/thought/replan 主循环、工具执行、slash 命令路由。
 - `assistant_app/config.py`
   - `.env` 与环境变量加载（含策略参数）。
 - `assistant_app/db.py`
