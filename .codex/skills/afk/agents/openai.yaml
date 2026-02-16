@@ -1,0 +1,4 @@
+interface:
+  display_name: "AFK Mode"
+  short_description: "Enable low-interruption project execution with AFK on/off control"
+  default_prompt: "Use $afk to run project work with minimal confirmations when afk=on and normal confirmations when afk=off."
