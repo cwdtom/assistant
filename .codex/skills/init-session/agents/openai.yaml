@@ -1,0 +1,4 @@
+interface:
+  display_name: "Init Session"
+  short_description: "基于 README、doc 和 commit 历史完成 session 初始化"
+  default_prompt: "Use $init-session to bootstrap context from README, doc guides, and recent commits."
