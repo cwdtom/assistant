@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from assistant_app.agent import (
     AssistantAgent,
@@ -47,10 +48,19 @@ def _planner_planned(plan: list[str] | None = None) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _planner_replanned(plan: list[str] | None = None) -> str:
+def _planner_replanned(
+    plan: list[str] | None = None,
+    *,
+    completed: set[str] | None = None,
+) -> str:
+    completed_tasks = completed or set()
+    plan_payload = [
+        {"task": item, "completed": item in completed_tasks}
+        for item in (plan or ["执行下一步"])
+    ]
     payload = {
         "status": "replanned",
-        "plan": plan or ["执行下一步"],
+        "plan": plan_payload,
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -85,25 +95,71 @@ def _extract_phase_from_messages(messages: list[dict[str, str]]) -> str:
     return str(payload.get("phase") or "").strip().lower()
 
 
+def _is_summary_like_step(step: str) -> bool:
+    normalized = step.strip()
+    if not normalized:
+        return True
+    keywords = ("总结", "汇总", "收尾", "输出结果", "最终", "回复")
+    return any(keyword in normalized for keyword in keywords)
+
+
+def _extract_plan_items_from_latest_plan(raw_plan: Any) -> list[str]:
+    if not isinstance(raw_plan, list):
+        return []
+    extracted: list[str] = []
+    for item in raw_plan:
+        if isinstance(item, dict):
+            task = str(item.get("task") or item.get("item") or "").strip()
+            if task:
+                extracted.append(task)
+            continue
+        step = str(item).strip()
+        if step:
+            extracted.append(step)
+    return extracted
+
+
 def _fallback_replan_from_messages(messages: list[dict[str, str]]) -> str:
     if not messages:
         return _planner_done("已完成。")
     payload = _try_parse_json(messages[-1].get("content", ""))
     if not isinstance(payload, dict):
         return _planner_done("已完成。")
-    pending_final = str(payload.get("pending_final_response") or "").strip()
-    if pending_final:
-        return _planner_done(pending_final)
     raw_plan = payload.get("latest_plan")
     if isinstance(raw_plan, list):
-        plan = [str(item).strip() for item in raw_plan if str(item).strip()]
+        plan = _extract_plan_items_from_latest_plan(raw_plan)
         if plan:
             raw_index = payload.get("current_plan_index")
-            if isinstance(raw_index, int) and 0 <= raw_index < len(plan):
-                remaining = plan[raw_index:]
-                if remaining:
-                    return _planner_replanned(remaining)
+            if isinstance(raw_index, int):
+                if 0 <= raw_index < len(plan):
+                    remaining = plan[raw_index:]
+                    if remaining:
+                        if all(_is_summary_like_step(item) for item in remaining):
+                            completed_subtasks = payload.get("completed_subtasks")
+                            if isinstance(completed_subtasks, list) and completed_subtasks:
+                                last = completed_subtasks[-1]
+                                if isinstance(last, dict):
+                                    result = str(last.get("result") or "").strip()
+                                    if result:
+                                        return _planner_done(result)
+                        return _planner_replanned(remaining)
+                if raw_index >= len(plan):
+                    completed_subtasks = payload.get("completed_subtasks")
+                    if isinstance(completed_subtasks, list) and completed_subtasks:
+                        last = completed_subtasks[-1]
+                        if isinstance(last, dict):
+                            result = str(last.get("result") or "").strip()
+                            if result:
+                                return _planner_done(result)
+                    return _planner_done("已完成。")
             return _planner_replanned(plan)
+    completed_subtasks = payload.get("completed_subtasks")
+    if isinstance(completed_subtasks, list) and completed_subtasks:
+        last = completed_subtasks[-1]
+        if isinstance(last, dict):
+            result = str(last.get("result") or "").strip()
+            if result:
+                return _planner_done(result)
     return _planner_done("已完成。")
 
 
@@ -584,6 +640,45 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(life_todos[0].content, "买牛奶")
         self.assertEqual(fake_llm.model_call_count, 6)
 
+    def test_final_response_comes_from_replan_done(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["列出所有待办事项"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("已执行 /todo list 命令列出所有待办事项，当前子任务完成"),
+                _planner_done("已列出所有待办事项。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_todo("今天完成联调")
+
+        result = agent.handle_input("看一下所有待办")
+
+        self.assertIn("已列出所有待办事项。", result)
+        self.assertNotIn("待办列表:", result)
+
+    def test_final_response_not_accumulated_from_inner_done_messages(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["列出待办", "列出日程"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("待办查询完成。"),
+                _planner_replanned(["列出日程"]),
+                _thought_continue("schedule", "/schedule view day 2026-02-20"),
+                _planner_done("日程查询完成。"),
+                _planner_done("全部查询完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_todo("今天完成联调")
+        agent.handle_input("/schedule add 2026-02-20 10:00 周会")
+
+        result = agent.handle_input("把待办和日程都查一下")
+
+        self.assertIn("全部查询完成。", result)
+        self.assertNotIn("待办查询完成。", result)
+        self.assertNotIn("日程查询完成。", result)
+
     def test_nl_schedule_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -824,7 +919,7 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("今天怎么安排")
 
         self.assertIn("已关闭 chat 直聊分支", response)
-        self.assertEqual(fake_llm.model_call_count, 2)
+        self.assertEqual(fake_llm.model_call_count, 3)
 
         history = self.db.recent_messages(limit=2)
         self.assertEqual(history, [])
@@ -847,14 +942,14 @@ class AssistantAgentTest(unittest.TestCase):
         assert todo is not None
         self.assertEqual(todo.content, "买牛奶")
         self.assertEqual(todo.tag, "life")
-        self.assertEqual(fake_llm.model_call_count, 4)
+        self.assertEqual(fake_llm.model_call_count, 5)
 
     def test_replan_runs_after_each_subtask_loop(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["查看今天日程"]),
                 _thought_continue("schedule", "/schedule view day 2026-02-16"),
-                _planner_done_without_response("查看今天日程"),
+                _planner_done("查看今天日程完成。"),
                 _planner_replanned(["总结结果"]),
                 _planner_done("已查看今天日程。"),
             ]
@@ -872,7 +967,7 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["汇总结果"]),
-                _planner_done_without_response("汇总结果"),
+                _planner_done("汇总结果已完成。"),
                 _planner_done("最终结论：今天有 1 条日程。"),
             ]
         )
@@ -974,9 +1069,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
 
         response = agent.handle_input("看一下全部待办")
-        self.assertIn("计划步骤已执行完毕，但模型未返回可用的子任务结论", response)
+        self.assertIn("计划执行服务暂时不可用", response)
         self.assertNotIn("已达到最大执行步数", response)
-        self.assertEqual(fake_llm.model_call_count, 6)
+        self.assertGreaterEqual(fake_llm.model_call_count, 4)
 
     def test_plan_replan_progress_uses_planned_steps_not_max_only(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1041,7 +1136,7 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("测试不重复输出计划列表")
         self.assertIn("完成", response)
         plan_logs = [item for item in progress_logs if "计划列表" in item]
-        self.assertEqual(len(plan_logs), 1)
+        self.assertEqual(len(plan_logs), 2)
 
     def test_plan_prompt_excludes_tool_and_time_contract(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1061,6 +1156,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("tool_contract", planner_user_payload)
         self.assertNotIn("observations", planner_user_payload)
         self.assertNotIn("time_unit_contract", planner_user_payload)
+        self.assertNotIn("pending_final_response", planner_user_payload)
         self.assertIn("completed_subtasks", planner_user_payload)
 
     def test_replan_prompt_excludes_tool_context_and_uses_completed_subtasks(self) -> None:
@@ -1082,6 +1178,15 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("tool_contract", replan_payload)
         self.assertNotIn("observations", replan_payload)
         self.assertNotIn("time_unit_contract", replan_payload)
+        self.assertNotIn("pending_final_response", replan_payload)
+        latest_plan = replan_payload.get("latest_plan", [])
+        self.assertEqual(
+            latest_plan,
+            [
+                {"task": "步骤一", "completed": True},
+                {"task": "步骤二", "completed": False},
+            ],
+        )
         completed = replan_payload.get("completed_subtasks", [])
         self.assertTrue(completed)
         self.assertEqual(completed[0].get("item"), "步骤一")
@@ -1121,6 +1226,134 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("步骤一已完成", completed[0].get("result", ""))
         current_subtask = second_thought_payload.get("current_subtask", {})
         self.assertEqual(current_subtask.get("item"), "步骤二")
+
+    def test_replan_payload_completed_subtasks_appends_history(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一", "步骤二"]),
+                _planner_done("步骤一已完成。"),
+                _planner_replanned(["步骤二"]),
+                _planner_done("步骤二已完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 completed_subtasks 覆盖策略")
+        self.assertIn("全部完成", response)
+
+        replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
+        self.assertEqual(len(replan_calls), 2)
+        last_replan_payload = json.loads(replan_calls[-1][1]["content"])
+        completed = last_replan_payload.get("completed_subtasks", [])
+        self.assertEqual(len(completed), 2)
+        self.assertEqual(completed[0].get("item"), "步骤一")
+        self.assertEqual(completed[1].get("item"), "步骤二")
+        self.assertIn("步骤一已完成", completed[0].get("result", ""))
+        self.assertIn("步骤二已完成", completed[1].get("result", ""))
+
+    def test_replan_uses_llm_completed_flags_after_reorder(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["A", "B"]),
+                _planner_done("A 已完成。"),
+                json.dumps(
+                    {
+                        "status": "replanned",
+                        "plan": [
+                            {"task": "B", "completed": True},
+                            {"task": "A", "completed": False},
+                        ],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                _planner_done("A 再次完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 replan 重排状态")
+        self.assertIn("全部完成", response)
+
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertGreaterEqual(len(thought_calls), 2)
+        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        current_subtask = second_thought_payload.get("current_subtask", {})
+        self.assertEqual(current_subtask.get("item"), "A")
+
+    def test_step_limit_summary_excludes_llm_decision_records(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一"]),
+                _thought_continue("todo", "/todo list"),
+                _thought_continue("todo", "/todo list"),
+                _thought_continue("todo", "/todo list"),
+            ]
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=fake_llm,
+            search_provider=FakeSearchProvider(),
+            plan_replan_max_steps=3,
+        )
+
+        response = agent.handle_input("测试 step_limit 总结过滤")
+        self.assertIn("已达到最大执行步数", response)
+        self.assertIn("- todo: /todo list", response)
+        self.assertNotIn("- thought:", response)
+
+    def test_thought_context_observations_append_llm_and_tool_results_in_subtask(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("步骤一已完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        self.db.add_todo("买牛奶")
+
+        response = agent.handle_input("测试 current_subtask_observations 追加")
+        self.assertIn("全部完成", response)
+
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertEqual(len(thought_calls), 2)
+        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        observations = second_thought_payload.get("current_subtask_observations", [])
+        self.assertGreaterEqual(len(observations), 2)
+        observed_tools = {str(item.get("tool")) for item in observations}
+        self.assertIn("thought", observed_tools)
+        self.assertIn("todo", observed_tools)
+
+    def test_thought_context_reinitializes_observations_for_each_subtask(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一", "步骤二"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("步骤一完成。"),
+                _planner_replanned(["步骤二"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("步骤二完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        self.db.add_todo("买牛奶")
+
+        response = agent.handle_input("测试内层上下文按子任务重置")
+        self.assertIn("全部完成", response)
+
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertGreaterEqual(len(thought_calls), 3)
+        first_thought_second_subtask = json.loads(thought_calls[2][1]["content"])
+        observations = first_thought_second_subtask.get("current_subtask_observations", [])
+        self.assertEqual(observations, [])
+        completed = first_thought_second_subtask.get("completed_subtasks", [])
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].get("item"), "步骤一")
 
     def test_llm_request_and_response_are_logged(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1201,6 +1434,18 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNotNone(todo)
         assert todo is not None
         self.assertEqual(todo.tag, "life")
+
+        replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
+        self.assertTrue(replan_calls)
+        first_replan_payload = json.loads(replan_calls[0][1]["content"])
+        clarification_history = first_replan_payload.get("clarification_history", [])
+        self.assertEqual(
+            clarification_history,
+            [
+                {"role": "assistant_question", "content": "这个待办要用什么标签？"},
+                {"role": "user_answer", "content": "life"},
+            ],
+        )
 
     def test_plan_replan_repeated_ask_user_will_replan(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1412,7 +1657,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("把这个待办标记完成")
         self.assertIn("待办 #1 已完成", response)
-        self.assertEqual(fake_llm.model_call_count, 4)
+        self.assertEqual(fake_llm.model_call_count, 5)
 
     def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(

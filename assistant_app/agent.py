@@ -38,7 +38,6 @@ DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
 DEFAULT_PLAN_REPLAN_MAX_STEPS = 20
 DEFAULT_PLAN_REPLAN_RETRY_COUNT = 2
 DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT = 10000
-DEFAULT_PLAN_OBSERVATION_HISTORY_LIMIT = 100
 DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT = 2
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 DEFAULT_INTERNET_SEARCH_TOP_K = 3
@@ -99,29 +98,53 @@ class CompletedSubtask:
 
 
 @dataclass
+class ClarificationTurn:
+    role: str
+    content: str
+
+
+@dataclass
+class PlanStep:
+    item: str
+    completed: bool = False
+
+
+@dataclass
+class OuterPlanContext:
+    goal: str
+    clarification_history: list[ClarificationTurn] = field(default_factory=list)
+    latest_plan: list[PlanStep] = field(default_factory=list)
+    current_plan_index: int = 0
+    completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
+
+
+@dataclass
+class InnerReActContext:
+    current_subtask: str = ""
+    completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
+    observations: list[PlannerObservation] = field(default_factory=list)
+    response: str | None = None
+
+
+@dataclass
 class PendingPlanTask:
     goal: str
-    clarification_history: list[str] = field(default_factory=list)
+    outer_context: OuterPlanContext | None = None
+    inner_context: InnerReActContext | None = None
     observations: list[PlannerObservation] = field(default_factory=list)
-    completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
-    current_subtask_observation_start: int = 0
     step_count: int = 0
     plan_initialized: bool = False
     awaiting_clarification: bool = False
     # True means outer loop should run replan before next thought cycle.
     needs_replan: bool = False
-    latest_plan: list[str] = field(default_factory=list)
-    current_plan_index: int = 0
-    last_thought_snapshot: str | None = None
     planner_failure_rounds: int = 0
     last_ask_user_question: str | None = None
     last_ask_user_clarification_len: int = 0
     ask_user_repeat_count: int = 0
     post_plan_done_count: int = 0
-    pending_final_response: str | None = None
     successful_steps: int = 0
     failed_steps: int = 0
-    last_reported_plan_signature: tuple[str, ...] | None = None
+    last_reported_plan_signature: tuple[tuple[str, bool], ...] | None = None
 
 
 class AssistantAgent:
@@ -135,7 +158,6 @@ class AssistantAgent:
         plan_replan_max_steps: int = DEFAULT_PLAN_REPLAN_MAX_STEPS,
         plan_replan_retry_count: int = DEFAULT_PLAN_REPLAN_RETRY_COUNT,
         plan_observation_char_limit: int = DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT,
-        plan_observation_history_limit: int = DEFAULT_PLAN_OBSERVATION_HISTORY_LIMIT,
         plan_continuous_failure_limit: int = DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT,
         task_cancel_command: str = DEFAULT_TASK_CANCEL_COMMAND,
         internet_search_top_k: int = DEFAULT_INTERNET_SEARCH_TOP_K,
@@ -155,7 +177,6 @@ class AssistantAgent:
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_replan_retry_count = max(plan_replan_retry_count, 0)
         self._plan_observation_char_limit = max(plan_observation_char_limit, 1)
-        self._plan_observation_history_limit = max(plan_observation_history_limit, 1)
         self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
         self._task_cancel_command = task_cancel_command.strip() or DEFAULT_TASK_CANCEL_COMMAND
         self._internet_search_top_k = max(internet_search_top_k, 1)
@@ -164,6 +185,29 @@ class AssistantAgent:
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._progress_callback = callback
+
+    @staticmethod
+    def _outer_context(task: PendingPlanTask) -> OuterPlanContext:
+        if task.outer_context is None:
+            task.outer_context = OuterPlanContext(goal=task.goal)
+        return task.outer_context
+
+    def _new_inner_context(self, task: PendingPlanTask) -> InnerReActContext:
+        outer = self._outer_context(task)
+        return InnerReActContext(
+            current_subtask=self._current_plan_item_text(task),
+            completed_subtasks=[
+                CompletedSubtask(item=item.item, result=item.result) for item in outer.completed_subtasks
+            ],
+            observations=[],
+            response=None,
+        )
+
+    def _ensure_inner_context(self, task: PendingPlanTask) -> InnerReActContext:
+        if task.inner_context is None:
+            task.inner_context = self._new_inner_context(task)
+        assert task.inner_context is not None
+        return task.inner_context
 
     def handle_input(self, user_input: str) -> str:
         text = user_input.strip()
@@ -185,7 +229,8 @@ class AssistantAgent:
         pending_task = self._pending_plan_task
         if pending_task is not None:
             self._pending_plan_task = None
-            pending_task.clarification_history.append(f"用户补充: {text}")
+            outer = self._outer_context(pending_task)
+            outer.clarification_history.append(ClarificationTurn(role="user_answer", content=text))
             pending_task.awaiting_clarification = False
             pending_task.needs_replan = True
             return self._run_outer_plan_loop(task=pending_task)
@@ -208,16 +253,16 @@ class AssistantAgent:
                 self._pending_plan_task = task
                 return "请确认：请补充必要信息。"
 
-            replan_outcome = self._run_replan_gate(task)
+            replan_outcome, replan_response = self._run_replan_gate(task)
             if replan_outcome == "retry":
                 continue
             if replan_outcome == "unavailable":
                 return self._finalize_planner_task(task, self._planner_unavailable_text())
             if replan_outcome == "done":
-                final_response = task.pending_final_response or self._planner_unavailable_text()
-                task.pending_final_response = None
+                final_response = replan_response or self._planner_unavailable_text()
                 return self._finalize_planner_task(task, final_response)
 
+            task.inner_context = self._new_inner_context(task)
             loop_outcome, payload = self._run_inner_react_loop(task)
             if loop_outcome == "replan":
                 continue
@@ -225,7 +270,6 @@ class AssistantAgent:
                 self._pending_plan_task = task
                 return payload or "请确认：请补充必要信息。"
             if loop_outcome == "done_candidate":
-                task.pending_final_response = payload
                 task.needs_replan = True
                 continue
             if loop_outcome == "step_limit":
@@ -243,22 +287,28 @@ class AssistantAgent:
         self._emit_progress(progress_text)
 
     def _initialize_plan_once(self, task: PendingPlanTask) -> bool:
+        outer = self._outer_context(task)
         plan_payload = self._request_plan_payload(task)
         if plan_payload is None:
             return False
         plan_decision = plan_payload.get("decision")
         if not isinstance(plan_decision, dict):
             return False
-        task.latest_plan = [str(item).strip() for item in plan_decision.get("plan", []) if str(item).strip()]
+        self._append_planner_decision_observation(task, phase="plan", decision=plan_decision)
+        outer.latest_plan = [
+            PlanStep(item=plan_item, completed=False)
+            for plan_item in [str(item).strip() for item in plan_decision.get("plan", []) if str(item).strip()]
+        ]
         task.plan_initialized = True
-        task.current_plan_index = 0
-        self._emit_progress(f"规划完成：共 {len(task.latest_plan)} 步。")
+        outer.current_plan_index = 0
+        self._emit_progress(f"规划完成：共 {len(outer.latest_plan)} 步。")
         self._emit_plan_progress(task)
         return True
 
-    def _run_replan_gate(self, task: PendingPlanTask) -> str:
+    def _run_replan_gate(self, task: PendingPlanTask) -> tuple[str, str | None]:
+        outer = self._outer_context(task)
         if not task.needs_replan:
-            return "skipped"
+            return "skipped", None
 
         task.step_count += 1
         replan_payload = self._request_replan_payload(task)
@@ -274,41 +324,44 @@ class AssistantAgent:
                 ),
             )
             if task.planner_failure_rounds >= self._plan_continuous_failure_limit:
-                return "unavailable"
+                return "unavailable", None
             self._emit_progress("重规划失败：模型输出不符合契约，准备重试。")
-            return "retry"
+            return "retry", None
 
         task.planner_failure_rounds = 0
         replan_decision = replan_payload.get("decision")
         if not isinstance(replan_decision, dict):
-            return "unavailable"
+            return "unavailable", None
+        self._append_planner_decision_observation(task, phase="replan", decision=replan_decision)
         status = str(replan_decision.get("status") or "").strip().lower()
         if status == "done":
             response = str(replan_decision.get("response") or "").strip()
-            if response:
-                task.pending_final_response = response
             task.needs_replan = False
-            return "done"
-        previous_plan = list(task.latest_plan)
-        previous_index = task.current_plan_index
-        updated_plan = [str(item).strip() for item in replan_decision.get("plan", []) if str(item).strip()]
-        if previous_plan and updated_plan == previous_plan:
-            # Preserve task progress when replan keeps full plan unchanged.
-            next_index = min(previous_index, len(updated_plan))
-        elif previous_plan and updated_plan == previous_plan[min(previous_index, len(previous_plan)) :]:
-            # If replan returns only remaining steps, restart from first remaining item.
-            next_index = 0
-        else:
-            next_index = 0
-        task.latest_plan = updated_plan
-        task.current_plan_index = next_index
+            return "done", response or None
+        raw_plan = replan_decision.get("plan")
+        if not isinstance(raw_plan, list):
+            return "unavailable", None
+        updated_plan: list[PlanStep] = []
+        for step in raw_plan:
+            if not isinstance(step, dict):
+                return "unavailable", None
+            item = str(step.get("task") or "").strip()
+            completed = step.get("completed")
+            if not item or not isinstance(completed, bool):
+                return "unavailable", None
+            updated_plan.append(PlanStep(item=item, completed=completed))
+        outer.latest_plan = updated_plan
+        if not outer.latest_plan:
+            return "unavailable", None
+        outer.current_plan_index = 0
+        self._sync_current_plan_index(outer)
         task.needs_replan = False
-        task.pending_final_response = None
-        self._emit_progress(f"重规划完成：共 {len(task.latest_plan)} 步。")
+        self._emit_progress(f"重规划完成：共 {len(outer.latest_plan)} 步。")
         self._emit_plan_progress(task)
-        return "ok"
+        return "ok", None
 
     def _run_inner_react_loop(self, task: PendingPlanTask) -> tuple[str, str | None]:
+        outer = self._outer_context(task)
         emit_progress = False
         while True:
             if task.step_count >= self._plan_replan_max_steps:
@@ -337,61 +390,57 @@ class AssistantAgent:
                 self._emit_progress("思考失败：模型输出不符合契约，准备重试。")
                 continue
 
-            task.planner_failure_rounds = 0
             thought_decision = thought_payload.get("decision")
             if not isinstance(thought_decision, dict):
                 return "unavailable", None
 
             status = str(thought_decision.get("status") or "").strip().lower()
             current_step = str(thought_decision.get("current_step") or "").strip()
-            if current_step:
-                task.last_thought_snapshot = current_step
-            self._emit_progress(f"思考决策：{status} | {current_step or '（未提供步骤）'}")
-
             if status == "done":
-                response = str(thought_decision.get("response") or "").strip()
-                completed_item = self._current_plan_item_text(task) or current_step or "当前子任务"
-                completed_result = response or self._latest_success_observation_result(task) or "子任务已完成。"
-                if response:
+                response_text = str(thought_decision.get("response") or "").strip()
+                if not response_text:
+                    task.planner_failure_rounds += 1
                     self._append_observation(
                         task,
                         PlannerObservation(
                             tool="thought",
                             input_text=current_step or "done",
-                            ok=True,
-                            result=f"子任务结论: {response}",
+                            ok=False,
+                            result="status=done 但 response 为空，准备重试。",
                         ),
                     )
-                    task.pending_final_response = response
+                    if task.planner_failure_rounds >= self._plan_continuous_failure_limit:
+                        return "unavailable", None
+                    self._emit_progress("思考失败：done 缺少 response，准备重试。")
+                    continue
+            task.planner_failure_rounds = 0
+            self._append_planner_decision_observation(task, phase="thought", decision=thought_decision)
+            self._emit_progress(f"思考决策：{status} | {current_step or '（未提供步骤）'}")
+
+            if status == "done":
+                response = str(thought_decision.get("response") or "").strip()
+                inner_context = self._ensure_inner_context(task)
+                inner_context.response = response
+                completed_item = self._current_plan_item_text(task) or current_step or "当前子任务"
+                latest_success_result = self._latest_success_observation_result(task)
+                completed_result = self._merge_summary_with_detail(
+                    summary=response,
+                    detail=latest_success_result,
+                )
+                if not completed_result:
+                    completed_result = "子任务已完成。"
                 self._append_completed_subtask(
                     task,
                     item=completed_item,
                     result=completed_result,
                 )
                 # done means current subtask is completed; advance plan cursor before replan.
-                if task.latest_plan:
-                    task.current_plan_index = min(task.current_plan_index + 1, len(task.latest_plan))
-                if (
-                    task.latest_plan
-                    and task.current_plan_index >= len(task.latest_plan)
-                    and not response
-                ):
-                    task.post_plan_done_count += 1
-                    self._append_observation(
-                        task,
-                        PlannerObservation(
-                            tool="thought",
-                            input_text="done",
-                            ok=False,
-                            result="计划项已全部完成，但 thought 未输出子任务结论。",
-                        ),
-                    )
-                    if task.post_plan_done_count >= self._plan_continuous_failure_limit:
-                        return "done_candidate", self._post_plan_missing_done_text(task)
-                    self._emit_progress("计划步骤已全部完成，等待 replan 给出最终结论。")
-                else:
-                    task.post_plan_done_count = 0
-                task.current_subtask_observation_start = len(task.observations)
+                if outer.latest_plan:
+                    if 0 <= outer.current_plan_index < len(outer.latest_plan):
+                        outer.latest_plan[outer.current_plan_index].completed = True
+                    outer.current_plan_index = min(outer.current_plan_index + 1, len(outer.latest_plan))
+                    self._sync_current_plan_index(outer)
+                task.post_plan_done_count = 0
                 task.needs_replan = True
                 return "replan", None
 
@@ -411,7 +460,7 @@ class AssistantAgent:
                     continue
                 if (
                     _is_same_question_text(task.last_ask_user_question, question)
-                    and len(task.clarification_history) > task.last_ask_user_clarification_len
+                    and len(outer.clarification_history) > task.last_ask_user_clarification_len
                 ):
                     task.ask_user_repeat_count += 1
                     self._append_observation(
@@ -429,13 +478,15 @@ class AssistantAgent:
                             "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
                         )
                     continue
-                ask_turns = sum(1 for line in task.clarification_history if line.startswith("助手提问:"))
+                ask_turns = sum(1 for turn in outer.clarification_history if turn.role == "assistant_question")
                 if ask_turns >= 6:
                     return "done_candidate", "澄清次数过多，我仍无法稳定重规划。请直接使用 /todo 或 /schedule 命令。"
                 task.ask_user_repeat_count = 0
                 task.last_ask_user_question = question
-                task.last_ask_user_clarification_len = len(task.clarification_history)
-                task.clarification_history.append(f"助手提问: {question}")
+                task.last_ask_user_clarification_len = len(outer.clarification_history)
+                outer.clarification_history.append(
+                    ClarificationTurn(role="assistant_question", content=question)
+                )
                 task.awaiting_clarification = True
                 self._emit_progress(f"步骤动作：ask_user -> {question}")
                 return "ask_user", f"请确认：{question}"
@@ -573,38 +624,35 @@ class AssistantAgent:
         ]
 
     def _build_planner_context(self, task: PendingPlanTask) -> dict[str, Any]:
-        completed_subtasks = self._serialize_completed_subtasks(task.completed_subtasks)
+        outer = self._outer_context(task)
+        completed_subtasks = self._serialize_completed_subtasks(outer.completed_subtasks)
         context_payload = {
-            "goal": task.goal,
-            "clarification_history": task.clarification_history,
+            "goal": outer.goal,
+            "clarification_history": self._serialize_clarification_history(outer.clarification_history),
             "step_count": task.step_count,
             "max_steps": self._plan_replan_max_steps,
-            "latest_plan": task.latest_plan,
-            "current_plan_index": task.current_plan_index,
-            "pending_final_response": task.pending_final_response,
+            "latest_plan": self._serialize_latest_plan(outer.latest_plan),
+            "current_plan_index": outer.current_plan_index,
             "completed_subtasks": completed_subtasks,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
         return context_payload
 
     def _build_thought_context(self, task: PendingPlanTask) -> dict[str, Any]:
-        current_subtask_observations = self._serialize_observations(
-            task.observations[task.current_subtask_observation_start :]
-        )
-        completed_subtasks = self._serialize_completed_subtasks(task.completed_subtasks)
-        current_plan_item = self._current_plan_item_text(task)
+        outer = self._outer_context(task)
+        inner = self._ensure_inner_context(task)
+        current_subtask_observations = self._serialize_observations(inner.observations)
+        completed_subtasks = self._serialize_completed_subtasks(inner.completed_subtasks)
         current_subtask: dict[str, Any] = {
-            "item": current_plan_item,
-            "index": task.current_plan_index + 1,
-            "total": len(task.latest_plan),
+            "item": inner.current_subtask,
+            "index": outer.current_plan_index + 1,
+            "total": len(outer.latest_plan),
         }
-        if not current_plan_item:
+        if not inner.current_subtask:
             current_subtask["index"] = None
             current_subtask["total"] = None
-            if task.last_thought_snapshot:
-                current_subtask["item"] = task.last_thought_snapshot
         return {
-            "clarification_history": task.clarification_history,
+            "clarification_history": self._serialize_clarification_history(outer.clarification_history),
             "step_count": task.step_count,
             "max_steps": self._plan_replan_max_steps,
             "current_subtask": current_subtask,
@@ -638,14 +686,54 @@ class AssistantAgent:
         ]
 
     @staticmethod
+    def _serialize_latest_plan(latest_plan: list[PlanStep]) -> list[dict[str, Any]]:
+        return [
+            {
+                "task": item.item,
+                "completed": item.completed,
+            }
+            for item in latest_plan
+        ]
+
+    @staticmethod
+    def _serialize_clarification_history(
+        clarification_history: list[ClarificationTurn],
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                "role": item.role,
+                "content": item.content,
+            }
+            for item in clarification_history
+        ]
+
+    @staticmethod
     def _current_plan_item_text(task: PendingPlanTask) -> str:
-        if not task.latest_plan:
+        if task.outer_context is None:
             return ""
-        if task.current_plan_index < 0:
+        if not task.outer_context.latest_plan:
             return ""
-        if task.current_plan_index >= len(task.latest_plan):
+        if task.outer_context.current_plan_index < 0:
             return ""
-        return task.latest_plan[task.current_plan_index]
+        if task.outer_context.current_plan_index >= len(task.outer_context.latest_plan):
+            return ""
+        return task.outer_context.latest_plan[task.outer_context.current_plan_index].item
+
+    @staticmethod
+    def _sync_current_plan_index(outer: OuterPlanContext) -> None:
+        if not outer.latest_plan:
+            outer.current_plan_index = 0
+            return
+        start = min(max(outer.current_plan_index, 0), len(outer.latest_plan))
+        for idx in range(start, len(outer.latest_plan)):
+            if not outer.latest_plan[idx].completed:
+                outer.current_plan_index = idx
+                return
+        for idx, step in enumerate(outer.latest_plan):
+            if not step.completed:
+                outer.current_plan_index = idx
+                return
+        outer.current_plan_index = len(outer.latest_plan)
 
     def _llm_reply_for_planner(self, messages: list[dict[str, str]]) -> str:
         if self.llm_client is None:
@@ -742,45 +830,92 @@ class AssistantAgent:
 
     def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
         truncated = _truncate_text(observation.result, self._plan_observation_char_limit)
-        task.observations.append(
-            PlannerObservation(
-                tool=observation.tool,
-                input_text=observation.input_text,
-                ok=observation.ok,
-                result=truncated,
-            )
+        normalized = PlannerObservation(
+            tool=observation.tool,
+            input_text=observation.input_text,
+            ok=observation.ok,
+            result=truncated,
         )
-        if len(task.observations) > self._plan_observation_history_limit:
-            removed = len(task.observations) - self._plan_observation_history_limit
-            task.observations = task.observations[-self._plan_observation_history_limit :]
-            task.current_subtask_observation_start = max(task.current_subtask_observation_start - removed, 0)
+        task.observations.append(normalized)
+        inner = self._ensure_inner_context(task)
+        inner.observations.append(normalized)
+
+    def _append_planner_decision_observation(
+        self,
+        task: PendingPlanTask,
+        *,
+        phase: str,
+        decision: dict[str, Any],
+    ) -> None:
+        normalized_phase = phase.strip().lower()
+        if normalized_phase not in {"plan", "thought", "replan"}:
+            normalized_phase = "planner"
+        result = _truncate_text(
+            json.dumps(decision, ensure_ascii=False, separators=(",", ":")),
+            self._plan_observation_char_limit,
+        )
+        status = str(decision.get("status") or normalized_phase).strip() or normalized_phase
+        self._append_observation(
+            task,
+            PlannerObservation(
+                tool=normalized_phase,
+                input_text=status,
+                ok=True,
+                result=result,
+            ),
+        )
 
     def _append_completed_subtask(self, task: PendingPlanTask, *, item: str, result: str) -> None:
         normalized_item = item.strip() or "当前子任务"
         normalized_result = result.strip() or "子任务已完成。"
-        if task.completed_subtasks:
-            previous = task.completed_subtasks[-1]
-            if previous.item == normalized_item and previous.result == normalized_result:
-                return
-        task.completed_subtasks.append(
+        outer = self._outer_context(task)
+        outer.completed_subtasks.append(
             CompletedSubtask(
                 item=normalized_item,
                 result=_truncate_text(normalized_result, self._plan_observation_char_limit),
             )
         )
-        if len(task.completed_subtasks) > self._plan_observation_history_limit:
-            task.completed_subtasks = task.completed_subtasks[-self._plan_observation_history_limit :]
 
     @staticmethod
     def _latest_success_observation_result(task: PendingPlanTask) -> str:
-        start = min(task.current_subtask_observation_start, len(task.observations))
-        for item in reversed(task.observations[start:]):
-            if item.ok:
+        llm_tools = {"plan", "thought", "replan"}
+        for item in reversed(task.observations):
+            if item.ok and item.tool not in llm_tools:
                 return item.result
         return ""
 
+    @staticmethod
+    def _merge_summary_with_detail(*, summary: str, detail: str) -> str:
+        normalized_summary = summary.strip()
+        normalized_detail = detail.strip()
+        if not normalized_summary:
+            return normalized_detail
+        if not normalized_detail:
+            return normalized_summary
+        if normalized_detail in normalized_summary:
+            return normalized_summary
+        if not AssistantAgent._is_structured_query_result(normalized_detail):
+            return normalized_summary
+        return f"{normalized_summary}\n\n执行结果：\n{normalized_detail}"
+
+    @staticmethod
+    def _is_structured_query_result(result: str) -> bool:
+        if "\n|" in result:
+            return True
+        prefixes = (
+            "待办列表",
+            "待办详情",
+            "搜索结果",
+            "日程列表",
+            "日历视图(",
+            "日程详情",
+            "互联网搜索结果",
+        )
+        return result.startswith(prefixes)
+
     def _format_step_limit_response(self, task: PendingPlanTask) -> str:
-        completed = [obs for obs in task.observations if obs.ok and obs.tool != "planner"]
+        llm_tools = {"planner", "plan", "thought", "replan"}
+        completed = [obs for obs in task.observations if obs.ok and obs.tool not in llm_tools]
         failed = [obs for obs in task.observations if not obs.ok]
         completed_lines = [f"- {item.tool}: {item.input_text}" for item in completed[-3:]] or ["- 暂无已完成动作。"]
         failed_reason = failed[-1].result if failed else "需要更多信息才能继续。"
@@ -827,40 +962,41 @@ class AssistantAgent:
         callback(message)
 
     def _emit_plan_progress(self, task: PendingPlanTask) -> None:
-        if not task.latest_plan:
+        outer = self._outer_context(task)
+        if not outer.latest_plan:
             return
-        signature = tuple(task.latest_plan)
+        signature = tuple((step.item, step.completed) for step in outer.latest_plan)
         if task.last_reported_plan_signature == signature:
             return
         task.last_reported_plan_signature = signature
-        done_count = min(task.current_plan_index, len(task.latest_plan))
         lines = ["计划列表："]
-        for idx, item in enumerate(task.latest_plan, start=1):
-            status = "完成" if idx <= done_count else "待办"
-            lines.append(f"{idx}. [{status}] {item}")
+        for idx, step in enumerate(outer.latest_plan, start=1):
+            status = "完成" if step.completed else "待办"
+            lines.append(f"{idx}. [{status}] {step.item}")
         self._emit_progress("\n".join(lines))
 
     def _emit_current_plan_item_progress(self, task: PendingPlanTask) -> None:
-        if not task.latest_plan:
+        outer = self._outer_context(task)
+        if not outer.latest_plan:
             return
-        if task.current_plan_index < 0 or task.current_plan_index >= len(task.latest_plan):
+        if outer.current_plan_index < 0 or outer.current_plan_index >= len(outer.latest_plan):
             return
-        index = task.current_plan_index + 1
-        total = len(task.latest_plan)
-        self._emit_progress(f"当前计划项：{index}/{total} - {task.latest_plan[task.current_plan_index]}")
+        index = outer.current_plan_index + 1
+        total = len(outer.latest_plan)
+        self._emit_progress(f"当前计划项：{index}/{total} - {outer.latest_plan[outer.current_plan_index].item}")
 
     @staticmethod
     def _progress_total_text(task: PendingPlanTask) -> str:
-        if not task.latest_plan:
+        if task.outer_context is None or not task.outer_context.latest_plan:
             return "未定"
         # Replan may shorten current plan. Keep denominator >= executed steps to avoid "20/1" style confusion.
-        return str(max(task.step_count, len(task.latest_plan)))
+        return str(max(task.step_count, len(task.outer_context.latest_plan)))
 
     @staticmethod
     def _current_plan_total_text(task: PendingPlanTask) -> str | None:
-        if not task.latest_plan:
+        if task.outer_context is None or not task.outer_context.latest_plan:
             return None
-        return str(len(task.latest_plan))
+        return str(len(task.outer_context.latest_plan))
 
     def _handle_command(self, command: str) -> str:
         if command == "/help":

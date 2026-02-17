@@ -30,6 +30,7 @@ THOUGHT_PROMPT = """
 - status=continue: next_action 必须存在，question/response 为空
 - status=ask_user: question 必填，next_action/response 为空
 - status=done: 表示“当前子任务已完成”，将退出内层循环并交由 replan 决定外层继续或收口
+- status=done 时必须填写 response，总结本次子任务循环的最终结论
 - 输入上下文里的 current_subtask 是当前唯一可执行子任务；不得基于未来步骤提前执行动作
 - completed_subtasks / current_subtask_observations 仅用于参考已完成结果与当前子任务进度
 - todo/schedule 的 next_action.input 必须是可直接执行的合法命令

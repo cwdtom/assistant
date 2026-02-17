@@ -27,12 +27,19 @@ REPLAN_PROMPT = """
 输出 JSON 格式：
 {
   "status": "replanned|done",
-  "plan": ["更新后的步骤1", "更新后的步骤2"],
+  "plan": [
+    {"task": "步骤1", "completed": true},
+    {"task": "步骤2", "completed": false}
+  ],
   "response": "string|null"
 }
 
 规则：
-- status=replanned: 必须输出后续计划（至少 1 项）
+- status=replanned: 必须输出计划数组（至少 1 项）
+- status=replanned: plan 每项都必须包含 task(任务文本) 和 completed(是否已完成，布尔值)
+- status=replanned: 至少要有 1 项 completed=false，表示仍有后续可执行任务
+- 若基于当前 latest_plan/completed_subtasks/clarification_history 已能直接回答 goal，
+  必须输出 status=done，并在 response 给出问题答案；不要继续扩写计划
 - status=done: 必须输出最终结论 response，不要再给后续计划
 - 新计划要融合 completed_subtasks 中的已完成子任务结果与用户澄清信息（如有）
 - 可以输出“剩余步骤计划”或“重排后的全量计划”，但必须可继续执行
@@ -51,9 +58,23 @@ def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 def normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()
-    plan_items = normalize_plan_items(payload)
     if status == "replanned":
-        if not plan_items:
+        raw_plan = payload.get("plan")
+        if not isinstance(raw_plan, list):
+            return None
+        plan_items: list[dict[str, Any]] = []
+        has_pending = False
+        for item in raw_plan:
+            if not isinstance(item, dict):
+                return None
+            task = str(item.get("task") or "").strip()
+            completed = item.get("completed")
+            if not task or not isinstance(completed, bool):
+                return None
+            if not completed:
+                has_pending = True
+            plan_items.append({"task": task, "completed": completed})
+        if not plan_items or not has_pending:
             return None
         return {"status": "replanned", "plan": plan_items}
     if status == "done":
