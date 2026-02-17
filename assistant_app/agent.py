@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -92,10 +93,18 @@ class PlannerObservation:
 
 
 @dataclass
+class CompletedSubtask:
+    item: str
+    result: str
+
+
+@dataclass
 class PendingPlanTask:
     goal: str
     clarification_history: list[str] = field(default_factory=list)
     observations: list[PlannerObservation] = field(default_factory=list)
+    completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
+    current_subtask_observation_start: int = 0
     step_count: int = 0
     plan_initialized: bool = False
     awaiting_clarification: bool = False
@@ -121,6 +130,7 @@ class AssistantAgent:
         db: AssistantDB,
         llm_client: LLMClient | None = None,
         search_provider: SearchProvider | None = None,
+        llm_trace_logger: logging.Logger | None = None,
         progress_callback: Callable[[str], None] | None = None,
         plan_replan_max_steps: int = DEFAULT_PLAN_REPLAN_MAX_STEPS,
         plan_replan_retry_count: int = DEFAULT_PLAN_REPLAN_RETRY_COUNT,
@@ -135,6 +145,11 @@ class AssistantAgent:
         self.db = db
         self.llm_client = llm_client
         self.search_provider = search_provider or BingSearchProvider()
+        self._llm_trace_logger = llm_trace_logger or logging.getLogger("assistant_app.llm_trace")
+        self._llm_trace_logger.propagate = False
+        if not self._llm_trace_logger.handlers:
+            self._llm_trace_logger.addHandler(logging.NullHandler())
+        self._llm_trace_call_seq = 0
         self._pending_plan_task: PendingPlanTask | None = None
         self._progress_callback = progress_callback
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
@@ -335,6 +350,8 @@ class AssistantAgent:
 
             if status == "done":
                 response = str(thought_decision.get("response") or "").strip()
+                completed_item = self._current_plan_item_text(task) or current_step or "当前子任务"
+                completed_result = response or self._latest_success_observation_result(task) or "子任务已完成。"
                 if response:
                     self._append_observation(
                         task,
@@ -346,6 +363,11 @@ class AssistantAgent:
                         ),
                     )
                     task.pending_final_response = response
+                self._append_completed_subtask(
+                    task,
+                    item=completed_item,
+                    result=completed_result,
+                )
                 # done means current subtask is completed; advance plan cursor before replan.
                 if task.latest_plan:
                     task.current_plan_index = min(task.current_plan_index + 1, len(task.latest_plan))
@@ -369,6 +391,7 @@ class AssistantAgent:
                     self._emit_progress("计划步骤已全部完成，等待 replan 给出最终结论。")
                 else:
                     task.post_plan_done_count = 0
+                task.current_subtask_observation_start = len(task.observations)
                 task.needs_replan = True
                 return "replan", None
 
@@ -479,11 +502,41 @@ class AssistantAgent:
         normalizer: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> dict[str, Any] | None:
         max_attempts = 1 + self._plan_replan_retry_count
-        for _ in range(max_attempts):
+        phase = self._llm_trace_phase(messages)
+        for attempt in range(1, max_attempts + 1):
+            call_id = self._next_llm_trace_call_id()
+            self._log_llm_trace_event(
+                {
+                    "event": "llm_request",
+                    "call_id": call_id,
+                    "phase": phase,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "messages": messages,
+                }
+            )
             try:
                 raw = self._llm_reply_for_planner(messages)
-            except Exception:
+            except Exception as exc:
+                self._log_llm_trace_event(
+                    {
+                        "event": "llm_response_error",
+                        "call_id": call_id,
+                        "phase": phase,
+                        "attempt": attempt,
+                        "error": repr(exc),
+                    }
+                )
                 continue
+            self._log_llm_trace_event(
+                {
+                    "event": "llm_response",
+                    "call_id": call_id,
+                    "phase": phase,
+                    "attempt": attempt,
+                    "response": raw,
+                }
+            )
             payload = _try_parse_json(_strip_think_blocks(raw).strip())
             if not isinstance(payload, dict):
                 continue
@@ -502,7 +555,7 @@ class AssistantAgent:
         ]
 
     def _build_thought_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
-        context_payload = self._build_planner_context(task)
+        context_payload = self._build_thought_context(task)
         context_payload["phase"] = "thought"
         context_payload["current_plan_item"] = self._current_plan_item_text(task)
         return [
@@ -520,15 +573,7 @@ class AssistantAgent:
         ]
 
     def _build_planner_context(self, task: PendingPlanTask) -> dict[str, Any]:
-        observations = [
-            {
-                "tool": item.tool,
-                "input": item.input_text,
-                "ok": item.ok,
-                "result": item.result,
-            }
-            for item in task.observations
-        ]
+        completed_subtasks = self._serialize_completed_subtasks(task.completed_subtasks)
         context_payload = {
             "goal": task.goal,
             "clarification_history": task.clarification_history,
@@ -537,12 +582,60 @@ class AssistantAgent:
             "latest_plan": task.latest_plan,
             "current_plan_index": task.current_plan_index,
             "pending_final_response": task.pending_final_response,
-            "observations": observations,
+            "completed_subtasks": completed_subtasks,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        return context_payload
+
+    def _build_thought_context(self, task: PendingPlanTask) -> dict[str, Any]:
+        current_subtask_observations = self._serialize_observations(
+            task.observations[task.current_subtask_observation_start :]
+        )
+        completed_subtasks = self._serialize_completed_subtasks(task.completed_subtasks)
+        current_plan_item = self._current_plan_item_text(task)
+        current_subtask: dict[str, Any] = {
+            "item": current_plan_item,
+            "index": task.current_plan_index + 1,
+            "total": len(task.latest_plan),
+        }
+        if not current_plan_item:
+            current_subtask["index"] = None
+            current_subtask["total"] = None
+            if task.last_thought_snapshot:
+                current_subtask["item"] = task.last_thought_snapshot
+        return {
+            "clarification_history": task.clarification_history,
+            "step_count": task.step_count,
+            "max_steps": self._plan_replan_max_steps,
+            "current_subtask": current_subtask,
+            "completed_subtasks": completed_subtasks,
+            "current_subtask_observations": current_subtask_observations,
             "tool_contract": PLAN_TOOL_CONTRACT,
             "time_unit_contract": PLAN_TIME_UNIT_CONTRACT,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
-        return context_payload
+
+    @staticmethod
+    def _serialize_observations(observations: list[PlannerObservation]) -> list[dict[str, Any]]:
+        return [
+            {
+                "tool": item.tool,
+                "input": item.input_text,
+                "ok": item.ok,
+                "result": item.result,
+            }
+            for item in observations
+        ]
+
+    @staticmethod
+    def _serialize_completed_subtasks(completed_subtasks: list[CompletedSubtask]) -> list[dict[str, Any]]:
+        return [
+            {
+                "item": item.item,
+                "result": item.result,
+            }
+            for item in completed_subtasks
+        ]
 
     @staticmethod
     def _current_plan_item_text(task: PendingPlanTask) -> str:
@@ -565,6 +658,25 @@ class AssistantAgent:
             except Exception:
                 pass
         return self.llm_client.reply(messages)
+
+    def _next_llm_trace_call_id(self) -> int:
+        self._llm_trace_call_seq += 1
+        return self._llm_trace_call_seq
+
+    def _llm_trace_phase(self, messages: list[dict[str, str]]) -> str:
+        if not messages:
+            return "unknown"
+        payload = _try_parse_json(messages[-1].get("content", ""))
+        if not isinstance(payload, dict):
+            return "unknown"
+        phase = str(payload.get("phase") or "").strip().lower()
+        return phase or "unknown"
+
+    def _log_llm_trace_event(self, payload: dict[str, Any]) -> None:
+        try:
+            self._llm_trace_logger.info(json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            return
 
     def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
         if action_tool == "todo":
@@ -639,7 +751,33 @@ class AssistantAgent:
             )
         )
         if len(task.observations) > self._plan_observation_history_limit:
+            removed = len(task.observations) - self._plan_observation_history_limit
             task.observations = task.observations[-self._plan_observation_history_limit :]
+            task.current_subtask_observation_start = max(task.current_subtask_observation_start - removed, 0)
+
+    def _append_completed_subtask(self, task: PendingPlanTask, *, item: str, result: str) -> None:
+        normalized_item = item.strip() or "当前子任务"
+        normalized_result = result.strip() or "子任务已完成。"
+        if task.completed_subtasks:
+            previous = task.completed_subtasks[-1]
+            if previous.item == normalized_item and previous.result == normalized_result:
+                return
+        task.completed_subtasks.append(
+            CompletedSubtask(
+                item=normalized_item,
+                result=_truncate_text(normalized_result, self._plan_observation_char_limit),
+            )
+        )
+        if len(task.completed_subtasks) > self._plan_observation_history_limit:
+            task.completed_subtasks = task.completed_subtasks[-self._plan_observation_history_limit :]
+
+    @staticmethod
+    def _latest_success_observation_result(task: PendingPlanTask) -> str:
+        start = min(task.current_subtask_observation_start, len(task.observations))
+        for item in reversed(task.observations[start:]):
+            if item.ok:
+                return item.result
+        return ""
 
     def _format_step_limit_response(self, task: PendingPlanTask) -> str:
         completed = [obs for obs in task.observations if obs.ok and obs.tool != "planner"]

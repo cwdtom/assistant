@@ -18,7 +18,6 @@ PLAN_ONCE_PROMPT = """
 - 只输出 planned，不要输出 done
 - plan 至少包含 1 项，且应按执行顺序排列
 - 不要输出工具动作，只给步骤描述
-- 对涉及时间/时长/重复间隔的步骤描述，需与 time_unit_contract 保持一致（尤其分钟/次数单位）
 """.strip()
 
 REPLAN_PROMPT = """
@@ -35,10 +34,9 @@ REPLAN_PROMPT = """
 规则：
 - status=replanned: 必须输出后续计划（至少 1 项）
 - status=done: 必须输出最终结论 response，不要再给后续计划
-- 新计划要融合该子任务的最新 observation 和用户澄清信息（如有）
+- 新计划要融合 completed_subtasks 中的已完成子任务结果与用户澄清信息（如有）
 - 可以输出“剩余步骤计划”或“重排后的全量计划”，但必须可继续执行
 - 若信息仍不足，可保留待澄清步骤，但不要直接提问
-- 涉及时间相关步骤时，必须沿用 time_unit_contract 的单位口径（分钟/次数/时间格式）
 """.strip()
 
 def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:

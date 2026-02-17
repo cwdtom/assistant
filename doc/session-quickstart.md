@@ -51,6 +51,7 @@
 - `SCHEDULE_MAX_WINDOW_DAYS`
 - `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`
 - `CLI_PROGRESS_COLOR`（`gray|off`）
+- `LLM_TRACE_LOG_PATH`（默认 `logs/llm_trace.log`，留空可关闭）
 
 参考示例：`.env.example`
 

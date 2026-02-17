@@ -31,6 +31,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.cli_progress_color, "gray")
+        self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
 
     def test_load_config_falls_back_to_openai_env(self) -> None:
         env = {
@@ -45,6 +46,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.base_url, "https://legacy.example.com/v1")
         self.assertEqual(config.model, "legacy-model")
         self.assertEqual(config.db_path, "assistant.db")
+        self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
         self.assertEqual(config.plan_replan_retry_count, 2)
         self.assertEqual(config.plan_observation_char_limit, 10000)
         self.assertEqual(config.plan_observation_history_limit, 100)
@@ -63,6 +65,7 @@ class ConfigTest(unittest.TestCase):
             "SCHEDULE_MAX_WINDOW_DAYS": "45",
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "14",
             "CLI_PROGRESS_COLOR": "off",
+            "LLM_TRACE_LOG_PATH": "logs/custom_llm_trace.log",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -77,6 +80,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.schedule_max_window_days, 45)
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 14)
         self.assertEqual(config.cli_progress_color, "off")
+        self.assertEqual(config.llm_trace_log_path, "logs/custom_llm_trace.log")
 
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
@@ -91,6 +95,7 @@ class ConfigTest(unittest.TestCase):
             "SCHEDULE_MAX_WINDOW_DAYS": "-7",
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "abc",
             "CLI_PROGRESS_COLOR": "  ",
+            "LLM_TRACE_LOG_PATH": "   ",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -105,6 +110,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.schedule_max_window_days, 31)
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.cli_progress_color, "gray")
+        self.assertEqual(config.llm_trace_log_path, "")
 
     def test_load_env_file_sets_only_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import io
+import logging
+import tempfile
 import unittest
+from pathlib import Path
 
 from assistant_app.cli import (
     CLEAR_TERMINAL_SEQUENCE,
     _clear_terminal_history,
+    _configure_llm_trace_logger,
     _exit_cli,
     _handle_input_with_feedback,
     _resolve_progress_color,
@@ -74,6 +78,48 @@ class CLIFeedbackTest(unittest.TestCase):
         prefix, suffix = _resolve_progress_color("off")
         self.assertEqual(prefix, "")
         self.assertEqual(suffix, "")
+
+    def test_configure_llm_trace_logger_deduplicates_file_handler(self) -> None:
+        logger = logging.getLogger("assistant_app.llm_trace")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            with tempfile.TemporaryDirectory() as tmp:
+                path = str(Path(tmp) / "llm_trace.log")
+                _configure_llm_trace_logger(path)
+                _configure_llm_trace_logger(path)
+                file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
+                self.assertEqual(len(file_handlers), 1)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_configure_llm_trace_logger_empty_path_disables_output(self) -> None:
+        logger = logging.getLogger("assistant_app.llm_trace")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            _configure_llm_trace_logger("   ")
+            self.assertFalse(logger.propagate)
+            self.assertEqual(len(logger.handlers), 1)
+            self.assertIsInstance(logger.handlers[0], logging.NullHandler)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
 
 
 if __name__ == "__main__":

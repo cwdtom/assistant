@@ -11,6 +11,7 @@ class AppConfig:
     base_url: str
     model: str
     db_path: str
+    llm_trace_log_path: str
     plan_replan_max_steps: int
     plan_replan_retry_count: int
     plan_observation_char_limit: int
@@ -52,6 +53,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         base_url=base_url,
         model=model,
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
+        llm_trace_log_path=_read_env_text("LLM_TRACE_LOG_PATH", default="logs/llm_trace.log"),
         plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=20, min_value=1),
         plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=2, min_value=0),
         plan_observation_char_limit=_read_env_int("PLAN_OBSERVATION_CHAR_LIMIT", default=10000, min_value=1),
@@ -80,3 +82,10 @@ def _read_env_int(name: str, *, default: int, min_value: int) -> int:
     if value < min_value:
         return default
     return value
+
+
+def _read_env_text(name: str, *, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip()

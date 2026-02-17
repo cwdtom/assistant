@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import logging
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -1041,7 +1043,7 @@ class AssistantAgentTest(unittest.TestCase):
         plan_logs = [item for item in progress_logs if "计划列表" in item]
         self.assertEqual(len(plan_logs), 1)
 
-    def test_plan_replan_prompt_contains_tool_contract(self) -> None:
+    def test_plan_prompt_excludes_tool_and_time_contract(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["收尾"]),
@@ -1056,11 +1058,127 @@ class AssistantAgentTest(unittest.TestCase):
         first_messages = fake_llm.calls[0]
         self.assertIn("plan 模块", first_messages[0]["content"])
         planner_user_payload = json.loads(first_messages[1]["content"])
-        self.assertIn("tool_contract", planner_user_payload)
-        self.assertIn("schedule", planner_user_payload["tool_contract"])
-        self.assertIn("time_unit_contract", planner_user_payload)
-        self.assertIn("schedule_duration_unit", planner_user_payload["time_unit_contract"])
-        self.assertIn("180", planner_user_payload["time_unit_contract"]["schedule_duration_unit"])
+        self.assertNotIn("tool_contract", planner_user_payload)
+        self.assertNotIn("observations", planner_user_payload)
+        self.assertNotIn("time_unit_contract", planner_user_payload)
+        self.assertIn("completed_subtasks", planner_user_payload)
+
+    def test_replan_prompt_excludes_tool_context_and_uses_completed_subtasks(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一", "步骤二"]),
+                _planner_done("步骤一已完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 replan 上下文")
+        self.assertIn("最终完成", response)
+
+        replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
+        self.assertEqual(len(replan_calls), 1)
+        replan_payload = json.loads(replan_calls[0][1]["content"])
+        self.assertNotIn("tool_contract", replan_payload)
+        self.assertNotIn("observations", replan_payload)
+        self.assertNotIn("time_unit_contract", replan_payload)
+        completed = replan_payload.get("completed_subtasks", [])
+        self.assertTrue(completed)
+        self.assertEqual(completed[0].get("item"), "步骤一")
+        self.assertIn("步骤一已完成", completed[0].get("result", ""))
+
+    def test_thought_prompt_context_only_includes_current_subtask_and_history(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一", "步骤二"]),
+                _planner_done("步骤一已完成。"),
+                _planner_replanned(["步骤二"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 thought 上下文裁剪")
+        self.assertIn("全部完成", response)
+
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertGreaterEqual(len(thought_calls), 2)
+
+        first_thought_payload = json.loads(thought_calls[0][1]["content"])
+        self.assertIn("current_subtask", first_thought_payload)
+        self.assertIn("current_subtask_observations", first_thought_payload)
+        self.assertIn("completed_subtasks", first_thought_payload)
+        self.assertIn("time_unit_contract", first_thought_payload)
+        self.assertNotIn("goal", first_thought_payload)
+        self.assertNotIn("latest_plan", first_thought_payload)
+        self.assertNotIn("observations", first_thought_payload)
+
+        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        completed = second_thought_payload.get("completed_subtasks", [])
+        self.assertTrue(completed)
+        self.assertEqual(completed[0].get("item"), "步骤一")
+        self.assertIn("步骤一已完成", completed[0].get("result", ""))
+        current_subtask = second_thought_payload.get("current_subtask", {})
+        self.assertEqual(current_subtask.get("item"), "步骤二")
+
+    def test_llm_request_and_response_are_logged(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["收尾"]),
+                _planner_done("完成。"),
+            ]
+        )
+        stream = io.StringIO()
+        logger = logging.getLogger("tests.llm_trace")
+        logger.handlers.clear()
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        try:
+            agent = AssistantAgent(
+                db=self.db,
+                llm_client=fake_llm,
+                search_provider=FakeSearchProvider(),
+                llm_trace_logger=logger,
+            )
+            response = agent.handle_input("测试 llm 交互日志")
+            self.assertIn("完成", response)
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+
+        lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+        records = [json.loads(line) for line in lines]
+        events = [item.get("event") for item in records]
+        self.assertIn("llm_request", events)
+        self.assertIn("llm_response", events)
+        phases = [str(item.get("phase")) for item in records if item.get("event") == "llm_request"]
+        self.assertIn("plan", phases)
+        self.assertIn("thought", phases)
+        self.assertIn("replan", phases)
+
+    def test_agent_default_trace_logger_uses_null_handler_without_propagation(self) -> None:
+        logger = logging.getLogger("assistant_app.llm_trace")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            logger.propagate = True
+            AssistantAgent(db=self.db, llm_client=None)
+            self.assertFalse(logger.propagate)
+            self.assertTrue(logger.handlers)
+            self.assertIsInstance(logger.handlers[0], logging.NullHandler)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
 
     def test_plan_replan_ask_user_flow(self) -> None:
         fake_llm = FakeLLMClient(
