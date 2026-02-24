@@ -425,23 +425,31 @@ class AssistantAgentTest(unittest.TestCase):
 
     def test_slash_schedule_repeat_add_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        second_time = base_time + timedelta(days=1)
+        third_time = base_time + timedelta(days=2)
+        base_text = base_time.strftime("%Y-%m-%d %H:%M")
+        second_text = second_time.strftime("%Y-%m-%d %H:%M")
+        third_text = third_time.strftime("%Y-%m-%d %H:%M")
 
-        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 30 --interval 1440 --times 3")
+        add_resp = agent.handle_input(
+            f"/schedule add {base_text} 站会 --duration 30 --interval 1440 --times 3"
+        )
         self.assertIn("已添加重复日程 3 条", add_resp)
         self.assertIn("duration=30m", add_resp)
         self.assertIn("interval=1440m", add_resp)
 
         list_resp = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-20 09:30", list_resp)
-        self.assertIn("2026-02-21 09:30", list_resp)
-        self.assertIn("2026-02-22 09:30", list_resp)
+        self.assertIn(base_text, list_resp)
+        self.assertIn(second_text, list_resp)
+        self.assertIn(third_text, list_resp)
         self.assertIn("| 1440 | 3 | on |", list_resp)
         self.assertIn("| 30 | 站会 |", list_resp)
 
-        invalid = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --times 3")
+        invalid = agent.handle_input(f"/schedule add {base_text} 站会 --times 3")
         self.assertIn("用法", invalid)
 
-        invalid_duration = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 0")
+        invalid_duration = agent.handle_input(f"/schedule add {base_text} 站会 --duration 0")
         self.assertIn("用法", invalid_duration)
 
     def test_slash_schedule_remind_fields_commands(self) -> None:
@@ -473,13 +481,18 @@ class AssistantAgentTest(unittest.TestCase):
 
     def test_slash_schedule_repeat_default_times_is_infinite(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
-        add_resp = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 60")
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        next_time = base_time + timedelta(minutes=60)
+        base_text = base_time.strftime("%Y-%m-%d %H:%M")
+        next_text = next_time.strftime("%Y-%m-%d %H:%M")
+
+        add_resp = agent.handle_input(f"/schedule add {base_text} 站会 --interval 60")
         self.assertIn("已添加无限重复日程", add_resp)
         self.assertIn("interval=60m", add_resp)
 
         list_resp = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-20 09:30", list_resp)
-        self.assertIn("2026-02-20 10:30", list_resp)
+        self.assertIn(base_text, list_resp)
+        self.assertIn(next_text, list_resp)
 
     def test_schedule_list_default_window_from_two_days_ago(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -534,42 +547,61 @@ class AssistantAgentTest(unittest.TestCase):
 
     def test_slash_schedule_repeat_update_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
-        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 50")
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        update_time = (base_time + timedelta(days=1)).replace(hour=10, minute=0)
+        repeated_time = update_time + timedelta(days=7)
+        base_text = base_time.strftime("%Y-%m-%d %H:%M")
+        update_text = update_time.strftime("%Y-%m-%d %H:%M")
+        repeated_text = repeated_time.strftime("%Y-%m-%d %H:%M")
 
-        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会 --interval 10080 --times 2")
+        agent.handle_input(f"/schedule add {base_text} 站会 --duration 50")
+
+        update_resp = agent.handle_input(f"/schedule update 1 {update_text} 复盘会 --interval 10080 --times 2")
         self.assertIn("times=2", update_resp)
         self.assertIn("duration=50m", update_resp)
 
         list_resp = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-21 10:00", list_resp)
-        self.assertIn("2026-02-28 10:00", list_resp)
+        self.assertIn(update_text, list_resp)
+        self.assertIn(repeated_text, list_resp)
         self.assertIn("| 50 | 复盘会 |", list_resp)
 
     def test_slash_schedule_update_clears_repeat_when_times_is_one(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
-        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 3")
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        update_time = (base_time + timedelta(days=1)).replace(hour=10, minute=0)
+        repeated_time = update_time + timedelta(days=7)
+        base_text = base_time.strftime("%Y-%m-%d %H:%M")
+        update_text = update_time.strftime("%Y-%m-%d %H:%M")
+        repeated_text = repeated_time.strftime("%Y-%m-%d %H:%M")
 
-        update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会")
+        agent.handle_input(f"/schedule add {base_text} 站会 --interval 10080 --times 3")
+
+        update_resp = agent.handle_input(f"/schedule update 1 {update_text} 复盘会")
         self.assertIn("已更新日程 #1", update_resp)
 
         list_resp = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-21 10:00", list_resp)
-        self.assertNotIn("2026-02-28 10:00", list_resp)
+        self.assertIn(update_text, list_resp)
+        self.assertNotIn(repeated_text, list_resp)
 
     def test_slash_schedule_repeat_toggle(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
-        agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 3")
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        repeated_time = base_time + timedelta(days=7)
+        base_text = base_time.strftime("%Y-%m-%d %H:%M")
+        repeated_text = repeated_time.strftime("%Y-%m-%d %H:%M")
+
+        agent.handle_input(f"/schedule add {base_text} 站会 --interval 10080 --times 3")
 
         off_resp = agent.handle_input("/schedule repeat 1 off")
         self.assertIn("已停用日程 #1 的重复规则", off_resp)
         off_list = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-20 09:30", off_list)
-        self.assertNotIn("2026-02-27 09:30", off_list)
+        self.assertIn(base_text, off_list)
+        self.assertNotIn(repeated_text, off_list)
 
         on_resp = agent.handle_input("/schedule repeat 1 on")
         self.assertIn("已启用日程 #1 的重复规则", on_resp)
         on_list = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-27 09:30", on_list)
+        self.assertIn(repeated_text, on_list)
 
     def test_slash_schedule_repeat_toggle_without_rule(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -717,10 +749,17 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(item.duration_minutes, 45)
 
     def test_nl_schedule_repeat_add_via_intent_model(self) -> None:
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        second_time = base_time + timedelta(days=7)
+        third_time = base_time + timedelta(days=14)
+        base_text = base_time.strftime("%Y-%m-%d %H:%M")
+        second_text = second_time.strftime("%Y-%m-%d %H:%M")
+        third_text = third_time.strftime("%Y-%m-%d %H:%M")
+
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增重复日程", "总结结果"]),
-                _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --interval 10080 --times 3"),
+                _thought_continue("schedule", f"/schedule add {base_text} 周会 --interval 10080 --times 3"),
                 _planner_done("已添加重复日程 3 条。"),
             ]
         )
@@ -731,9 +770,9 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(fake_llm.model_call_count, 3)
 
         list_resp = agent.handle_input("/schedule list")
-        self.assertIn("2026-02-20 09:30", list_resp)
-        self.assertIn("2026-02-27 09:30", list_resp)
-        self.assertIn("2026-03-06 09:30", list_resp)
+        self.assertIn(base_text, list_resp)
+        self.assertIn(second_text, list_resp)
+        self.assertIn(third_text, list_resp)
 
     def test_nl_schedule_add_conflict_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
