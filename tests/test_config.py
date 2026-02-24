@@ -28,6 +28,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_replan_max_steps, 20)
         self.assertEqual(config.plan_observation_history_limit, 100)
         self.assertEqual(config.internet_search_top_k, 3)
+        self.assertEqual(config.search_provider, "bocha")
+        self.assertIsNone(config.bocha_api_key)
+        self.assertTrue(config.bocha_search_summary)
         self.assertEqual(config.schedule_max_window_days, 31)
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
@@ -58,6 +61,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_observation_char_limit, 10000)
         self.assertEqual(config.plan_observation_history_limit, 100)
         self.assertEqual(config.plan_continuous_failure_limit, 2)
+        self.assertEqual(config.search_provider, "bocha")
+        self.assertIsNone(config.bocha_api_key)
+        self.assertTrue(config.bocha_search_summary)
 
     def test_load_config_reads_runtime_knobs_from_env(self) -> None:
         env = {
@@ -69,6 +75,9 @@ class ConfigTest(unittest.TestCase):
             "PLAN_CONTINUOUS_FAILURE_LIMIT": "3",
             "TASK_CANCEL_COMMAND": "停止任务",
             "INTERNET_SEARCH_TOP_K": "5",
+            "SEARCH_PROVIDER": "bing",
+            "BOCHA_API_KEY": "bocha-key",
+            "BOCHA_SEARCH_SUMMARY": "off",
             "SCHEDULE_MAX_WINDOW_DAYS": "45",
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "14",
             "CLI_PROGRESS_COLOR": "off",
@@ -90,6 +99,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_continuous_failure_limit, 3)
         self.assertEqual(config.task_cancel_command, "停止任务")
         self.assertEqual(config.internet_search_top_k, 5)
+        self.assertEqual(config.search_provider, "bing")
+        self.assertEqual(config.bocha_api_key, "bocha-key")
+        self.assertFalse(config.bocha_search_summary)
         self.assertEqual(config.schedule_max_window_days, 45)
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 14)
         self.assertEqual(config.cli_progress_color, "off")
@@ -111,6 +123,9 @@ class ConfigTest(unittest.TestCase):
             "PLAN_CONTINUOUS_FAILURE_LIMIT": "-1",
             "TASK_CANCEL_COMMAND": "   ",
             "INTERNET_SEARCH_TOP_K": "0",
+            "SEARCH_PROVIDER": "unsupported",
+            "BOCHA_API_KEY": "   ",
+            "BOCHA_SEARCH_SUMMARY": "bad",
             "SCHEDULE_MAX_WINDOW_DAYS": "-7",
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "abc",
             "CLI_PROGRESS_COLOR": "  ",
@@ -131,6 +146,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_continuous_failure_limit, 2)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.internet_search_top_k, 3)
+        self.assertEqual(config.search_provider, "bocha")
+        self.assertIsNone(config.bocha_api_key)
+        self.assertTrue(config.bocha_search_summary)
         self.assertEqual(config.schedule_max_window_days, 31)
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.cli_progress_color, "gray")

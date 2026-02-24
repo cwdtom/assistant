@@ -19,6 +19,9 @@ class AppConfig:
     plan_continuous_failure_limit: int
     task_cancel_command: str
     internet_search_top_k: int
+    search_provider: str
+    bocha_api_key: str | None
+    bocha_search_summary: bool
     schedule_max_window_days: int
     infinite_repeat_conflict_preview_days: int
     cli_progress_color: str
@@ -54,6 +57,10 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
     base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.deepseek.com"
     model = os.getenv("DEEPSEEK_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-chat"
     task_cancel_command = (os.getenv("TASK_CANCEL_COMMAND") or "取消当前任务").strip() or "取消当前任务"
+    search_provider = (os.getenv("SEARCH_PROVIDER") or "bocha").strip().lower() or "bocha"
+    if search_provider not in {"bing", "bocha", "bochaai"}:
+        search_provider = "bocha"
+    bocha_api_key = (os.getenv("BOCHA_API_KEY") or "").strip() or None
     return AppConfig(
         api_key=api_key,
         base_url=base_url,
@@ -67,6 +74,9 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         plan_continuous_failure_limit=_read_env_int("PLAN_CONTINUOUS_FAILURE_LIMIT", default=2, min_value=1),
         task_cancel_command=task_cancel_command,
         internet_search_top_k=_read_env_int("INTERNET_SEARCH_TOP_K", default=3, min_value=1),
+        search_provider=search_provider,
+        bocha_api_key=bocha_api_key,
+        bocha_search_summary=_read_env_bool("BOCHA_SEARCH_SUMMARY", default=True),
         schedule_max_window_days=_read_env_int("SCHEDULE_MAX_WINDOW_DAYS", default=31, min_value=1),
         infinite_repeat_conflict_preview_days=_read_env_int(
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS",

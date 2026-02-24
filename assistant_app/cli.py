@@ -12,6 +12,7 @@ from assistant_app.db import AssistantDB
 from assistant_app.llm import OpenAICompatibleClient
 from assistant_app.reminder_service import ReminderService
 from assistant_app.reminder_sink import StdoutReminderSink
+from assistant_app.search import create_search_provider
 from assistant_app.timer import TimerEngine
 
 CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
@@ -128,6 +129,11 @@ def main() -> None:
     _configure_llm_trace_logger(config.llm_trace_log_path)
     db = AssistantDB(config.db_path)
     progress_color_prefix, progress_color_suffix = _resolve_progress_color(config.cli_progress_color)
+    search_provider = create_search_provider(
+        provider_name=config.search_provider,
+        bocha_api_key=config.bocha_api_key,
+        bocha_summary=config.bocha_search_summary,
+    )
 
     llm_client = None
     if config.api_key:
@@ -140,6 +146,7 @@ def main() -> None:
     agent = AssistantAgent(
         db=db,
         llm_client=llm_client,
+        search_provider=search_provider,
         plan_replan_max_steps=config.plan_replan_max_steps,
         plan_replan_retry_count=config.plan_replan_retry_count,
         plan_observation_char_limit=config.plan_observation_char_limit,

@@ -34,6 +34,9 @@ cp .env.example .env
 - `PLAN_CONTINUOUS_FAILURE_LIMIT`：连续失败兜底阈值（默认 `2`）
 - `TASK_CANCEL_COMMAND`：取消当前任务命令文本（默认 `取消当前任务`）
 - `INTERNET_SEARCH_TOP_K`：互联网搜索返回条数（默认 `3`）
+- `SEARCH_PROVIDER`：互联网搜索 provider（默认 `bocha`，支持 `bocha|bing`）
+- `BOCHA_API_KEY`：Bocha Web Search API Key（当 `SEARCH_PROVIDER=bocha` 时优先使用；未配置时自动回退到 Bing）
+- `BOCHA_SEARCH_SUMMARY`：是否让 Bocha 返回摘要（默认 `true`）
 - `SCHEDULE_MAX_WINDOW_DAYS`：日程查询窗口最大天数（默认 `31`）
 - `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`：无限重复冲突检测预览天数（默认 `31`）
 - `TIMER_ENABLED`：是否启用本地定时提醒线程（默认 `true`）
@@ -103,7 +106,7 @@ python main.py
 - thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search|history_search`
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
-- internet_search 默认使用 Bing 作为搜索源，返回 Top-3 摘要和链接（实现解耦，可替换 provider）
+- internet_search 默认优先使用 Bocha 作为搜索源（支持 env 切换 provider，缺少 Bocha key 时自动回退 Bing），返回 Top-3 摘要和链接
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`

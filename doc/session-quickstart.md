@@ -11,7 +11,7 @@
 - planner 上下文包含 `time_unit_contract`，明确时长/间隔/次数/日期格式单位，供 plan/thought/replan 共用。
 - slash 命令：`/todo`、`/schedule`、`/view` 仍走确定性命令执行路径。
 - CLI 内置本地定时提醒线程（默认开启）：V1 自动触发待办提醒、单次日程提醒与重复日程 occurrence 级提醒，输出 `提醒> ...`。
-- 搜索：默认 Bing，实现已解耦为 `SearchProvider` 可替换。
+- 搜索：默认优先 Bocha（可通过 env 切换 provider），缺少 Bocha key 时自动回退 Bing；实现已解耦为 `SearchProvider` 可替换。
 - CLI 反馈：输出灰色“进度>”过程日志（可通过 env 关闭颜色）。
 
 ## 3. 核心代码入口
@@ -29,7 +29,7 @@
 - `assistant_app/db.py`
   - SQLite 模型与读写（todo/schedule/recurrence）。
 - `assistant_app/search.py`
-  - 搜索 Provider 抽象与 Bing 默认实现。
+  - 搜索 Provider 抽象与 Bocha/Bing provider 实现及工厂选择逻辑。
 - `assistant_app/llm.py`
   - OpenAI-compatible SDK 封装。
 
@@ -49,6 +49,9 @@
 - `PLAN_CONTINUOUS_FAILURE_LIMIT`（默认 `2`）
 - `TASK_CANCEL_COMMAND`（默认 `取消当前任务`）
 - `INTERNET_SEARCH_TOP_K`（默认 `3`）
+- `SEARCH_PROVIDER`（默认 `bocha`，支持 `bocha|bing`）
+- `BOCHA_API_KEY`（Bocha 搜索 key，缺失时回退 Bing）
+- `BOCHA_SEARCH_SUMMARY`（默认 `true`）
 - `SCHEDULE_MAX_WINDOW_DAYS`（默认 `31`）
 - `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`（默认 `31`）
 - `CLI_PROGRESS_COLOR`（默认 `gray`，支持 `gray|off`）
@@ -85,7 +88,8 @@ python3 -m ruff check assistant_app tests
 
 ## 7. 已知边界 / 风险
 
-- 搜索结果解析依赖 Bing 页面结构，未来可能需要调整解析规则。
+- Bocha 接口返回结构或鉴权策略变化时，可能需要同步调整 provider 解析逻辑。
+- 在未配置 `BOCHA_API_KEY` 时会自动回退 Bing，仍存在 Bing HTML 结构变更的兼容性风险。
 - planner 若持续输出低质量动作，会在步数上限后兜底返回建议。
 - done 文案质量依赖模型输出，必要时可再触发一轮查询校验细节。
 
