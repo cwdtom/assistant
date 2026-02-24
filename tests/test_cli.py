@@ -15,6 +15,7 @@ from assistant_app.cli import (
     _resolve_progress_color,
     _should_show_waiting,
 )
+from assistant_app.reminder_sink import ReminderEvent, StdoutReminderSink
 
 
 class _FakeAgent:
@@ -120,6 +121,21 @@ class CLIFeedbackTest(unittest.TestCase):
             for handler in original_handlers:
                 logger.addHandler(handler)
             logger.propagate = original_propagate
+
+    def test_stdout_reminder_sink_emits_reminder_and_prompt(self) -> None:
+        stream = io.StringIO()
+        sink = StdoutReminderSink(stream=stream)
+        sink.emit(
+            ReminderEvent(
+                reminder_key="todo:1:2026-02-24 10:00",
+                source_type="todo",
+                source_id=1,
+                remind_time="2026-02-24 10:00",
+                content="待办提醒 #1: 准备发布",
+            )
+        )
+
+        self.assertEqual(stream.getvalue(), "\n提醒> 待办提醒 #1: 准备发布\n你> ")
 
 
 if __name__ == "__main__":

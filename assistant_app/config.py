@@ -21,6 +21,12 @@ class AppConfig:
     schedule_max_window_days: int
     infinite_repeat_conflict_preview_days: int
     cli_progress_color: str
+    timer_enabled: bool
+    timer_poll_interval_seconds: int
+    timer_lookahead_seconds: int
+    timer_catchup_seconds: int
+    timer_batch_limit: int
+    reminder_delivery_retention_days: int
 
 
 def load_env_file(env_path: str = ".env") -> None:
@@ -66,6 +72,12 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
             min_value=1,
         ),
         cli_progress_color=(os.getenv("CLI_PROGRESS_COLOR") or "gray").strip().lower() or "gray",
+        timer_enabled=_read_env_bool("TIMER_ENABLED", default=True),
+        timer_poll_interval_seconds=_read_env_int("TIMER_POLL_INTERVAL_SECONDS", default=15, min_value=1),
+        timer_lookahead_seconds=_read_env_int("TIMER_LOOKAHEAD_SECONDS", default=30, min_value=0),
+        timer_catchup_seconds=0,
+        timer_batch_limit=_read_env_int("TIMER_BATCH_LIMIT", default=200, min_value=1),
+        reminder_delivery_retention_days=_read_env_int("REMINDER_DELIVERY_RETENTION_DAYS", default=30, min_value=1),
     )
 
 
@@ -87,3 +99,15 @@ def _read_env_text(name: str, *, default: str) -> str:
     if raw is None:
         return default
     return raw.strip()
+
+
+def _read_env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default

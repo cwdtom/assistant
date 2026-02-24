@@ -35,6 +35,12 @@ cp .env.example .env
 - `INTERNET_SEARCH_TOP_K`：互联网搜索返回条数（默认 `3`）
 - `SCHEDULE_MAX_WINDOW_DAYS`：日程查询窗口最大天数（默认 `31`）
 - `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`：无限重复冲突检测预览天数（默认 `31`）
+- `TIMER_ENABLED`：是否启用本地定时提醒线程（默认 `true`）
+- `TIMER_POLL_INTERVAL_SECONDS`：提醒线程轮询间隔秒数（默认 `15`）
+- `TIMER_LOOKAHEAD_SECONDS`：提醒预扫描前瞻窗口秒数（默认 `30`）
+- `TIMER_CATCHUP_SECONDS`：提醒补发窗口秒数（V1 固定为 `0`，预留参数）
+- `TIMER_BATCH_LIMIT`：单轮最多处理提醒条数（默认 `200`）
+- `REMINDER_DELIVERY_RETENTION_DAYS`：提醒投递记录保留天数（默认 `30`）
 - `CLI_PROGRESS_COLOR`：进度输出颜色，支持 `gray|off`（默认 `gray`）
 - `LLM_TRACE_LOG_PATH`：LLM 请求/响应日志文件路径（默认 `logs/llm_trace.log`，留空可关闭）
 
@@ -67,7 +73,8 @@ python main.py
 - 日程支持重复创建（interval 分钟 + times），重复规则单独存储，查询时与普通日程拼接
 - 日程支持提醒时间字段（`--remind`，不填则不提醒）
 - 重复日程支持提醒开始时间字段（`--remind-start`，仅用于重复规则）
-- 当前版本仅存储并展示提醒相关字段，尚未实现自动提醒触发
+- 启动 CLI 后会在后台启动本地定时提醒线程（可通过 `TIMER_ENABLED=off` 关闭）
+- V1 支持待办提醒、单次日程提醒与重复日程 occurrence 级提醒自动触发（输出 `提醒> ...`）
 - 当提供 `--interval` 但省略 `--times` 时，默认重复次数为 `-1`（无限循环）
 - 重复规则支持启用/停用（停用后仅保留基础日程，不展开后续重复实例）
 - `/schedule list` 默认展示“从前天开始向后 1 个月”的窗口，最大查询范围固定为 1 个月

@@ -10,6 +10,7 @@
 - thought 契约：`status=ask_user` 负责澄清提问；`status=continue` 仅允许 todo/schedule/internet_search 工具动作。
 - planner 上下文包含 `time_unit_contract`，明确时长/间隔/次数/日期格式单位，供 plan/thought/replan 共用。
 - slash 命令：`/todo`、`/schedule`、`/view` 仍走确定性命令执行路径。
+- CLI 内置本地定时提醒线程（默认开启）：V1 自动触发待办提醒、单次日程提醒与重复日程 occurrence 级提醒，输出 `提醒> ...`。
 - 搜索：默认 Bing，实现已解耦为 `SearchProvider` 可替换。
 - CLI 反馈：输出灰色“进度>”过程日志（可通过 env 关闭颜色）。
 
@@ -52,6 +53,12 @@
 - `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`
 - `CLI_PROGRESS_COLOR`（`gray|off`）
 - `LLM_TRACE_LOG_PATH`（默认 `logs/llm_trace.log`，留空可关闭）
+- `TIMER_ENABLED`
+- `TIMER_POLL_INTERVAL_SECONDS`
+- `TIMER_LOOKAHEAD_SECONDS`
+- `TIMER_CATCHUP_SECONDS`（V1 固定按 0 处理）
+- `TIMER_BATCH_LIMIT`
+- `REMINDER_DELIVERY_RETENTION_DAYS`
 
 参考示例：`.env.example`
 

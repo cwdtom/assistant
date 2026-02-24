@@ -55,6 +55,17 @@ class ChatMessage:
     content: str
 
 
+@dataclass(frozen=True)
+class ReminderDelivery:
+    reminder_key: str
+    source_type: str
+    source_id: int
+    occurrence_time: str | None
+    remind_time: str
+    delivered_at: str
+    payload: str | None
+
+
 class AssistantDB:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -137,6 +148,20 @@ class AssistantDB:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reminder_deliveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reminder_key TEXT NOT NULL UNIQUE,
+                    source_type TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    occurrence_time TEXT,
+                    remind_time TEXT NOT NULL,
+                    delivered_at TEXT NOT NULL,
+                    payload TEXT
                 )
                 """
             )
@@ -872,6 +897,80 @@ class AssistantDB:
                 remind_start_time=str(row["remind_start_time"]) if row["remind_start_time"] else None,
                 enabled=bool(row["enabled"]) if row["enabled"] is not None else True,
                 created_at=str(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def list_base_schedules(self) -> list[ScheduleItem]:
+        with self._connect() as conn:
+            return self._list_base_schedules(conn)
+
+    def list_recurring_rules(self) -> list[RecurringScheduleRule]:
+        with self._connect() as conn:
+            return self._list_recurring_rules(conn)
+
+    def has_reminder_delivery(self, reminder_key: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM reminder_deliveries WHERE reminder_key = ?",
+                (reminder_key,),
+            ).fetchone()
+        return row is not None
+
+    def save_reminder_delivery(
+        self,
+        *,
+        reminder_key: str,
+        source_type: str,
+        source_id: int,
+        occurrence_time: str | None,
+        remind_time: str,
+        payload: str | None = None,
+    ) -> bool:
+        delivered_at = _now_iso()
+        with self._connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO reminder_deliveries (
+                        reminder_key, source_type, source_id, occurrence_time,
+                        remind_time, delivered_at, payload
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        reminder_key,
+                        source_type,
+                        source_id,
+                        occurrence_time,
+                        remind_time,
+                        delivered_at,
+                        payload,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
+    def list_reminder_deliveries(self) -> list[ReminderDelivery]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT reminder_key, source_type, source_id, occurrence_time,
+                       remind_time, delivered_at, payload
+                FROM reminder_deliveries
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        return [
+            ReminderDelivery(
+                reminder_key=str(row["reminder_key"]),
+                source_type=str(row["source_type"]),
+                source_id=int(row["source_id"]),
+                occurrence_time=str(row["occurrence_time"]) if row["occurrence_time"] else None,
+                remind_time=str(row["remind_time"]),
+                delivered_at=str(row["delivered_at"]),
+                payload=str(row["payload"]) if row["payload"] is not None else None,
             )
             for row in rows
         ]

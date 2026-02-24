@@ -432,6 +432,62 @@ class AssistantDBTest(unittest.TestCase):
         assert changed is not None
         self.assertEqual(changed.duration_minutes, 45)
 
+    def test_list_base_schedules_excludes_recurring_expansion(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 10:00", duration_minutes=45)
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-02-20 10:00",
+            repeat_interval_minutes=10080,
+            repeat_times=3,
+        )
+
+        all_items = self.db.list_schedules()
+        base_items = self.db.list_base_schedules()
+        self.assertEqual(len(all_items), 3)
+        self.assertEqual(len(base_items), 1)
+        self.assertEqual(base_items[0].event_time, "2026-02-20 10:00")
+
+    def test_save_reminder_delivery_is_idempotent(self) -> None:
+        first = self.db.save_reminder_delivery(
+            reminder_key="todo:1:2026-02-25 09:00",
+            source_type="todo",
+            source_id=1,
+            occurrence_time=None,
+            remind_time="2026-02-25 09:00",
+        )
+        second = self.db.save_reminder_delivery(
+            reminder_key="todo:1:2026-02-25 09:00",
+            source_type="todo",
+            source_id=1,
+            occurrence_time=None,
+            remind_time="2026-02-25 09:00",
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertTrue(self.db.has_reminder_delivery("todo:1:2026-02-25 09:00"))
+        deliveries = self.db.list_reminder_deliveries()
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0].source_type, "todo")
+
+    def test_list_recurring_rules_returns_saved_rule(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 10:00")
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 10:00",
+                repeat_interval_minutes=10080,
+                repeat_times=3,
+                remind_start_time="2026-02-20 09:30",
+            )
+        )
+
+        rules = self.db.list_recurring_rules()
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0].schedule_id, schedule_id)
+        self.assertEqual(rules[0].repeat_interval_minutes, 10080)
+        self.assertEqual(rules[0].remind_start_time, "2026-02-20 09:30")
+
     def test_schedule_duration_validation(self) -> None:
         with self.assertRaises(ValueError):
             self.db.add_schedule("非法时长", "2026-02-20 10:00", duration_minutes=0)

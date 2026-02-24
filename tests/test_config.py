@@ -32,6 +32,12 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.cli_progress_color, "gray")
         self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
+        self.assertTrue(config.timer_enabled)
+        self.assertEqual(config.timer_poll_interval_seconds, 15)
+        self.assertEqual(config.timer_lookahead_seconds, 30)
+        self.assertEqual(config.timer_catchup_seconds, 0)
+        self.assertEqual(config.timer_batch_limit, 200)
+        self.assertEqual(config.reminder_delivery_retention_days, 30)
 
     def test_load_config_falls_back_to_openai_env(self) -> None:
         env = {
@@ -64,6 +70,12 @@ class ConfigTest(unittest.TestCase):
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "14",
             "CLI_PROGRESS_COLOR": "off",
             "LLM_TRACE_LOG_PATH": "logs/custom_llm_trace.log",
+            "TIMER_ENABLED": "off",
+            "TIMER_POLL_INTERVAL_SECONDS": "20",
+            "TIMER_LOOKAHEAD_SECONDS": "45",
+            "TIMER_CATCHUP_SECONDS": "999",
+            "TIMER_BATCH_LIMIT": "120",
+            "REMINDER_DELIVERY_RETENTION_DAYS": "7",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -78,6 +90,12 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 14)
         self.assertEqual(config.cli_progress_color, "off")
         self.assertEqual(config.llm_trace_log_path, "logs/custom_llm_trace.log")
+        self.assertFalse(config.timer_enabled)
+        self.assertEqual(config.timer_poll_interval_seconds, 20)
+        self.assertEqual(config.timer_lookahead_seconds, 45)
+        self.assertEqual(config.timer_catchup_seconds, 0)
+        self.assertEqual(config.timer_batch_limit, 120)
+        self.assertEqual(config.reminder_delivery_retention_days, 7)
 
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
@@ -92,6 +110,11 @@ class ConfigTest(unittest.TestCase):
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "abc",
             "CLI_PROGRESS_COLOR": "  ",
             "LLM_TRACE_LOG_PATH": "   ",
+            "TIMER_ENABLED": "invalid",
+            "TIMER_POLL_INTERVAL_SECONDS": "0",
+            "TIMER_LOOKAHEAD_SECONDS": "-1",
+            "TIMER_BATCH_LIMIT": "bad",
+            "REMINDER_DELIVERY_RETENTION_DAYS": "0",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -106,6 +129,12 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.cli_progress_color, "gray")
         self.assertEqual(config.llm_trace_log_path, "")
+        self.assertTrue(config.timer_enabled)
+        self.assertEqual(config.timer_poll_interval_seconds, 15)
+        self.assertEqual(config.timer_lookahead_seconds, 30)
+        self.assertEqual(config.timer_catchup_seconds, 0)
+        self.assertEqual(config.timer_batch_limit, 200)
+        self.assertEqual(config.reminder_delivery_retention_days, 30)
 
     def test_load_env_file_sets_only_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

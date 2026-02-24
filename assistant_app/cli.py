@@ -10,6 +10,9 @@ from assistant_app.agent import AssistantAgent
 from assistant_app.config import load_config
 from assistant_app.db import AssistantDB
 from assistant_app.llm import OpenAICompatibleClient
+from assistant_app.reminder_service import ReminderService
+from assistant_app.reminder_sink import StdoutReminderSink
+from assistant_app.timer import TimerEngine
 
 CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
 PROGRESS_COLOR_PREFIX = "\033[90m"
@@ -146,31 +149,50 @@ def main() -> None:
         schedule_max_window_days=config.schedule_max_window_days,
         infinite_repeat_conflict_preview_days=config.infinite_repeat_conflict_preview_days,
     )
+    timer_engine: TimerEngine | None = None
+    if config.timer_enabled:
+        reminder_sink = StdoutReminderSink(stream=sys.stdout)
+        reminder_service = ReminderService(
+            db=db,
+            sink=reminder_sink,
+            lookahead_seconds=config.timer_lookahead_seconds,
+            catchup_seconds=config.timer_catchup_seconds,
+            batch_limit=config.timer_batch_limit,
+        )
+        timer_engine = TimerEngine(
+            reminder_service=reminder_service,
+            poll_interval_seconds=config.timer_poll_interval_seconds,
+        )
+        timer_engine.start()
 
-    _clear_terminal_history()
-    print("CLI 个人助手已启动。输入 /help 查看命令，输入 exit 退出。")
-    while True:
-        try:
-            raw = input("你> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            _exit_cli(with_leading_newline=True)
-            break
+    try:
+        _clear_terminal_history()
+        print("CLI 个人助手已启动。输入 /help 查看命令，输入 exit 退出。")
+        while True:
+            try:
+                raw = input("你> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                _exit_cli(with_leading_newline=True)
+                break
 
-        if raw.lower() in {"exit", "quit"}:
-            _exit_cli()
-            break
+            if raw.lower() in {"exit", "quit"}:
+                _exit_cli()
+                break
 
-        try:
-            response = _handle_input_with_feedback(
-                agent,
-                raw,
-                progress_color_prefix=progress_color_prefix,
-                progress_color_suffix=progress_color_suffix,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"助手> 处理失败: {exc}")
-            continue
-        print(f"助手> {response}")
+            try:
+                response = _handle_input_with_feedback(
+                    agent,
+                    raw,
+                    progress_color_prefix=progress_color_prefix,
+                    progress_color_suffix=progress_color_suffix,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"助手> 处理失败: {exc}")
+                continue
+            print(f"助手> {response}")
+    finally:
+        if timer_engine is not None:
+            timer_engine.stop()
 
 
 if __name__ == "__main__":
