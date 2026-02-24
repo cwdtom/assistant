@@ -30,6 +30,7 @@ cp .env.example .env
 - `PLAN_REPLAN_MAX_STEPS`：plan 循环最大执行步数（默认 `20`）
 - `PLAN_REPLAN_RETRY_COUNT`：planner JSON 失败重试次数（默认 `2`）
 - `PLAN_OBSERVATION_CHAR_LIMIT`：单条 observation 最大保留字符（默认 `10000`）
+- `PLAN_OBSERVATION_HISTORY_LIMIT`：thought 上下文保留的 observation 条数上限（默认 `100`）
 - `PLAN_CONTINUOUS_FAILURE_LIMIT`：连续失败兜底阈值（默认 `2`）
 - `TASK_CANCEL_COMMAND`：取消当前任务命令文本（默认 `取消当前任务`）
 - `INTERNET_SEARCH_TOP_K`：互联网搜索返回条数（默认 `3`）

@@ -1377,6 +1377,34 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("thought", observed_tools)
         self.assertIn("todo", observed_tools)
 
+    def test_thought_context_observations_history_is_limited_by_config(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("步骤一已完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=fake_llm,
+            search_provider=FakeSearchProvider(),
+            plan_observation_history_limit=2,
+        )
+        self.db.add_todo("买牛奶")
+
+        response = agent.handle_input("测试 current_subtask_observations 条数上限")
+        self.assertIn("全部完成", response)
+
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertEqual(len(thought_calls), 2)
+        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        observations = second_thought_payload.get("current_subtask_observations", [])
+        self.assertEqual(len(observations), 2)
+        self.assertEqual(observations[0].get("tool"), "thought")
+        self.assertEqual(observations[1].get("tool"), "todo")
+
     def test_thought_context_reinitializes_observations_for_each_subtask(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[

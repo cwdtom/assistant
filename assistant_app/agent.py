@@ -38,6 +38,7 @@ DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
 DEFAULT_PLAN_REPLAN_MAX_STEPS = 20
 DEFAULT_PLAN_REPLAN_RETRY_COUNT = 2
 DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT = 10000
+DEFAULT_PLAN_OBSERVATION_HISTORY_LIMIT = 100
 DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT = 2
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 DEFAULT_INTERNET_SEARCH_TOP_K = 3
@@ -158,6 +159,7 @@ class AssistantAgent:
         plan_replan_max_steps: int = DEFAULT_PLAN_REPLAN_MAX_STEPS,
         plan_replan_retry_count: int = DEFAULT_PLAN_REPLAN_RETRY_COUNT,
         plan_observation_char_limit: int = DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT,
+        plan_observation_history_limit: int = DEFAULT_PLAN_OBSERVATION_HISTORY_LIMIT,
         plan_continuous_failure_limit: int = DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT,
         task_cancel_command: str = DEFAULT_TASK_CANCEL_COMMAND,
         internet_search_top_k: int = DEFAULT_INTERNET_SEARCH_TOP_K,
@@ -177,6 +179,7 @@ class AssistantAgent:
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_replan_retry_count = max(plan_replan_retry_count, 0)
         self._plan_observation_char_limit = max(plan_observation_char_limit, 1)
+        self._plan_observation_history_limit = max(plan_observation_history_limit, 1)
         self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
         self._task_cancel_command = task_cancel_command.strip() or DEFAULT_TASK_CANCEL_COMMAND
         self._internet_search_top_k = max(internet_search_top_k, 1)
@@ -641,7 +644,9 @@ class AssistantAgent:
     def _build_thought_context(self, task: PendingPlanTask) -> dict[str, Any]:
         outer = self._outer_context(task)
         inner = self._ensure_inner_context(task)
-        current_subtask_observations = self._serialize_observations(inner.observations)
+        current_subtask_observations = self._serialize_observations(
+            inner.observations[-self._plan_observation_history_limit :]
+        )
         completed_subtasks = self._serialize_completed_subtasks(inner.completed_subtasks)
         current_subtask: dict[str, Any] = {
             "item": inner.current_subtask,

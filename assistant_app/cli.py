@@ -143,6 +143,7 @@ def main() -> None:
         plan_replan_max_steps=config.plan_replan_max_steps,
         plan_replan_retry_count=config.plan_replan_retry_count,
         plan_observation_char_limit=config.plan_observation_char_limit,
+        plan_observation_history_limit=config.plan_observation_history_limit,
         plan_continuous_failure_limit=config.plan_continuous_failure_limit,
         task_cancel_command=config.task_cancel_command,
         internet_search_top_k=config.internet_search_top_k,

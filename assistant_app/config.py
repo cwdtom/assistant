@@ -15,6 +15,7 @@ class AppConfig:
     plan_replan_max_steps: int
     plan_replan_retry_count: int
     plan_observation_char_limit: int
+    plan_observation_history_limit: int
     plan_continuous_failure_limit: int
     task_cancel_command: str
     internet_search_top_k: int
@@ -62,6 +63,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=20, min_value=1),
         plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=2, min_value=0),
         plan_observation_char_limit=_read_env_int("PLAN_OBSERVATION_CHAR_LIMIT", default=10000, min_value=1),
+        plan_observation_history_limit=_read_env_int("PLAN_OBSERVATION_HISTORY_LIMIT", default=100, min_value=1),
         plan_continuous_failure_limit=_read_env_int("PLAN_CONTINUOUS_FAILURE_LIMIT", default=2, min_value=1),
         task_cancel_command=task_cancel_command,
         internet_search_top_k=_read_env_int("INTERNET_SEARCH_TOP_K", default=3, min_value=1),
