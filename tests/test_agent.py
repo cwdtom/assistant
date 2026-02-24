@@ -1191,6 +1191,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(fake_llm.model_call_count, 2)
         first_messages = fake_llm.calls[0]
         self.assertIn("plan 模块", first_messages[0]["content"])
+        self.assertIn("看一下/看看/查一下", first_messages[0]["content"])
+        self.assertIn("查询并列出来给用户查看", first_messages[0]["content"])
         planner_user_payload = json.loads(first_messages[1]["content"])
         self.assertNotIn("tool_contract", planner_user_payload)
         self.assertNotIn("observations", planner_user_payload)
