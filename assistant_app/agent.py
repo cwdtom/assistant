@@ -1555,7 +1555,7 @@ class AssistantAgent:
             "/schedule repeat <id> <on|off>\n"
             "/schedule delete <id>\n"
             "/schedule list\n"
-            "你也可以直接说自然语言（会走 plan -> act -> observe -> replan 循环）。\n"
+            "你也可以直接说自然语言（会走 plan -> thought -> act -> observe -> replan 循环）。\n"
             "当前版本仅支持计划链路，不再走 chat 直聊分支。"
         )
 
@@ -2021,21 +2021,21 @@ def _normalize_schedule_repeat_times_value(value: Any) -> int | None:
     if isinstance(value, int):
         if value == -1:
             return -1
-        return value if value >= 1 else None
+        return value if value >= 2 else None
     if isinstance(value, float):
         if not value.is_integer():
             return None
         parsed = int(value)
         if parsed == -1:
             return -1
-        return parsed if parsed >= 1 else None
+        return parsed if parsed >= 2 else None
     text = str(value).strip()
     if not re.fullmatch(r"-?\d+", text):
         return None
     parsed = int(text)
     if parsed == -1:
         return -1
-    if parsed < 1:
+    if parsed < 2:
         return None
     return parsed
 

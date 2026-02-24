@@ -4,48 +4,53 @@ from typing import Any
 
 from assistant_app.planner_common import normalize_plan_items
 
-PLAN_ONCE_PROMPT = """
-你是 CLI 助手的 plan 模块，只负责在任务开始时生成执行计划。
-你每次必须只输出一个 JSON 对象，禁止输出额外文本。
-
+PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
 - todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
 - schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
 - internet_search：互联网检索网页信息并返回摘要
 - ask_user：当信息不足时向用户发起澄清（由 thought 阶段触发）
+""".strip()
+
+PLAN_INTENT_EXPANSION_RULE = (
+    "先将用户口语化表达扩展成可执行目标再写计划步骤"
+    "（如“看一下/看看/查一下”通常表示“查询并列出来给用户查看”）"
+)
+
+PLAN_ONCE_PROMPT = f"""
+你是 CLI 助手的 plan 模块，只负责在任务开始时生成执行计划。
+你每次必须只输出一个 JSON 对象，禁止输出额外文本。
+
+{PLANNER_CAPABILITIES_TEXT}
 
 输出 JSON 格式：
-{
+{{
   "status": "planned",
   "plan": ["步骤1", "步骤2"]
-}
+}}
 
 规则：
 - 只输出 planned，不要输出 done
 - plan 至少包含 1 项，且应按执行顺序排列
-- 先将用户口语化表达扩展成可执行目标再写计划步骤（如“看一下/看看/查一下”通常表示“查询并列出来给用户查看”）
+- {PLAN_INTENT_EXPANSION_RULE}
 - 不要输出工具动作，只给步骤描述
 """.strip()
 
-REPLAN_PROMPT = """
+REPLAN_PROMPT = f"""
 你是 CLI 助手的 replan 模块，需要在一个子任务的 thought->act->observe 循环完成后更新计划进度。
 你每次必须只输出一个 JSON 对象，禁止输出额外文本。
 
-可用执行能力（用于判断后续是否可继续推进）：
-- todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
-- schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
-- internet_search：互联网检索网页信息并返回摘要
-- ask_user：当信息不足时向用户发起澄清（由 thought 阶段触发）
+{PLANNER_CAPABILITIES_TEXT}
 
 输出 JSON 格式：
-{
+{{
   "status": "replanned|done",
   "plan": [
-    {"task": "步骤1", "completed": true},
-    {"task": "步骤2", "completed": false}
+    {{"task": "步骤1", "completed": true}},
+    {{"task": "步骤2", "completed": false}}
   ],
   "response": "string|null"
-}
+}}
 
 规则：
 - status=replanned: 必须输出计划数组（至少 1 项）
@@ -58,6 +63,7 @@ REPLAN_PROMPT = """
 - 可以输出“剩余步骤计划”或“重排后的全量计划”，但必须可继续执行
 - 若信息仍不足，可保留待澄清步骤，但不要直接提问
 """.strip()
+
 
 def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()

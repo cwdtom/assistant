@@ -40,7 +40,7 @@ cp .env.example .env
 - `TIMER_LOOKAHEAD_SECONDS`：提醒预扫描前瞻窗口秒数（默认 `30`）
 - `TIMER_CATCHUP_SECONDS`：提醒补发窗口秒数（V1 固定为 `0`，预留参数）
 - `TIMER_BATCH_LIMIT`：单轮最多处理提醒条数（默认 `200`）
-- `REMINDER_DELIVERY_RETENTION_DAYS`：提醒投递记录保留天数（默认 `30`）
+- `REMINDER_DELIVERY_RETENTION_DAYS`：提醒投递记录保留天数（默认 `30`，V1 暂未启用自动清理，仅预留参数）
 - `CLI_PROGRESS_COLOR`：进度输出颜色，支持 `gray|off`（默认 `gray`）
 - `LLM_TRACE_LOG_PATH`：LLM 请求/响应日志文件路径（默认 `logs/llm_trace.log`，留空可关闭）
 
@@ -77,12 +77,12 @@ python main.py
 - V1 支持待办提醒、单次日程提醒与重复日程 occurrence 级提醒自动触发（输出 `提醒> ...`）
 - 当提供 `--interval` 但省略 `--times` 时，默认重复次数为 `-1`（无限循环）
 - 重复规则支持启用/停用（停用后仅保留基础日程，不展开后续重复实例）
-- `/schedule list` 默认展示“从前天开始向后 1 个月”的窗口，最大查询范围固定为 1 个月
+- `/schedule list` 默认展示“从前天开始向后 31 天”的窗口，窗口天数可通过 `SCHEDULE_MAX_WINDOW_DAYS` 调整
 - `/schedule view` 会按传入锚点（day/week/month）计算时间窗口查询，不依赖“当前时间”展开重复日程
 - CLI 查看日程时会展示重复相关字段（重复间隔、重复次数、重复启用状态）
 - 日程支持日历视图（day/week/month）
 - 日程新增/修改时会做冲突检测（时间区间重叠会提示冲突，会考虑时长）
-- 对 `times=-1` 的无限重复，冲突检测按“起始时间起未来 31 天”窗口校验
+- 对 `times=-1` 的无限重复，冲突检测按“起始时间起未来 N 天”窗口校验（默认 `31`，可通过 `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS` 调整）
 - 待办支持关键词搜索（可选按标签范围搜索）
 - 待办支持视图（all/today/overdue/upcoming/inbox）
 - 待办支持 `priority` 字段（默认 `0`，数值越小优先级越高，最小为 `0`）
@@ -95,7 +95,7 @@ python main.py
 - plan 仅在每个新任务开始时执行一次；每个子任务的 thought->act->observe 循环完成后会触发 replan 跟进进度（澄清恢复后也会触发），并由 replan 决定外层是继续还是收口输出
 - thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/ask_user 四种动作间切换
 - thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search`
-- planner 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
+- thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认使用 Bing 作为搜索源，返回 Top-3 摘要和链接（实现解耦，可替换 provider）
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”

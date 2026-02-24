@@ -449,6 +449,14 @@ class AssistantAgentTest(unittest.TestCase):
         invalid = agent.handle_input(f"/schedule add {base_text} 站会 --times 3")
         self.assertIn("用法", invalid)
 
+        invalid_times_one = agent.handle_input(f"/schedule add {base_text} 站会 --times 1")
+        self.assertIn("用法", invalid_times_one)
+
+        invalid_interval_times_one = agent.handle_input(
+            f"/schedule add {base_text} 站会 --interval 1440 --times 1"
+        )
+        self.assertIn("用法", invalid_interval_times_one)
+
         invalid_duration = agent.handle_input(f"/schedule add {base_text} 站会 --duration 0")
         self.assertIn("用法", invalid_duration)
 
