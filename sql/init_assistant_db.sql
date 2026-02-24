@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS recurring_schedules (
 
 CREATE TABLE IF NOT EXISTS chat_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
+    user_content TEXT NOT NULL,
+    assistant_content TEXT NOT NULL,
     created_at TEXT NOT NULL
 );

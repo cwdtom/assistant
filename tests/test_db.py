@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -511,6 +512,68 @@ class AssistantDBTest(unittest.TestCase):
         messages = self.db.recent_messages(limit=2)
         self.assertEqual(messages[0].content, "hello")
         self.assertEqual(messages[1].content, "world")
+
+    def test_save_turn_persists_user_and_assistant_messages(self) -> None:
+        self.db.save_turn(user_content="你好", assistant_content="你好，我可以帮你什么？")
+
+        messages = self.db.recent_messages(limit=2)
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0].role, "user")
+        self.assertEqual(messages[0].content, "你好")
+        self.assertEqual(messages[1].role, "assistant")
+        self.assertEqual(messages[1].content, "你好，我可以帮你什么？")
+
+    def test_recent_turns_returns_paired_user_and_assistant_fields(self) -> None:
+        self.db.save_turn(user_content="用户问题", assistant_content="最终回答")
+
+        turns = self.db.recent_turns(limit=1)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0].user_content, "用户问题")
+        self.assertEqual(turns[0].assistant_content, "最终回答")
+
+    def test_search_turns_matches_user_or_assistant_content(self) -> None:
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已帮你记录买牛奶")
+        self.db.save_turn(user_content="今天日程", assistant_content="你今天 10:00 有会议")
+
+        user_hits = self.db.search_turns("牛奶", limit=10)
+        self.assertEqual(len(user_hits), 1)
+        self.assertEqual(user_hits[0].user_content, "我要买牛奶")
+
+        assistant_hits = self.db.search_turns("10:00", limit=10)
+        self.assertEqual(len(assistant_hits), 1)
+        self.assertEqual(assistant_hits[0].assistant_content, "你今天 10:00 有会议")
+
+    def test_chat_history_legacy_schema_is_migrated_to_turn_schema(self) -> None:
+        legacy_path = Path(self.tmp.name) / "legacy_chat_history.db"
+        conn = sqlite3.connect(str(legacy_path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE chat_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO chat_history (role, content, created_at) VALUES (?, ?, ?)",
+                ("user", "老问题", "2026-02-24 09:00:00"),
+            )
+            conn.execute(
+                "INSERT INTO chat_history (role, content, created_at) VALUES (?, ?, ?)",
+                ("assistant", "老回答", "2026-02-24 09:00:01"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        migrated_db = AssistantDB(str(legacy_path))
+        turns = migrated_db.recent_turns(limit=5)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0].user_content, "老问题")
+        self.assertEqual(turns[0].assistant_content, "老回答")
 
 
 if __name__ == "__main__":

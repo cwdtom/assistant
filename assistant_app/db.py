@@ -56,6 +56,13 @@ class ChatMessage:
 
 
 @dataclass(frozen=True)
+class ChatTurn:
+    user_content: str
+    assistant_content: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class ReminderDelivery:
     reminder_key: str
     source_type: str
@@ -145,12 +152,13 @@ class AssistantDB:
                 """
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
+                    user_content TEXT NOT NULL,
+                    assistant_content TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            self._ensure_chat_history_turn_schema(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reminder_deliveries (
@@ -325,6 +333,73 @@ class AssistantDB:
             """
         )
         conn.execute("DROP TABLE recurring_schedules_old")
+
+    def _ensure_chat_history_turn_schema(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(chat_history)").fetchall()
+        names = {row["name"] for row in columns}
+        required = {"id", "user_content", "assistant_content", "created_at"}
+        if required.issubset(names):
+            return
+        if {"id", "role", "content", "created_at"}.issubset(names):
+            rows = conn.execute(
+                """
+                SELECT role, content, created_at
+                FROM chat_history
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            conn.execute("ALTER TABLE chat_history RENAME TO chat_history_old")
+            conn.execute(
+                """
+                CREATE TABLE chat_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_content TEXT NOT NULL,
+                    assistant_content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            pending_user: str | None = None
+            pending_created_at: str | None = None
+            for row in rows:
+                role = str(row["role"] or "").strip().lower()
+                content = str(row["content"] or "")
+                created_at = str(row["created_at"] or _now_iso())
+                if role == "user":
+                    if pending_user is not None:
+                        conn.execute(
+                            "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                            (pending_user, "", pending_created_at or created_at),
+                        )
+                    pending_user = content
+                    pending_created_at = created_at
+                    continue
+                if role == "assistant":
+                    if pending_user is not None:
+                        conn.execute(
+                            "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                            (pending_user, content, pending_created_at or created_at),
+                        )
+                        pending_user = None
+                        pending_created_at = None
+                    else:
+                        conn.execute(
+                            "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                            ("", content, created_at),
+                        )
+                    continue
+                conn.execute(
+                    "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                    ("", content, created_at),
+                )
+            if pending_user is not None:
+                conn.execute(
+                    "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                    (pending_user, "", pending_created_at or _now_iso()),
+                )
+            conn.execute("DROP TABLE chat_history_old")
+            return
+        raise RuntimeError("chat_history schema is not supported")
 
     def add_todo(
         self,
@@ -976,27 +1051,103 @@ class AssistantDB:
         ]
 
     def save_message(self, role: str, content: str) -> None:
+        normalized_role = role.strip().lower()
+        if normalized_role == "user":
+            self.save_turn(user_content=content, assistant_content="")
+            return
+        if normalized_role == "assistant":
+            timestamp = _now_iso()
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM chat_history
+                    WHERE assistant_content = ''
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is not None:
+                    conn.execute(
+                        "UPDATE chat_history SET assistant_content = ? WHERE id = ?",
+                        (content, int(row["id"])),
+                    )
+                    return
+                conn.execute(
+                    "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                    ("", content, timestamp),
+                )
+            return
+        self.save_turn(user_content="", assistant_content=content)
+
+    def save_turn(self, *, user_content: str, assistant_content: str) -> None:
         timestamp = _now_iso()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO chat_history (role, content, created_at) VALUES (?, ?, ?)",
-                (role, content, timestamp),
+                "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+                (user_content, assistant_content, timestamp),
             )
 
-    def recent_messages(self, limit: int = 8) -> list[ChatMessage]:
+    def recent_turns(self, limit: int = 8) -> list[ChatTurn]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT role, content
+                SELECT user_content, assistant_content, created_at
                 FROM chat_history
                 ORDER BY id DESC
                 LIMIT ?
                 """,
                 (limit,),
             ).fetchall()
-        # Reverse to keep chronological order for model input.
+        # Reverse to keep chronological order for display.
         rows.reverse()
-        return [ChatMessage(role=row["role"], content=row["content"]) for row in rows]
+        return [
+            ChatTurn(
+                user_content=str(row["user_content"] or ""),
+                assistant_content=str(row["assistant_content"] or ""),
+                created_at=str(row["created_at"] or ""),
+            )
+            for row in rows
+        ]
+
+    def search_turns(self, keyword: str, *, limit: int = 20) -> list[ChatTurn]:
+        text = keyword.strip()
+        if not text:
+            return []
+        normalized_limit = max(limit, 1)
+        like_pattern = f"%{text}%"
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_content, assistant_content, created_at
+                FROM chat_history
+                WHERE user_content LIKE ? OR assistant_content LIKE ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (like_pattern, like_pattern, normalized_limit),
+            ).fetchall()
+        rows.reverse()
+        return [
+            ChatTurn(
+                user_content=str(row["user_content"] or ""),
+                assistant_content=str(row["assistant_content"] or ""),
+                created_at=str(row["created_at"] or ""),
+            )
+            for row in rows
+        ]
+
+    def recent_messages(self, limit: int = 8) -> list[ChatMessage]:
+        turns = self.recent_turns(limit=max(limit, 1))
+        messages: list[ChatMessage] = []
+        for item in turns:
+            if item.user_content:
+                messages.append(ChatMessage(role="user", content=item.user_content))
+            if item.assistant_content:
+                messages.append(ChatMessage(role="assistant", content=item.assistant_content))
+        if len(messages) <= limit:
+            return messages
+        return messages[-limit:]
 
 
 def _now_iso() -> str:

@@ -53,6 +53,8 @@ python main.py
 
 ## 命令
 - `/help`
+- `/history list [--limit <>=1>]`
+- `/history search <关键词> [--limit <>=1>]`
 - `/view list`
 - `/view <all|today|overdue|upcoming|inbox> [--tag <标签>]`
 - `/todo add <内容> [--tag <标签>] [--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]`
@@ -70,6 +72,8 @@ python main.py
 - `/schedule delete <id>`
 - `/schedule list`
 - 待办和日程均支持增删改查（CRUD）
+- 每次非 `/` 命令交互会持久化记录用户输入与助手最终回复（`chat_history`）
+- 历史会话支持关键词模糊搜索（匹配用户输入或最终回答）
 - 日程支持 `duration_minutes` 字段（单位分钟，新增默认 `60`；更新时不传则保留原值）
 - 日程支持重复创建（interval 分钟 + times），重复规则单独存储，查询时与普通日程拼接
 - 日程支持提醒时间字段（`--remind`，不填则不提醒）
@@ -94,8 +98,8 @@ python main.py
 - 自然语言任务会实时输出循环进度：步骤进度、计划列表、工具执行结果与完成情况
 - 支持自然语言命令（plan -> thought -> act -> observe -> replan 循环）
 - plan 仅在每个新任务开始时执行一次；每个子任务的 thought->act->observe 循环完成后会触发 replan 跟进进度（澄清恢复后也会触发），并由 replan 决定外层是继续还是收口输出
-- thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/ask_user 四种动作间切换
-- thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search`
+- thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/history_search/ask_user 五种动作间切换
+- thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search|history_search`
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认使用 Bing 作为搜索源，返回 Top-3 摘要和链接（实现解耦，可替换 provider）
@@ -136,7 +140,7 @@ python main.py
 - `todos`：待办主表，存储内容、标签、优先级、完成状态、创建/完成时间、截止时间、提醒时间。
 - `schedules`：日程主表，存储标题、事件时间、时长、提醒时间、创建时间。
 - `recurring_schedules`：重复规则表（关联 `schedules.id`），存储重复开始时间、间隔分钟、重复次数、重复提醒开始时间、启停状态；删除日程会级联删除规则。
-- `chat_history`：聊天历史表，存储消息角色、消息内容和创建时间。
+- `chat_history`：聊天历史表，按会话轮次存储 `user_content`（用户输入）、`assistant_content`（最终回答）和 `created_at`。
 
 ## 初始化数据库（可选）
 - 初始化 SQL 文件：`sql/init_assistant_db.sql`

@@ -9,6 +9,7 @@ PLANNER_CAPABILITIES_TEXT = """
 - todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
 - schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
 - internet_search：互联网检索网页信息并返回摘要
+- history_search：检索历史会话（用户输入与最终回答）
 - ask_user：当信息不足时向用户发起澄清（由 thought 阶段触发）
 """.strip()
 

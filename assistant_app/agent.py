@@ -32,6 +32,7 @@ TODO_VIEW_OPTION_PATTERN = re.compile(r"(^|\s)--view\s+(\S+)")
 TODO_PRIORITY_OPTION_PATTERN = re.compile(r"(^|\s)--priority\s+(-?\d+)")
 TODO_DUE_OPTION_PATTERN = re.compile(r"(^|\s)--due\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
 TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
+HISTORY_LIMIT_OPTION_PATTERN = re.compile(r"(^|\s)--limit\s+(\d+)")
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
 DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
@@ -43,6 +44,8 @@ DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT = 2
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 DEFAULT_INTERNET_SEARCH_TOP_K = 3
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
+DEFAULT_HISTORY_LIST_LIMIT = 20
+MAX_HISTORY_LIST_LIMIT = 200
 
 PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
     "todo": [
@@ -71,6 +74,7 @@ PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
         "/schedule delete <id>",
     ],
     "internet_search": ["<关键词>"],
+    "history_search": ["/history search <关键词> [--limit <>=1>]"],
     "ask_user": ["<单个澄清问题>"],
 }
 
@@ -216,6 +220,14 @@ class AssistantAgent:
         text = user_input.strip()
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
+        response = self._handle_input_text(text)
+        if not text.startswith("/"):
+            self._save_turn_history(user_text=text, assistant_text=response)
+        return response
+
+    def _handle_input_text(self, text: str) -> str:
+        if not text:
+            return "请输入内容。输入 /help 查看可用命令。"
 
         if text == self._task_cancel_command:
             if self._pending_plan_task is None:
@@ -240,6 +252,12 @@ class AssistantAgent:
 
         task = PendingPlanTask(goal=text)
         return self._run_outer_plan_loop(task=task)
+
+    def _save_turn_history(self, *, user_text: str, assistant_text: str) -> None:
+        try:
+            self.db.save_turn(user_content=user_text, assistant_content=assistant_text)
+        except Exception:
+            logging.getLogger(__name__).warning("保存 chat_history 失败", exc_info=True)
 
     def _run_outer_plan_loop(self, task: PendingPlanTask) -> str:
         while True:
@@ -826,6 +844,28 @@ class AssistantAgent:
             formatted = _format_search_results(search_results)
             return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
 
+        if action_tool == "history_search":
+            normalized_command = action_input.strip()
+            if not normalized_command.startswith("/history search"):
+                return PlannerObservation(
+                    tool="history_search",
+                    input_text=action_input,
+                    ok=False,
+                    result="history_search 工具仅支持 /history search 命令。",
+                )
+            command_result = self._handle_command(normalized_command)
+            ok = (
+                not command_result.startswith("用法:")
+                and not command_result.startswith("未找到包含")
+                and not command_result.startswith("暂无历史会话")
+            )
+            return PlannerObservation(
+                tool="history_search",
+                input_text=normalized_command,
+                ok=ok,
+                result=command_result,
+            )
+
         return PlannerObservation(
             tool=action_tool or "unknown",
             input_text=action_input,
@@ -1009,6 +1049,45 @@ class AssistantAgent:
 
         if command == "/view list":
             return self._todo_view_list_text()
+
+        if command == "/history list" or command.startswith("/history list "):
+            history_limit = _parse_history_list_limit(command)
+            if history_limit is None:
+                return "用法: /history list [--limit <>=1>]"
+            turns = self.db.recent_turns(limit=history_limit)
+            if not turns:
+                return "暂无历史会话。"
+            rows = [
+                [
+                    str(index),
+                    _truncate_text(item.user_content, 300) or "-",
+                    _truncate_text(item.assistant_content, 300) or "-",
+                    item.created_at,
+                ]
+                for index, item in enumerate(turns, start=1)
+            ]
+            table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=rows)
+            return f"历史会话(最近 {len(turns)} 轮):\n{table}"
+
+        if command.startswith("/history search "):
+            history_search = _parse_history_search_input(command.removeprefix("/history search ").strip())
+            if history_search is None:
+                return "用法: /history search <关键词> [--limit <>=1>]"
+            keyword, history_limit = history_search
+            turns = self.db.search_turns(keyword, limit=history_limit)
+            if not turns:
+                return f"未找到包含“{keyword}”的历史会话。"
+            rows = [
+                [
+                    str(index),
+                    _truncate_text(item.user_content, 300) or "-",
+                    _truncate_text(item.assistant_content, 300) or "-",
+                    item.created_at,
+                ]
+                for index, item in enumerate(turns, start=1)
+            ]
+            table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=rows)
+            return f"历史搜索(关键词: {keyword}, 命中 {len(turns)} 轮):\n{table}"
 
         if command.startswith("/view "):
             view_parsed = _parse_view_command_input(command.removeprefix("/view ").strip())
@@ -1538,6 +1617,8 @@ class AssistantAgent:
         return (
             "可用命令:\n"
             "/help\n"
+            "/history list [--limit <>=1>]\n"
+            "/history search <关键词> [--limit <>=1>]\n"
             "/view list\n"
             "/view <all|today|overdue|upcoming|inbox> [--tag <标签>]\n"
             "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
@@ -1572,6 +1653,40 @@ def _parse_positive_int(raw: str) -> int | None:
     if value <= 0:
         return None
     return value
+
+
+def _parse_history_list_limit(command: str) -> int | None:
+    if command == "/history list":
+        return DEFAULT_HISTORY_LIST_LIMIT
+    raw = command.removeprefix("/history list").strip()
+    if not raw:
+        return DEFAULT_HISTORY_LIST_LIMIT
+    parts = raw.split()
+    if len(parts) != 2 or parts[0] != "--limit":
+        return None
+    parsed = _parse_positive_int(parts[1])
+    if parsed is None:
+        return None
+    return min(parsed, MAX_HISTORY_LIST_LIMIT)
+
+
+def _parse_history_search_input(raw: str) -> tuple[str, int] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    working = text
+    limit = DEFAULT_HISTORY_LIST_LIMIT
+    limit_match = HISTORY_LIMIT_OPTION_PATTERN.search(working)
+    if limit_match:
+        parsed_limit = _parse_positive_int(limit_match.group(2))
+        if parsed_limit is None:
+            return None
+        limit = min(parsed_limit, MAX_HISTORY_LIST_LIMIT)
+        working = _remove_option_span(working, limit_match.span())
+    keyword = re.sub(r"\s+", " ", working).strip()
+    if not keyword:
+        return None
+    return keyword, limit
 
 
 def _parse_todo_add_input(raw: str) -> tuple[str, str, int, str | None, str | None] | None:

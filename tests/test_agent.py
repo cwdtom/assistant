@@ -233,6 +233,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("--priority <>=0>", result)
         self.assertIn("/todo search <关键词>", result)
         self.assertIn("/view list", result)
+        self.assertIn("/history list", result)
+        self.assertIn("/history search <关键词>", result)
         self.assertIn("/todo update", result)
         self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
@@ -265,6 +267,65 @@ class AssistantAgentTest(unittest.TestCase):
         done_resp = agent.handle_input("/todo done 1")
         self.assertIn("已完成", done_resp)
         self.assertIn("完成时间:", done_resp)
+
+    def test_handle_input_persists_user_and_assistant_turns_for_non_slash_input(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        response = agent.handle_input("今天怎么安排")
+        self.assertIn("当前未配置 LLM", response)
+
+        history = self.db.recent_messages(limit=2)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[0].content, "今天怎么安排")
+        self.assertEqual(history[1].role, "assistant")
+        self.assertIn("当前未配置 LLM", history[1].content)
+
+    def test_slash_commands_are_not_persisted_to_history(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        response = agent.handle_input("/todo list")
+        self.assertIn("暂无待办", response)
+
+        history = self.db.recent_messages(limit=2)
+        self.assertEqual(history, [])
+
+    def test_history_list_command_returns_recent_turns(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        first = agent.handle_input("/history list")
+        self.assertEqual(first, "暂无历史会话。")
+
+        agent.handle_input("今天怎么安排")
+        second = agent.handle_input("/history list --limit 2")
+        self.assertIn("历史会话(最近 1 轮)", second)
+        self.assertIn("| # | 用户输入 | 最终回答 | 时间 |", second)
+        self.assertIn("| 1 | 今天怎么安排 | 当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。 |", second)
+
+        invalid = agent.handle_input("/history list --limit 0")
+        self.assertIn("用法: /history list", invalid)
+
+    def test_history_search_command_supports_fuzzy_keyword_match(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已记录你的购物待办")
+        self.db.save_turn(user_content="今天安排", assistant_content="你今天 10:00 有站会")
+
+        result = agent.handle_input("/history search 牛奶")
+        self.assertIn("历史搜索(关键词: 牛奶, 命中 1 轮)", result)
+        self.assertIn("| 我要买牛奶 | 已记录你的购物待办 |", result)
+
+        by_assistant = agent.handle_input("/history search 10:00")
+        self.assertIn("历史搜索(关键词: 10:00, 命中 1 轮)", by_assistant)
+        self.assertIn("| 今天安排 | 你今天 10:00 有站会 |", by_assistant)
+
+        limited = agent.handle_input("/history search 今天 --limit 1")
+        self.assertIn("命中 1 轮", limited)
+
+        missing = agent.handle_input("/history search 不存在的关键词")
+        self.assertIn("未找到包含", missing)
+
+        invalid = agent.handle_input("/history search --limit 2")
+        self.assertIn("用法: /history search <关键词> [--limit <>=1>]", invalid)
 
     def test_slash_todo_tag_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -969,7 +1030,11 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(fake_llm.model_call_count, 3)
 
         history = self.db.recent_messages(limit=2)
-        self.assertEqual(history, [])
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[0].content, "今天怎么安排")
+        self.assertEqual(history[1].role, "assistant")
+        self.assertIn("已关闭 chat 直聊分支", history[1].content)
 
     def test_plan_replan_multi_step_with_todo_tool(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1201,6 +1266,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("plan 模块", first_messages[0]["content"])
         self.assertIn("看一下/看看/查一下", first_messages[0]["content"])
         self.assertIn("查询并列出来给用户查看", first_messages[0]["content"])
+        self.assertIn("history_search", first_messages[0]["content"])
         planner_user_payload = json.loads(first_messages[1]["content"])
         self.assertNotIn("tool_contract", planner_user_payload)
         self.assertNotIn("observations", planner_user_payload)
@@ -1258,6 +1324,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         self.assertGreaterEqual(len(thought_calls), 2)
+        self.assertIn("history_search", thought_calls[0][0]["content"])
 
         first_thought_payload = json.loads(thought_calls[0][1]["content"])
         self.assertIn("current_subtask", first_thought_payload)
@@ -1659,6 +1726,18 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNone(decision)
 
+    def test_thought_contract_accepts_continue_with_history_search_tool(self) -> None:
+        decision = normalize_thought_decision(
+            {
+                "status": "continue",
+                "current_step": "检索历史",
+                "next_action": {"tool": "history_search", "input": "/history search 牛奶"},
+                "question": None,
+                "response": None,
+            }
+        )
+        self.assertIsNotNone(decision)
+
     def test_plan_replan_internet_search_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1679,6 +1758,21 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("帮我查下 Responses API 最新资料")
         self.assertIn("3 条相关资料", response)
         self.assertEqual(fake_search.queries, [("OpenAI Responses API", 3)])
+        self.assertEqual(fake_llm.model_call_count, 3)
+
+    def test_plan_replan_history_search_tool(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["检索历史", "总结结果"]),
+                _thought_continue("history_search", "/history search 牛奶"),
+                _planner_done("我找到了 1 条相关历史。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已记录买牛奶待办")
+
+        response = agent.handle_input("帮我查下之前关于牛奶的记录")
+        self.assertIn("1 条相关历史", response)
         self.assertEqual(fake_llm.model_call_count, 3)
 
     def test_plan_replan_max_steps_fallback(self) -> None:

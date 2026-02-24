@@ -12,14 +12,15 @@ THOUGHT_PROMPT = """
 1) todo: 执行 /todo 或 /view 命令
 2) schedule: 执行 /schedule 命令
 3) internet_search: 搜索互联网，输入为搜索词
-4) ask_user: 向用户提问澄清，输入为单个问题
+4) history_search: 执行 /history search 命令检索历史会话
+5) ask_user: 向用户提问澄清，输入为单个问题
 
 输出 JSON 格式：
 {
   "status": "continue|ask_user|done",
   "current_step": "string",
   "next_action": {
-    "tool": "todo|schedule|internet_search",
+    "tool": "todo|schedule|internet_search|history_search",
     "input": "string"
   } | null,
   "question": "string|null",
@@ -33,7 +34,7 @@ THOUGHT_PROMPT = """
 - status=done 时必须填写 response，总结本次子任务循环的最终结论
 - 输入上下文里的 current_subtask 是当前唯一可执行子任务；不得基于未来步骤提前执行动作
 - completed_subtasks / current_subtask_observations 仅用于参考已完成结果与当前子任务进度
-- todo/schedule 的 next_action.input 必须是可直接执行的合法命令
+- todo/schedule/history_search 的 next_action.input 必须是可直接执行的合法命令
 - 必须严格遵守输入上下文里的 time_unit_contract：
   - --duration/--interval 的单位都是分钟（例如 3 小时 => 180 分钟）
   - --times 的单位是“次”，-1 表示无限重复
@@ -54,7 +55,7 @@ def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None
             return None
         tool = str(next_action.get("tool") or "").strip().lower()
         input_text = str(next_action.get("input") or "").strip()
-        if tool not in {"todo", "schedule", "internet_search"}:
+        if tool not in {"todo", "schedule", "internet_search", "history_search"}:
             return None
         if not input_text:
             return None
