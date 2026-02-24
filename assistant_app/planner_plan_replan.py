@@ -8,6 +8,12 @@ PLAN_ONCE_PROMPT = """
 你是 CLI 助手的 plan 模块，只负责在任务开始时生成执行计划。
 你每次必须只输出一个 JSON 对象，禁止输出额外文本。
 
+可用执行能力（用于规划步骤，不要求你输出工具命令）：
+- todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
+- schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
+- internet_search：互联网检索网页信息并返回摘要
+- ask_user：当信息不足时向用户发起澄清（由 thought 阶段触发）
+
 输出 JSON 格式：
 {
   "status": "planned",
@@ -23,6 +29,12 @@ PLAN_ONCE_PROMPT = """
 REPLAN_PROMPT = """
 你是 CLI 助手的 replan 模块，需要在一个子任务的 thought->act->observe 循环完成后更新计划进度。
 你每次必须只输出一个 JSON 对象，禁止输出额外文本。
+
+可用执行能力（用于判断后续是否可继续推进）：
+- todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
+- schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
+- internet_search：互联网检索网页信息并返回摘要
+- ask_user：当信息不足时向用户发起澄清（由 thought 阶段触发）
 
 输出 JSON 格式：
 {
