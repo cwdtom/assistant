@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from assistant_app.db import AssistantDB
+from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
 from assistant_app.planner_plan_replan import (
     PLAN_ONCE_PROMPT,
@@ -46,6 +46,8 @@ DEFAULT_INTERNET_SEARCH_TOP_K = 3
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
+PLAN_HISTORY_LOOKBACK_HOURS = 24
+PLAN_HISTORY_MAX_TURNS = 50
 
 PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
     "todo": [
@@ -647,6 +649,10 @@ class AssistantAgent:
     def _build_planner_context(self, task: PendingPlanTask) -> dict[str, Any]:
         outer = self._outer_context(task)
         completed_subtasks = self._serialize_completed_subtasks(outer.completed_subtasks)
+        recent_chat_turns = self.db.recent_turns_for_planner(
+            lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
+            limit=PLAN_HISTORY_MAX_TURNS,
+        )
         context_payload = {
             "goal": outer.goal,
             "clarification_history": self._serialize_clarification_history(outer.clarification_history),
@@ -655,6 +661,7 @@ class AssistantAgent:
             "latest_plan": self._serialize_latest_plan(outer.latest_plan),
             "current_plan_index": outer.current_plan_index,
             "completed_subtasks": completed_subtasks,
+            "recent_chat_turns": self._serialize_chat_turns(recent_chat_turns),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
         return context_payload
@@ -728,6 +735,17 @@ class AssistantAgent:
                 "content": item.content,
             }
             for item in clarification_history
+        ]
+
+    @staticmethod
+    def _serialize_chat_turns(chat_turns: list[ChatTurn]) -> list[dict[str, str]]:
+        return [
+            {
+                "user_content": item.user_content,
+                "assistant_content": item.assistant_content,
+                "created_at": item.created_at,
+            }
+            for item in chat_turns
         ]
 
     @staticmethod

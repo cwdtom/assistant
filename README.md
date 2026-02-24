@@ -98,6 +98,7 @@ python main.py
 - 自然语言任务会实时输出循环进度：步骤进度、计划列表、工具执行结果与完成情况
 - 支持自然语言命令（plan -> thought -> act -> observe -> replan 循环）
 - plan 仅在每个新任务开始时执行一次；每个子任务的 thought->act->observe 循环完成后会触发 replan 跟进进度（澄清恢复后也会触发），并由 replan 决定外层是继续还是收口输出
+- plan/replan 上下文会附带最近 24 小时内最多 50 轮历史会话（`recent_chat_turns`）
 - thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/history_search/ask_user 五种动作间切换
 - thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search|history_search`
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用

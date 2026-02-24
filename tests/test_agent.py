@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -1267,12 +1268,14 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("看一下/看看/查一下", first_messages[0]["content"])
         self.assertIn("查询并列出来给用户查看", first_messages[0]["content"])
         self.assertIn("history_search", first_messages[0]["content"])
+        self.assertIn("recent_chat_turns", first_messages[0]["content"])
         planner_user_payload = json.loads(first_messages[1]["content"])
         self.assertNotIn("tool_contract", planner_user_payload)
         self.assertNotIn("observations", planner_user_payload)
         self.assertNotIn("time_unit_contract", planner_user_payload)
         self.assertNotIn("pending_final_response", planner_user_payload)
         self.assertIn("completed_subtasks", planner_user_payload)
+        self.assertIn("recent_chat_turns", planner_user_payload)
 
     def test_replan_prompt_excludes_tool_context_and_uses_completed_subtasks(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1294,6 +1297,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("observations", replan_payload)
         self.assertNotIn("time_unit_contract", replan_payload)
         self.assertNotIn("pending_final_response", replan_payload)
+        self.assertIn("recent_chat_turns", replan_payload)
         latest_plan = replan_payload.get("latest_plan", [])
         self.assertEqual(
             latest_plan,
@@ -1367,6 +1371,46 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(completed[1].get("item"), "步骤二")
         self.assertIn("步骤一已完成", completed[0].get("result", ""))
         self.assertIn("步骤二已完成", completed[1].get("result", ""))
+
+    def test_plan_and_replan_payload_include_recent_chat_turns_with_window_and_limit(self) -> None:
+        for idx in range(1, 61):
+            self.db.save_turn(user_content=f"问{idx}", assistant_content=f"答{idx}")
+        conn = sqlite3.connect(self.db.db_path)
+        try:
+            conn.execute(
+                "UPDATE chat_history SET created_at = ? WHERE id = 1",
+                ((datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一"]),
+                _planner_done("步骤一完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 plan/replan 历史窗口")
+        self.assertIn("最终完成", response)
+
+        plan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "plan"]
+        replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
+        self.assertEqual(len(plan_calls), 1)
+        self.assertEqual(len(replan_calls), 1)
+
+        plan_payload = json.loads(plan_calls[0][1]["content"])
+        replan_payload = json.loads(replan_calls[0][1]["content"])
+        plan_turns = plan_payload.get("recent_chat_turns", [])
+        replan_turns = replan_payload.get("recent_chat_turns", [])
+        self.assertEqual(len(plan_turns), 50)
+        self.assertEqual(len(replan_turns), 50)
+        self.assertEqual(plan_turns[0].get("user_content"), "问11")
+        self.assertEqual(plan_turns[-1].get("user_content"), "问60")
+        self.assertNotIn("问1", [str(item.get("user_content")) for item in plan_turns])
 
     def test_replan_uses_llm_completed_flags_after_reorder(self) -> None:
         fake_llm = FakeLLMClient(

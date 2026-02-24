@@ -17,6 +17,10 @@ PLAN_INTENT_EXPANSION_RULE = (
     "先将用户口语化表达扩展成可执行目标再写计划步骤"
     "（如“看一下/看看/查一下”通常表示“查询并列出来给用户查看”）"
 )
+PLANNER_HISTORY_RULE = (
+    "输入上下文会提供 recent_chat_turns（近 24 小时，最多 50 轮）"
+    "，可用于补全上下文与引用历史约束。"
+)
 
 PLAN_ONCE_PROMPT = f"""
 你是 CLI 助手的 plan 模块，只负责在任务开始时生成执行计划。
@@ -34,6 +38,7 @@ PLAN_ONCE_PROMPT = f"""
 - 只输出 planned，不要输出 done
 - plan 至少包含 1 项，且应按执行顺序排列
 - {PLAN_INTENT_EXPANSION_RULE}
+- {PLANNER_HISTORY_RULE}
 - 不要输出工具动作，只给步骤描述
 """.strip()
 
@@ -61,6 +66,7 @@ REPLAN_PROMPT = f"""
   必须输出 status=done，并在 response 给出问题答案；不要继续扩写计划
 - status=done: 必须输出最终结论 response，不要再给后续计划
 - 新计划要融合 completed_subtasks 中的已完成子任务结果与用户澄清信息（如有）
+- {PLANNER_HISTORY_RULE}
 - 可以输出“剩余步骤计划”或“重排后的全量计划”，但必须可继续执行
 - 若信息仍不足，可保留待澄清步骤，但不要直接提问
 """.strip()

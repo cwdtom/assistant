@@ -543,6 +543,27 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(assistant_hits), 1)
         self.assertEqual(assistant_hits[0].assistant_content, "你今天 10:00 有会议")
 
+    def test_recent_turns_for_planner_applies_lookback_and_limit(self) -> None:
+        self.db.save_turn(user_content="两天前的问题", assistant_content="两天前的回答")
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "UPDATE chat_history SET created_at = ? WHERE id = 1",
+                ((datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        for idx in range(2, 8):
+            self.db.save_turn(user_content=f"最近问题{idx}", assistant_content=f"最近回答{idx}")
+
+        turns = self.db.recent_turns_for_planner(lookback_hours=24, limit=3)
+        self.assertEqual(len(turns), 3)
+        self.assertEqual(turns[0].user_content, "最近问题5")
+        self.assertEqual(turns[-1].assistant_content, "最近回答7")
+        self.assertNotIn("两天前的问题", [item.user_content for item in turns])
+
     def test_chat_history_legacy_schema_is_migrated_to_turn_schema(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_chat_history.db"
         conn = sqlite3.connect(str(legacy_path))
