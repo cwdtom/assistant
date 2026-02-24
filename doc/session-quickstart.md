@@ -13,6 +13,7 @@
 - CLI 内置本地定时提醒线程（默认开启）：V1 自动触发待办提醒、单次日程提醒与重复日程 occurrence 级提醒，输出 `提醒> ...`。
 - 搜索：默认优先 Bocha（可通过 env 切换 provider），缺少 Bocha key 时自动回退 Bing；实现已解耦为 `SearchProvider` 可替换。
 - CLI 反馈：输出灰色“进度>”过程日志（可通过 env 关闭颜色）。
+- 可选人格化改写：replan 收口后的最终答复与本地提醒文案都可按人设做一轮润色（失败回退原文）。
 
 ## 3. 核心代码入口
 
@@ -55,6 +56,8 @@
 - `SCHEDULE_MAX_WINDOW_DAYS`（默认 `31`）
 - `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`（默认 `31`）
 - `CLI_PROGRESS_COLOR`（默认 `gray`，支持 `gray|off`）
+- `PERSONA_REWRITE_ENABLED`（默认 `true`）
+- `ASSISTANT_PERSONA`（默认空；设置后启用人设润色）
 - `LLM_TRACE_LOG_PATH`（默认 `logs/llm_trace.log`，留空可关闭）
 - `TIMER_ENABLED`（默认 `true`）
 - `TIMER_POLL_INTERVAL_SECONDS`（默认 `15`）

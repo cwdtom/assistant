@@ -10,6 +10,7 @@ from assistant_app.agent import AssistantAgent
 from assistant_app.config import load_config
 from assistant_app.db import AssistantDB
 from assistant_app.llm import OpenAICompatibleClient
+from assistant_app.persona import PersonaRewriter
 from assistant_app.reminder_service import ReminderService
 from assistant_app.reminder_sink import StdoutReminderSink
 from assistant_app.search import create_search_provider
@@ -142,6 +143,12 @@ def main() -> None:
             base_url=config.base_url,
             model=config.model,
         )
+    persona_rewriter = PersonaRewriter(
+        llm_client=llm_client,
+        persona=config.assistant_persona,
+        enabled=config.persona_rewrite_enabled,
+        logger=logging.getLogger("assistant_app.llm_trace"),
+    )
 
     agent = AssistantAgent(
         db=db,
@@ -156,6 +163,7 @@ def main() -> None:
         internet_search_top_k=config.internet_search_top_k,
         schedule_max_window_days=config.schedule_max_window_days,
         infinite_repeat_conflict_preview_days=config.infinite_repeat_conflict_preview_days,
+        final_response_rewriter=persona_rewriter.rewrite_final_response,
     )
     timer_engine: TimerEngine | None = None
     if config.timer_enabled:
@@ -166,6 +174,7 @@ def main() -> None:
             lookahead_seconds=config.timer_lookahead_seconds,
             catchup_seconds=config.timer_catchup_seconds,
             batch_limit=config.timer_batch_limit,
+            content_rewriter=persona_rewriter.rewrite_reminder_content,
         )
         timer_engine = TimerEngine(
             reminder_service=reminder_service,

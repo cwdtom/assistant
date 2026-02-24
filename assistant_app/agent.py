@@ -171,6 +171,7 @@ class AssistantAgent:
         internet_search_top_k: int = DEFAULT_INTERNET_SEARCH_TOP_K,
         schedule_max_window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
         infinite_repeat_conflict_preview_days: int = DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS,
+        final_response_rewriter: Callable[[str], str] | None = None,
     ) -> None:
         self.db = db
         self.llm_client = llm_client
@@ -191,6 +192,7 @@ class AssistantAgent:
         self._internet_search_top_k = max(internet_search_top_k, 1)
         self._schedule_max_window_days = max(schedule_max_window_days, 1)
         self._infinite_repeat_conflict_preview_days = max(infinite_repeat_conflict_preview_days, 1)
+        self._final_response_rewriter = final_response_rewriter
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._progress_callback = callback
@@ -283,6 +285,7 @@ class AssistantAgent:
                 return self._finalize_planner_task(task, self._planner_unavailable_text())
             if replan_outcome == "done":
                 final_response = replan_response or self._planner_unavailable_text()
+                final_response = self._rewrite_final_response(final_response)
                 return self._finalize_planner_task(task, final_response)
 
             task.inner_context = self._new_inner_context(task)
@@ -998,6 +1001,17 @@ class AssistantAgent:
             self._pending_plan_task = None
         self._emit_progress("任务状态：已完成。")
         return response
+
+    def _rewrite_final_response(self, response: str) -> str:
+        rewriter = self._final_response_rewriter
+        if rewriter is None:
+            return response
+        try:
+            rewritten = rewriter(response)
+        except Exception:
+            return response
+        normalized = rewritten.strip()
+        return normalized or response
 
     @staticmethod
     def _planner_unavailable_text() -> str:

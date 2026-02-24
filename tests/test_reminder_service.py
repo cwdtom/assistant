@@ -66,6 +66,54 @@ class ReminderServiceTest(unittest.TestCase):
             any(event.source_type == "schedule" and event.source_id == schedule_id for event in sink.events)
         )
 
+    def test_poll_once_rewrites_reminder_content_before_emit(self) -> None:
+        self.db.add_todo(
+            "准备发布",
+            due_at="2026-02-24 18:00",
+            remind_at="2026-02-24 10:00",
+        )
+        sink = _FakeSink()
+        service = ReminderService(
+            db=self.db,
+            sink=sink,
+            clock=lambda: self.fixed_now,
+            lookahead_seconds=0,
+            content_rewriter=lambda text: f"【提醒管家】{text}",
+        )
+
+        stats = service.poll_once()
+
+        self.assertEqual(stats.candidate_count, 1)
+        self.assertEqual(stats.delivered_count, 1)
+        self.assertEqual(len(sink.events), 1)
+        self.assertTrue(sink.events[0].content.startswith("【提醒管家】待办提醒 #1"))
+
+    def test_poll_once_rewrite_failure_falls_back_to_original_content(self) -> None:
+        self.db.add_todo(
+            "准备发布",
+            due_at="2026-02-24 18:00",
+            remind_at="2026-02-24 10:00",
+        )
+        sink = _FakeSink()
+
+        def _rewrite(_: str) -> str:
+            raise RuntimeError("rewrite failed")
+
+        service = ReminderService(
+            db=self.db,
+            sink=sink,
+            clock=lambda: self.fixed_now,
+            lookahead_seconds=0,
+            content_rewriter=_rewrite,
+        )
+
+        stats = service.poll_once()
+
+        self.assertEqual(stats.candidate_count, 1)
+        self.assertEqual(stats.delivered_count, 1)
+        self.assertEqual(len(sink.events), 1)
+        self.assertEqual(sink.events[0].content, "待办提醒 #1: 准备发布（提醒时间 2026-02-24 10:00）")
+
     def test_poll_once_skips_done_todo(self) -> None:
         todo_id = self.db.add_todo(
             "已完成事项",

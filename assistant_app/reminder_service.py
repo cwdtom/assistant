@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from assistant_app.db import AssistantDB, RecurringScheduleRule, ScheduleItem, TodoItem
@@ -28,6 +28,7 @@ class ReminderService:
         catchup_seconds: int = 0,
         batch_limit: int = 200,
         logger: logging.Logger | None = None,
+        content_rewriter: Callable[[str], str] | None = None,
     ) -> None:
         self._db = db
         self._sink = sink
@@ -37,6 +38,7 @@ class ReminderService:
         self._catchup_seconds = 0 if catchup_seconds >= 0 else 0
         self._batch_limit = max(batch_limit, 1)
         self._logger = logger or logging.getLogger("assistant_app.timer")
+        self._content_rewriter = content_rewriter
 
     def poll_once(self) -> ReminderPollStats:
         scan_start, scan_end = self._scan_window()
@@ -50,7 +52,8 @@ class ReminderService:
                 skipped_count += 1
                 continue
             try:
-                self._sink.emit(event)
+                event_to_emit = self._rewrite_event_content(event)
+                self._sink.emit(event_to_emit)
                 saved = self._db.save_reminder_delivery(
                     reminder_key=event.reminder_key,
                     source_type=event.source_type,
@@ -72,6 +75,20 @@ class ReminderService:
             skipped_count=skipped_count,
             failed_count=failed_count,
         )
+
+    def _rewrite_event_content(self, event: ReminderEvent) -> ReminderEvent:
+        rewriter = self._content_rewriter
+        if rewriter is None:
+            return event
+        try:
+            rewritten = rewriter(event.content)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("timer content rewrite failed: %s (%s)", event.reminder_key, exc)
+            return event
+        normalized = rewritten.strip()
+        if not normalized:
+            return event
+        return replace(event, content=normalized)
 
     def _scan_window(self) -> tuple[datetime, datetime]:
         now = self._clock()

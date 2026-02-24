@@ -31,6 +31,8 @@ class AppConfig:
     timer_catchup_seconds: int
     timer_batch_limit: int
     reminder_delivery_retention_days: int
+    persona_rewrite_enabled: bool
+    assistant_persona: str
 
 
 def load_env_file(env_path: str = ".env") -> None:
@@ -90,6 +92,8 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         timer_catchup_seconds=0,
         timer_batch_limit=_read_env_int("TIMER_BATCH_LIMIT", default=200, min_value=1),
         reminder_delivery_retention_days=_read_env_int("REMINDER_DELIVERY_RETENTION_DAYS", default=30, min_value=1),
+        persona_rewrite_enabled=_read_env_bool("PERSONA_REWRITE_ENABLED", default=True),
+        assistant_persona=_read_env_text("ASSISTANT_PERSONA", default=""),
     )
 
 

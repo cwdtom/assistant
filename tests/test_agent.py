@@ -759,6 +759,49 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("已列出所有待办事项。", result)
         self.assertNotIn("待办列表:", result)
 
+    def test_replan_done_response_can_be_rewritten_by_persona(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["列出所有待办事项"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("已执行 /todo list 命令列出所有待办事项，当前子任务完成"),
+                _planner_done("已列出所有待办事项。"),
+            ]
+        )
+        rewrite_inputs: list[str] = []
+
+        def _rewrite(text: str) -> str:
+            rewrite_inputs.append(text)
+            return f"【小助手】{text}"
+
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, final_response_rewriter=_rewrite)
+        self.db.add_todo("今天完成联调")
+
+        result = agent.handle_input("看一下所有待办")
+
+        self.assertEqual(rewrite_inputs, ["已列出所有待办事项。"])
+        self.assertEqual(result, "【小助手】已列出所有待办事项。")
+
+    def test_replan_done_response_rewrite_failure_falls_back_to_original(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["列出所有待办事项"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("已执行 /todo list 命令列出所有待办事项，当前子任务完成"),
+                _planner_done("已列出所有待办事项。"),
+            ]
+        )
+
+        def _rewrite(_: str) -> str:
+            raise RuntimeError("rewrite failed")
+
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, final_response_rewriter=_rewrite)
+        self.db.add_todo("今天完成联调")
+
+        result = agent.handle_input("看一下所有待办")
+
+        self.assertEqual(result, "已列出所有待办事项。")
+
     def test_final_response_not_accumulated_from_inner_done_messages(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[

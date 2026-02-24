@@ -42,6 +42,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.timer_catchup_seconds, 0)
         self.assertEqual(config.timer_batch_limit, 200)
         self.assertEqual(config.reminder_delivery_retention_days, 30)
+        self.assertTrue(config.persona_rewrite_enabled)
+        self.assertEqual(config.assistant_persona, "")
 
     def test_load_config_falls_back_to_openai_env(self) -> None:
         env = {
@@ -64,6 +66,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.search_provider, "bocha")
         self.assertIsNone(config.bocha_api_key)
         self.assertTrue(config.bocha_search_summary)
+        self.assertTrue(config.persona_rewrite_enabled)
+        self.assertEqual(config.assistant_persona, "")
 
     def test_load_config_reads_runtime_knobs_from_env(self) -> None:
         env = {
@@ -88,6 +92,8 @@ class ConfigTest(unittest.TestCase):
             "TIMER_CATCHUP_SECONDS": "999",
             "TIMER_BATCH_LIMIT": "120",
             "REMINDER_DELIVERY_RETENTION_DAYS": "7",
+            "PERSONA_REWRITE_ENABLED": "off",
+            "ASSISTANT_PERSONA": "你是严谨的项目经理",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -112,6 +118,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.timer_catchup_seconds, 0)
         self.assertEqual(config.timer_batch_limit, 120)
         self.assertEqual(config.reminder_delivery_retention_days, 7)
+        self.assertFalse(config.persona_rewrite_enabled)
+        self.assertEqual(config.assistant_persona, "你是严谨的项目经理")
 
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
@@ -135,6 +143,8 @@ class ConfigTest(unittest.TestCase):
             "TIMER_LOOKAHEAD_SECONDS": "-1",
             "TIMER_BATCH_LIMIT": "bad",
             "REMINDER_DELIVERY_RETENTION_DAYS": "0",
+            "PERSONA_REWRITE_ENABLED": "invalid",
+            "ASSISTANT_PERSONA": "   ",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -159,6 +169,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.timer_catchup_seconds, 0)
         self.assertEqual(config.timer_batch_limit, 200)
         self.assertEqual(config.reminder_delivery_retention_days, 30)
+        self.assertTrue(config.persona_rewrite_enabled)
+        self.assertEqual(config.assistant_persona, "")
 
     def test_load_env_file_sets_only_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

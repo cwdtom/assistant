@@ -46,6 +46,8 @@ cp .env.example .env
 - `TIMER_BATCH_LIMIT`：单轮最多处理提醒条数（默认 `200`）
 - `REMINDER_DELIVERY_RETENTION_DAYS`：提醒投递记录保留天数（默认 `30`，V1 暂未启用自动清理，仅预留参数）
 - `CLI_PROGRESS_COLOR`：进度输出颜色，支持 `gray|off`（默认 `gray`）
+- `PERSONA_REWRITE_ENABLED`：是否启用人格化改写（默认 `true`；当人设为空时不会触发）
+- `ASSISTANT_PERSONA`：助手人设文本（默认空，设置后会用于最终答复和提醒文案润色）
 - `LLM_TRACE_LOG_PATH`：LLM 请求/响应日志文件路径（默认 `logs/llm_trace.log`，留空可关闭）
 
 3. 运行
@@ -107,6 +109,8 @@ python main.py
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认优先使用 Bocha 作为搜索源（支持 env 切换 provider，缺少 Bocha key 时自动回退 Bing），返回 Top-3 摘要和链接
+- 当 replan 判定任务可收口后，最终答复可按 `ASSISTANT_PERSONA` 做一轮人格化改写（失败自动回退原文）
+- 本地待办/日程提醒输出也支持按 `ASSISTANT_PERSONA` 改写（失败自动回退原文）
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`
