@@ -195,6 +195,7 @@ def main() -> None:
         db=db,
         llm_client=llm_client,
         search_provider=search_provider,
+        user_profile_path=config.user_profile_path,
         plan_replan_max_steps=config.plan_replan_max_steps,
         plan_replan_retry_count=config.plan_replan_retry_count,
         plan_observation_char_limit=config.plan_observation_char_limit,

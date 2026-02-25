@@ -25,6 +25,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.base_url, "https://api.deepseek.com")
         self.assertEqual(config.model, "deepseek-chat")
         self.assertEqual(config.db_path, "custom.db")
+        self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.plan_replan_max_steps, 20)
         self.assertEqual(config.plan_observation_history_limit, 100)
         self.assertEqual(config.internet_search_top_k, 3)
@@ -70,6 +71,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.base_url, "https://legacy.example.com/v1")
         self.assertEqual(config.model, "legacy-model")
         self.assertEqual(config.db_path, "assistant.db")
+        self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
         self.assertEqual(config.plan_replan_retry_count, 2)
         self.assertEqual(config.plan_observation_char_limit, 10000)
@@ -89,6 +91,7 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_reads_runtime_knobs_from_env(self) -> None:
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
+            "USER_PROFILE_PATH": "profiles/me.md",
             "PLAN_REPLAN_MAX_STEPS": "40",
             "PLAN_REPLAN_RETRY_COUNT": "4",
             "PLAN_OBSERVATION_CHAR_LIMIT": "12000",
@@ -133,6 +136,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_observation_history_limit, 80)
         self.assertEqual(config.plan_continuous_failure_limit, 3)
         self.assertEqual(config.task_cancel_command, "停止任务")
+        self.assertEqual(config.user_profile_path, "profiles/me.md")
         self.assertEqual(config.internet_search_top_k, 5)
         self.assertEqual(config.search_provider, "bing")
         self.assertEqual(config.bocha_api_key, "bocha-key")
@@ -165,6 +169,7 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
+            "USER_PROFILE_PATH": "   ",
             "PLAN_REPLAN_MAX_STEPS": "0",
             "PLAN_REPLAN_RETRY_COUNT": "-3",
             "PLAN_OBSERVATION_CHAR_LIMIT": "bad",
@@ -208,6 +213,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_observation_history_limit, 100)
         self.assertEqual(config.plan_continuous_failure_limit, 2)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
+        self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.internet_search_top_k, 3)
         self.assertEqual(config.search_provider, "bocha")
         self.assertIsNone(config.bocha_api_key)

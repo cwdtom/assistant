@@ -10,6 +10,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from assistant_app.agent import (
     AssistantAgent,
@@ -1365,6 +1366,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("plan 模块", first_messages[0]["content"])
         self.assertIn("看一下/看看/查一下", first_messages[0]["content"])
         self.assertIn("查询并列出来给用户查看", first_messages[0]["content"])
+        self.assertIn("recent_chat_turns 与 user_profile 补全默认信息", first_messages[0]["content"])
+        self.assertIn("查询用户默认城市的明天天气，并输出天气结果与衣着建议", first_messages[0]["content"])
         self.assertIn("history_search", first_messages[0]["content"])
         self.assertIn("recent_chat_turns", first_messages[0]["content"])
         planner_user_payload = json.loads(first_messages[1]["content"])
@@ -1509,6 +1512,84 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(plan_turns[0].get("user_content"), "问11")
         self.assertEqual(plan_turns[-1].get("user_content"), "问60")
         self.assertNotIn("问1", [str(item.get("user_content")) for item in plan_turns])
+
+    def test_plan_and_replan_payload_include_user_profile_when_configured(self) -> None:
+        profile_file = Path(self.tmp.name) / "user_profile.md"
+        profile_file.write_text("昵称: 凛\n偏好: 先结论后细节", encoding="utf-8")
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一"]),
+                _planner_done("步骤一完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        with patch("assistant_app.agent.PROJECT_ROOT", Path(self.tmp.name)):
+            agent = AssistantAgent(
+                db=self.db,
+                llm_client=fake_llm,
+                search_provider=FakeSearchProvider(),
+                user_profile_path="user_profile.md",
+            )
+
+        response = agent.handle_input("测试 plan/replan 用户画像注入")
+        self.assertIn("最终完成", response)
+
+        plan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "plan"]
+        replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertEqual(len(plan_calls), 1)
+        self.assertEqual(len(replan_calls), 1)
+        self.assertTrue(thought_calls)
+
+        expected_profile = {
+            "path": str(profile_file.resolve()),
+            "content": "昵称: 凛\n偏好: 先结论后细节",
+        }
+        plan_payload = json.loads(plan_calls[0][1]["content"])
+        replan_payload = json.loads(replan_calls[0][1]["content"])
+        first_thought_payload = json.loads(thought_calls[0][1]["content"])
+        self.assertEqual(plan_payload.get("user_profile"), expected_profile)
+        self.assertEqual(replan_payload.get("user_profile"), expected_profile)
+        self.assertNotIn("user_profile", first_thought_payload)
+
+    def test_plan_and_replan_payload_user_profile_is_none_when_file_missing(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["步骤一"]),
+                _planner_done("步骤一完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        with patch("assistant_app.agent.PROJECT_ROOT", Path(self.tmp.name)):
+            agent = AssistantAgent(
+                db=self.db,
+                llm_client=fake_llm,
+                search_provider=FakeSearchProvider(),
+                user_profile_path="missing_profile.md",
+            )
+
+        response = agent.handle_input("测试缺失画像文件降级")
+        self.assertIn("最终完成", response)
+
+        plan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "plan"]
+        replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
+        self.assertEqual(len(plan_calls), 1)
+        self.assertEqual(len(replan_calls), 1)
+        plan_payload = json.loads(plan_calls[0][1]["content"])
+        replan_payload = json.loads(replan_calls[0][1]["content"])
+        self.assertIsNone(plan_payload.get("user_profile"))
+        self.assertIsNone(replan_payload.get("user_profile"))
+
+    def test_user_profile_too_long_raises_on_agent_init(self) -> None:
+        profile_file = Path(self.tmp.name) / "user_profile.md"
+        profile_file.write_text("a" * 6001, encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            AssistantAgent(
+                db=self.db,
+                llm_client=None,
+                user_profile_path=str(profile_file),
+            )
 
     def test_replan_uses_llm_completed_flags_after_reorder(self) -> None:
         fake_llm = FakeLLMClient(

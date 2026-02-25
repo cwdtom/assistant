@@ -48,6 +48,7 @@ cp .env.example .env
 - `CLI_PROGRESS_COLOR`：进度输出颜色，支持 `gray|off`（默认 `gray`）
 - `PERSONA_REWRITE_ENABLED`：是否启用人格化改写（默认 `true`；当人设为空时不会触发）
 - `ASSISTANT_PERSONA`：助手人设文本（默认空，设置后会用于最终答复和提醒文案润色）
+- `USER_PROFILE_PATH`：用户画像 Markdown 文件路径（默认空；相对路径按项目根目录解析，仅注入 plan/replan 上下文；文件超过 6000 字符会在启动时报错）
 - `LLM_TRACE_LOG_PATH`：LLM 请求/响应日志文件路径（默认 `logs/llm_trace.log`，留空可关闭）
 - `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`，与 CLI 同进程后台运行）
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：Feishu 应用凭证（启用长连接必填）
@@ -115,6 +116,7 @@ python main.py
 - 支持自然语言命令（plan -> thought -> act -> observe -> replan 循环）
 - plan 仅在每个新任务开始时执行一次；每个子任务的 thought->act->observe 循环完成后会触发 replan 跟进进度（澄清恢复后也会触发），并由 replan 决定外层是继续还是收口输出
 - plan/replan 上下文会附带最近 24 小时内最多 50 轮历史会话（`recent_chat_turns`）
+- 若配置 `USER_PROFILE_PATH`，plan/replan 上下文会附带 `user_profile`（用户画像）供规划时参考
 - thought 会围绕当前计划项逐步决策，并在 todo/schedule/internet_search/history_search/ask_user 五种动作间切换
 - thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search|history_search`
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用

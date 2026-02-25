@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from assistant_app.db import AssistantDB, ChatTurn
@@ -49,6 +50,8 @@ DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
 PLAN_HISTORY_LOOKBACK_HOURS = 24
 PLAN_HISTORY_MAX_TURNS = 50
+DEFAULT_USER_PROFILE_MAX_CHARS = 6000
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
     "todo": [
@@ -176,6 +179,8 @@ class AssistantAgent:
         internet_search_top_k: int = DEFAULT_INTERNET_SEARCH_TOP_K,
         schedule_max_window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
         infinite_repeat_conflict_preview_days: int = DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS,
+        user_profile_path: str = "",
+        user_profile_max_chars: int = DEFAULT_USER_PROFILE_MAX_CHARS,
         final_response_rewriter: Callable[[str], str] | None = None,
     ) -> None:
         self.db = db
@@ -200,6 +205,8 @@ class AssistantAgent:
         self._internet_search_top_k = max(internet_search_top_k, 1)
         self._schedule_max_window_days = max(schedule_max_window_days, 1)
         self._infinite_repeat_conflict_preview_days = max(infinite_repeat_conflict_preview_days, 1)
+        self._user_profile_max_chars = max(user_profile_max_chars, 1)
+        self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
         self._final_response_rewriter = final_response_rewriter
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
@@ -692,6 +699,7 @@ class AssistantAgent:
             "current_plan_index": outer.current_plan_index,
             "completed_subtasks": completed_subtasks,
             "recent_chat_turns": self._serialize_chat_turns(recent_chat_turns),
+            "user_profile": self._serialize_user_profile(),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
         return context_payload
@@ -754,6 +762,44 @@ class AssistantAgent:
             }
             for item in latest_plan
         ]
+
+    def _serialize_user_profile(self) -> dict[str, str] | None:
+        if not self._user_profile_content:
+            return None
+        return {
+            "path": self._user_profile_path,
+            "content": self._user_profile_content,
+        }
+
+    def _load_user_profile(self, user_profile_path: str) -> tuple[str, str | None]:
+        raw_path = user_profile_path.strip()
+        if not raw_path:
+            return "", None
+        resolved_path = self._resolve_user_profile_path(raw_path)
+        logger = logging.getLogger(__name__)
+        try:
+            content = resolved_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            logger.warning("用户画像文件不存在，已忽略: %s", resolved_path)
+            return str(resolved_path), None
+        except (OSError, UnicodeError):
+            logger.warning("读取用户画像文件失败，已忽略: %s", resolved_path, exc_info=True)
+            return str(resolved_path), None
+        if not content:
+            return str(resolved_path), None
+        if len(content) > self._user_profile_max_chars:
+            raise ValueError(
+                "USER_PROFILE_PATH 对应文件内容超长："
+                f"{len(content)} 字符，最大允许 {self._user_profile_max_chars} 字符。"
+            )
+        return str(resolved_path), content
+
+    @staticmethod
+    def _resolve_user_profile_path(user_profile_path: str) -> Path:
+        path = Path(user_profile_path).expanduser()
+        if path.is_absolute():
+            return path.resolve()
+        return (PROJECT_ROOT / path).resolve()
 
     @staticmethod
     def _serialize_clarification_history(

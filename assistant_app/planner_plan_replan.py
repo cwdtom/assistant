@@ -14,12 +14,18 @@ PLANNER_CAPABILITIES_TEXT = """
 """.strip()
 
 PLAN_INTENT_EXPANSION_RULE = (
-    "先将用户口语化表达扩展成可执行目标再写计划步骤"
-    "（如“看一下/看看/查一下”通常表示“查询并列出来给用户查看”）"
+    "先将用户口语化表达扩展成可执行且信息完整的目标再写计划步骤"
+    "（如“看一下/看看/查一下”通常表示“查询并列出来给用户查看”；"
+    "若关键信息缺失，优先结合 recent_chat_turns 与 user_profile 补全默认信息。"
+    "例如“看一下明天的天气”可扩展为“查询用户默认城市的明天天气，并输出天气结果与衣着建议”）"
 )
 PLANNER_HISTORY_RULE = (
     "输入上下文会提供 recent_chat_turns（近 24 小时，最多 50 轮）"
     "，可用于补全上下文与引用历史约束。"
+)
+PLANNER_USER_PROFILE_RULE = (
+    "输入上下文可能提供 user_profile（用户画像）。若存在，只能用于理解用户偏好和背景；"
+    "不得覆盖用户当前明确指令，也不得臆造画像中不存在的信息。"
 )
 
 PLAN_ONCE_PROMPT = f"""
@@ -39,6 +45,7 @@ PLAN_ONCE_PROMPT = f"""
 - plan 至少包含 1 项，且应按执行顺序排列
 - {PLAN_INTENT_EXPANSION_RULE}
 - {PLANNER_HISTORY_RULE}
+- {PLANNER_USER_PROFILE_RULE}
 - 不要输出工具动作，只给步骤描述
 """.strip()
 
@@ -67,6 +74,7 @@ REPLAN_PROMPT = f"""
 - status=done: 必须输出最终结论 response，不要再给后续计划
 - 新计划要融合 completed_subtasks 中的已完成子任务结果与用户澄清信息（如有）
 - {PLANNER_HISTORY_RULE}
+- {PLANNER_USER_PROFILE_RULE}
 - 可以输出“剩余步骤计划”或“重排后的全量计划”，但必须可继续执行
 - 若信息仍不足，可保留待澄清步骤，但不要直接提问
 """.strip()

@@ -11,6 +11,7 @@ class AppConfig:
     base_url: str
     model: str
     db_path: str
+    user_profile_path: str
     llm_trace_log_path: str
     plan_replan_max_steps: int
     plan_replan_retry_count: int
@@ -80,6 +81,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         base_url=base_url,
         model=model,
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
+        user_profile_path=_read_env_text("USER_PROFILE_PATH", default=""),
         llm_trace_log_path=_read_env_text("LLM_TRACE_LOG_PATH", default="logs/llm_trace.log"),
         plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=20, min_value=1),
         plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=2, min_value=0),
