@@ -707,6 +707,10 @@ class AssistantAgent:
     def _build_thought_context(self, task: PendingPlanTask) -> dict[str, Any]:
         outer = self._outer_context(task)
         inner = self._ensure_inner_context(task)
+        recent_chat_turns = self.db.recent_turns_for_planner(
+            lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
+            limit=PLAN_HISTORY_MAX_TURNS,
+        )
         current_subtask_observations = self._serialize_observations(
             inner.observations[-self._plan_observation_history_limit :]
         )
@@ -726,6 +730,8 @@ class AssistantAgent:
             "current_subtask": current_subtask,
             "completed_subtasks": completed_subtasks,
             "current_subtask_observations": current_subtask_observations,
+            "recent_chat_turns": self._serialize_chat_turns(recent_chat_turns),
+            "user_profile": self._serialize_user_profile(),
             "tool_contract": PLAN_TOOL_CONTRACT,
             "time_unit_contract": PLAN_TIME_UNIT_CONTRACT,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),

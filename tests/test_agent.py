@@ -1435,6 +1435,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("current_subtask", first_thought_payload)
         self.assertIn("current_subtask_observations", first_thought_payload)
         self.assertIn("completed_subtasks", first_thought_payload)
+        self.assertIn("recent_chat_turns", first_thought_payload)
+        self.assertIn("user_profile", first_thought_payload)
         self.assertIn("time_unit_contract", first_thought_payload)
         self.assertNotIn("goal", first_thought_payload)
         self.assertNotIn("latest_plan", first_thought_payload)
@@ -1499,15 +1501,20 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("最终完成", response)
 
         plan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "plan"]
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
         self.assertEqual(len(plan_calls), 1)
+        self.assertEqual(len(thought_calls), 1)
         self.assertEqual(len(replan_calls), 1)
 
         plan_payload = json.loads(plan_calls[0][1]["content"])
+        thought_payload = json.loads(thought_calls[0][1]["content"])
         replan_payload = json.loads(replan_calls[0][1]["content"])
         plan_turns = plan_payload.get("recent_chat_turns", [])
+        thought_turns = thought_payload.get("recent_chat_turns", [])
         replan_turns = replan_payload.get("recent_chat_turns", [])
         self.assertEqual(len(plan_turns), 50)
+        self.assertEqual(len(thought_turns), 50)
         self.assertEqual(len(replan_turns), 50)
         self.assertEqual(plan_turns[0].get("user_content"), "问11")
         self.assertEqual(plan_turns[-1].get("user_content"), "问60")
@@ -1550,7 +1557,7 @@ class AssistantAgentTest(unittest.TestCase):
         first_thought_payload = json.loads(thought_calls[0][1]["content"])
         self.assertEqual(plan_payload.get("user_profile"), expected_profile)
         self.assertEqual(replan_payload.get("user_profile"), expected_profile)
-        self.assertNotIn("user_profile", first_thought_payload)
+        self.assertEqual(first_thought_payload.get("user_profile"), expected_profile)
 
     def test_plan_and_replan_payload_user_profile_is_none_when_file_missing(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1572,12 +1579,16 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("最终完成", response)
 
         plan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "plan"]
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
         self.assertEqual(len(plan_calls), 1)
+        self.assertEqual(len(thought_calls), 1)
         self.assertEqual(len(replan_calls), 1)
         plan_payload = json.loads(plan_calls[0][1]["content"])
+        thought_payload = json.loads(thought_calls[0][1]["content"])
         replan_payload = json.loads(replan_calls[0][1]["content"])
         self.assertIsNone(plan_payload.get("user_profile"))
+        self.assertIsNone(thought_payload.get("user_profile"))
         self.assertIsNone(replan_payload.get("user_profile"))
 
     def test_user_profile_too_long_raises_on_agent_init(self) -> None:
