@@ -198,3 +198,7 @@ pre-commit install
 # 手动对全仓执行
 pre-commit run --all-files
 ```
+
+## License
+
+MIT License，详见 `LICENSE`。
