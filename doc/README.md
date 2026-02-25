@@ -14,6 +14,8 @@
 ## 目录结构
 
 - `doc/session-quickstart.md`：当前版本的单页总览（建议每次较大迭代后更新）。
+- `doc/archive/2026022418:search:bocha.md`：Bocha 搜索接入报告（配置、实现与测试口径）。
+- `doc/archive/2026021610:thought-workflow:thought-workflow-design.md`：plan-thought-replan 流程设计与契约冻结说明。
 - `doc/archive/2026021515:loop_agent:plan-replan.md`：loop_agent 阶段提交与测试报告。
 - `doc/archive/loop_agent.md`：loop_agent 设计与决策冻结文档。
 - `doc/archive/2026021514:main:cr.md`：阶段性深度 CR 报告。
