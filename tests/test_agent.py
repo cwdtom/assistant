@@ -1902,6 +1902,30 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(fake_search.queries, [("OpenAI Responses API", 3)])
         self.assertEqual(fake_llm.model_call_count, 3)
 
+    def test_internet_search_observation_respects_configured_top_k(self) -> None:
+        fake_search = FakeSearchProvider(
+            results=[
+                SearchResult(title="A", snippet="S1", url="https://example.com/a"),
+                SearchResult(title="B", snippet="S2", url="https://example.com/b"),
+                SearchResult(title="C", snippet="S3", url="https://example.com/c"),
+                SearchResult(title="D", snippet="S4", url="https://example.com/d"),
+                SearchResult(title="E", snippet="S5", url="https://example.com/e"),
+            ]
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=fake_search,
+            internet_search_top_k=5,
+        )
+
+        observation = agent._execute_planner_tool(action_tool="internet_search", action_input="OpenAI")
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(fake_search.queries, [("OpenAI", 5)])
+        self.assertIn("互联网搜索结果（Top 5）", observation.result)
+        self.assertIn("5. E", observation.result)
+
     def test_plan_replan_history_search_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1971,6 +1995,27 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("把这个待办标记完成")
         self.assertIn("待办 #1 已完成", response)
         self.assertEqual(fake_llm.model_call_count, 5)
+
+    def test_planner_tool_marks_not_found_or_conflict_as_failed(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        self.db.add_schedule("已有会议", "2026-03-01 10:00", duration_minutes=60)
+
+        todo_observation = agent._execute_planner_tool(action_tool="todo", action_input="/todo done 999")
+        schedule_observation = agent._execute_planner_tool(
+            action_tool="schedule",
+            action_input="/schedule add 2026-03-01 10:30 冲突会议",
+        )
+        history_observation = agent._execute_planner_tool(
+            action_tool="history_search",
+            action_input="/history search 不存在关键词",
+        )
+
+        self.assertFalse(todo_observation.ok)
+        self.assertIn("未找到待办 #999", todo_observation.result)
+        self.assertFalse(schedule_observation.ok)
+        self.assertIn("日程冲突", schedule_observation.result)
+        self.assertFalse(history_observation.ok)
+        self.assertIn("未找到包含", history_observation.result)
 
     def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(

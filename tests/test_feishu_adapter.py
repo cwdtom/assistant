@@ -492,6 +492,60 @@ class FeishuAdapterTest(unittest.TestCase):
         )
         self.assertEqual(sent, [("oc_1", "合并任务完成")])
 
+    def test_event_processor_keeps_chat_boundary_when_interrupted(self) -> None:
+        reactions: list[tuple[str, str]] = []
+        sent: list[tuple[str, str]] = []
+        agent = _SlowInterruptibleTaskAwareAgent()
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.chat_boundary"),
+        )
+        first_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_chat_a_1",
+                    "chat_id": "oc_chat_a",
+                    "content": '{"text":"A 会话需求"}',
+                },
+            }
+        }
+        second_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_2"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_chat_b_1",
+                    "chat_id": "oc_chat_b",
+                    "content": '{"text":"B 会话补充"}',
+                },
+            }
+        }
+
+        first_thread = threading.Thread(target=processor.handle_event, args=(first_payload,))
+        first_thread.start()
+        self.assertTrue(agent.first_call_started.wait(timeout=2.0))
+        processor.handle_event(second_payload)
+        agent.release_first_call.set()
+        first_thread.join(timeout=2.0)
+
+        self._wait_until(lambda: len(agent.inputs) == 2 and len(sent) == 1 and len(reactions) == 3)
+        self.assertEqual(agent.inputs, ["A 会话需求", "B 会话补充"])
+        self.assertEqual(sent, [("oc_chat_b", "合并任务完成")])
+        self.assertEqual(
+            reactions,
+            [
+                ("om_chat_a_1", "OK"),
+                ("om_chat_b_1", "OK"),
+                ("om_chat_b_1", "DONE"),
+            ],
+        )
+
     def test_event_processor_aborts_old_response_when_interrupted_during_send(self) -> None:
         reactions: list[tuple[str, str]] = []
         sent: list[tuple[str, str]] = []

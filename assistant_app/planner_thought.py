@@ -86,8 +86,8 @@ def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None
         next_action = payload.get("next_action")
         if next_action is not None:
             return None
-        question = payload.get("question")
-        if question is not None and str(question).strip():
+        done_question = payload.get("question")
+        if done_question is not None and str(done_question).strip():
             return None
         response_text = str(payload.get("response") or "").strip()
         return {

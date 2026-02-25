@@ -119,10 +119,10 @@ python main.py
 - thought JSON 契约严格区分：`ask_user` 必须使用 `status=ask_user`，`status=continue` 仅允许 `todo|schedule|internet_search|history_search`
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
-- internet_search 默认优先使用 Bocha 作为搜索源（支持 env 切换 provider，缺少 Bocha key 时自动回退 Bing），返回 Top-3 摘要和链接
+- internet_search 默认优先使用 Bocha 作为搜索源（支持 env 切换 provider，缺少 Bocha key 时自动回退 Bing），返回 Top-K（默认 3）摘要和链接
 - 当 replan 判定任务可收口后，最终答复可按 `ASSISTANT_PERSONA` 做一轮人格化改写（失败自动回退原文）；改写会倾向“先结论后细节”的真人表达，并可自行决定是否拆成多条
 - 本地待办/日程提醒输出也支持按 `ASSISTANT_PERSONA` 改写（失败自动回退原文）
-- 可选启用 Feishu 长连接接入（单聊模式）：与 CLI 同进程后台运行，默认任务开始执行时先回表情（`OK`），任务完成后按配置追加回表情（默认 `DONE`）+ 内存去重（`message_id`）+ 若处理中收到新消息则中断当前任务并合并输入后从头执行（新消息的 `OK` 会在合并任务真正开始时发送）+ 先按空行做多条语义拆分、再做超长分片发送 + 发送失败最多重试 3 次
+- 可选启用 Feishu 长连接接入（单聊模式）：与 CLI 同进程后台运行，默认任务开始执行时先回表情（`OK`），任务完成后按配置追加回表情（默认 `DONE`）+ 内存去重（`message_id`）+ 若处理中收到新消息则中断当前任务并重排队列（同会话输入会合并，不同会话保持隔离；新消息的 `OK` 会在重排后任务真正开始时发送）+ 先按空行做多条语义拆分、再做超长分片发送 + 发送失败最多重试 3 次
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`

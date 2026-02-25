@@ -351,14 +351,26 @@ class FeishuEventProcessor:
             return
 
         if self._pending_task is None:
-            merged_text = self._merge_task_text(active_task.text, message.text)
-            self._pending_task = _PendingTaskInput(
-                chat_id=active_task.chat_id,
-                text=merged_text,
-                latest_message_id=message.message_id,
-            )
+            if active_task.chat_id == message.chat_id:
+                merged_text = self._merge_task_text(active_task.text, message.text)
+                self._pending_task = _PendingTaskInput(
+                    chat_id=active_task.chat_id,
+                    text=merged_text,
+                    latest_message_id=message.message_id,
+                )
+            else:
+                self._pending_task = _PendingTaskInput(
+                    chat_id=message.chat_id,
+                    text=message.text,
+                    latest_message_id=message.message_id,
+                )
         else:
-            self._pending_task.text = self._merge_task_text(self._pending_task.text, message.text)
+            if self._pending_task.chat_id == message.chat_id:
+                self._pending_task.text = self._merge_task_text(self._pending_task.text, message.text)
+            else:
+                # Pending task always tracks the latest chat context to avoid cross-chat text leakage.
+                self._pending_task.chat_id = message.chat_id
+                self._pending_task.text = message.text
             self._pending_task.latest_message_id = message.message_id
 
         self._request_agent_interrupt()
@@ -461,11 +473,13 @@ class FeishuLongConnectionRunner:
 
     def _run(self) -> None:
         try:
-            lark = self._sdk_module
-            if lark is None:
-                import lark_oapi as lark  # type: ignore[import-not-found]
+            lark_module: Any = self._sdk_module
+            if lark_module is None:
+                import lark_oapi as lark_oapi_module  # type: ignore[import-untyped]
 
-            api_client = lark.Client.builder().app_id(self._app_id).app_secret(self._app_secret).build()
+                lark_module = lark_oapi_module
+
+            api_client = lark_module.Client.builder().app_id(self._app_id).app_secret(self._app_secret).build()
 
             def send_text(chat_id: str, text: str) -> None:
                 self._send_text_message(api_client=api_client, chat_id=chat_id, text=text)
@@ -477,16 +491,16 @@ class FeishuLongConnectionRunner:
             self._event_processor.set_send_reaction(send_reaction)
 
             event_handler = (
-                lark.EventDispatcherHandler.builder("", "")
+                lark_module.EventDispatcherHandler.builder("", "")
                 .register_p2_im_message_receive_v1(self._event_processor.handle_event)
                 .build()
             )
 
-            self._ws_client = lark.ws.Client(
+            self._ws_client = lark_module.ws.Client(
                 self._app_id,
                 self._app_secret,
                 event_handler=event_handler,
-                log_level=lark.LogLevel.DEBUG,
+                log_level=lark_module.LogLevel.DEBUG,
             )
             self._logger.info("feishu long connection started")
             self._ws_client.start()
@@ -497,7 +511,7 @@ class FeishuLongConnectionRunner:
 
     @staticmethod
     def _send_text_message(*, api_client: Any, chat_id: str, text: str) -> None:
-        from lark_oapi.api.im.v1 import (  # type: ignore[import-not-found]
+        from lark_oapi.api.im.v1 import (  # type: ignore[import-untyped]
             CreateMessageRequest,
             CreateMessageRequestBody,
         )
@@ -531,7 +545,7 @@ class FeishuLongConnectionRunner:
 
     @staticmethod
     def _send_ack_reaction(*, api_client: Any, message_id: str, emoji_type: str) -> None:
-        from lark_oapi.api.im.v1 import (  # type: ignore[import-not-found]
+        from lark_oapi.api.im.v1 import (
             CreateMessageReactionRequest,
             CreateMessageReactionRequestBody,
             Emoji,

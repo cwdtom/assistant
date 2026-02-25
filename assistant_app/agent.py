@@ -848,7 +848,7 @@ class AssistantAgent:
                     result="todo 工具仅支持 /todo 或 /view 命令。",
                 )
             command_result = self._handle_command(normalized_command)
-            ok = not command_result.startswith("用法:") and not command_result.startswith("未知命令")
+            ok = _is_planner_command_success(command_result, tool="todo")
             return PlannerObservation(tool="todo", input_text=normalized_command, ok=ok, result=command_result)
 
         if action_tool == "schedule":
@@ -861,7 +861,7 @@ class AssistantAgent:
                     result="schedule 工具仅支持 /schedule 命令。",
                 )
             command_result = self._handle_command(normalized_command)
-            ok = not command_result.startswith("用法:") and not command_result.startswith("未知命令")
+            ok = _is_planner_command_success(command_result, tool="schedule")
             return PlannerObservation(tool="schedule", input_text=normalized_command, ok=ok, result=command_result)
 
         if action_tool == "internet_search":
@@ -889,7 +889,7 @@ class AssistantAgent:
                     ok=False,
                     result=f"未搜索到与“{query}”相关的结果。",
                 )
-            formatted = _format_search_results(search_results)
+            formatted = _format_search_results(search_results, top_k=self._internet_search_top_k)
             return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
 
         if action_tool == "history_search":
@@ -902,11 +902,7 @@ class AssistantAgent:
                     result="history_search 工具仅支持 /history search 命令。",
                 )
             command_result = self._handle_command(normalized_command)
-            ok = (
-                not command_result.startswith("用法:")
-                and not command_result.startswith("未找到包含")
-                and not command_result.startswith("暂无历史会话")
-            )
+            ok = _is_planner_command_success(command_result, tool="history_search")
             return PlannerObservation(
                 tool="history_search",
                 input_text=normalized_command,
@@ -1516,55 +1512,58 @@ class AssistantAgent:
                     "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
                 )
             (
-                event_time,
-                title,
-                duration_minutes,
-                remind_at,
-                repeat_interval_minutes,
-                repeat_times,
-                repeat_remind_start_time,
+                add_event_time,
+                add_title,
+                add_duration_minutes,
+                add_remind_at,
+                add_repeat_interval_minutes,
+                add_repeat_times,
+                add_repeat_remind_start_time,
             ) = add_schedule_parsed
             event_times = _build_schedule_event_times(
-                event_time=event_time,
-                repeat_interval_minutes=repeat_interval_minutes,
-                repeat_times=repeat_times,
+                event_time=add_event_time,
+                repeat_interval_minutes=add_repeat_interval_minutes,
+                repeat_times=add_repeat_times,
                 infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
             )
             conflicts = self.db.find_schedule_conflicts(
                 event_times,
-                duration_minutes=duration_minutes,
+                duration_minutes=add_duration_minutes,
             )
             if conflicts:
                 return _format_schedule_conflicts(conflicts)
             schedule_id = self.db.add_schedule(
-                title=title,
-                event_time=event_time,
-                duration_minutes=duration_minutes,
-                remind_at=remind_at,
+                title=add_title,
+                event_time=add_event_time,
+                duration_minutes=add_duration_minutes,
+                remind_at=add_remind_at,
             )
-            if repeat_interval_minutes is not None and repeat_times != 1:
+            if add_repeat_interval_minutes is not None and add_repeat_times != 1:
                 self.db.set_schedule_recurrence(
                     schedule_id,
-                    start_time=event_time,
-                    repeat_interval_minutes=repeat_interval_minutes,
-                    repeat_times=repeat_times,
-                    remind_start_time=repeat_remind_start_time,
+                    start_time=add_event_time,
+                    repeat_interval_minutes=add_repeat_interval_minutes,
+                    repeat_times=add_repeat_times,
+                    remind_start_time=add_repeat_remind_start_time,
                 )
             remind_meta = _format_schedule_remind_meta_inline(
-                remind_at=remind_at,
-                repeat_remind_start_time=repeat_remind_start_time,
+                remind_at=add_remind_at,
+                repeat_remind_start_time=add_repeat_remind_start_time,
             )
-            if repeat_times == 1:
-                return f"已添加日程 #{schedule_id}: {event_time} {title} ({duration_minutes} 分钟){remind_meta}"
-            if repeat_times == -1:
+            if add_repeat_times == 1:
                 return (
-                    f"已添加无限重复日程 #{schedule_id}: {event_time} {title} "
-                    f"(duration={duration_minutes}m, interval={repeat_interval_minutes}m{remind_meta})"
+                    f"已添加日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"({add_duration_minutes} 分钟){remind_meta}"
+                )
+            if add_repeat_times == -1:
+                return (
+                    f"已添加无限重复日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m{remind_meta})"
                 )
             return (
-                f"已添加重复日程 {repeat_times} 条: {event_time} {title} "
-                f"(duration={duration_minutes}m, interval={repeat_interval_minutes}m, "
-                f"times={repeat_times}{remind_meta})"
+                f"已添加重复日程 {add_repeat_times} 条: {add_event_time} {add_title} "
+                f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m, "
+                f"times={add_repeat_times}{remind_meta})"
             )
 
         if command.startswith("/schedule update "):
@@ -1607,16 +1606,16 @@ class AssistantAgent:
             )
             if conflicts:
                 return _format_schedule_conflicts(conflicts)
-            update_kwargs: dict[str, Any] = {
+            schedule_update_kwargs: dict[str, Any] = {
                 "title": title,
                 "event_time": event_time,
                 "duration_minutes": applied_duration_minutes,
             }
             if has_remind:
-                update_kwargs["remind_at"] = parsed_remind_at
+                schedule_update_kwargs["remind_at"] = parsed_remind_at
             if has_repeat_remind_start_time:
-                update_kwargs["repeat_remind_start_time"] = repeat_remind_start_time
-            updated = self.db.update_schedule(schedule_id, **update_kwargs)
+                schedule_update_kwargs["repeat_remind_start_time"] = repeat_remind_start_time
+            updated = self.db.update_schedule(schedule_id, **schedule_update_kwargs)
             if not updated:
                 return f"未找到日程 #{schedule_id}"
             if repeat_times == 1:
@@ -2563,9 +2562,35 @@ def _normalize_question_text(text: str) -> str:
     return normalized
 
 
-def _format_search_results(results: list[SearchResult]) -> str:
-    lines = ["互联网搜索结果（Top 3）:"]
-    for index, item in enumerate(results[:3], start=1):
+def _is_planner_command_success(result: str, *, tool: str) -> bool:
+    text = result.strip()
+    if not text:
+        return False
+
+    if text.startswith("用法:") or text.startswith("未知命令"):
+        return False
+
+    if tool == "todo":
+        if text.startswith("未找到待办 #") or text.startswith("提醒时间需要"):
+            return False
+    elif tool == "schedule":
+        if (
+            text.startswith("未找到日程 #")
+            or text.startswith("日程冲突：")
+            or "没有可切换的重复规则" in text
+        ):
+            return False
+    elif tool == "history_search":
+        if text.startswith("未找到包含") or text.startswith("暂无历史会话"):
+            return False
+
+    return True
+
+
+def _format_search_results(results: list[SearchResult], *, top_k: int) -> str:
+    limit = max(top_k, 1)
+    lines = [f"互联网搜索结果（Top {limit}）:"]
+    for index, item in enumerate(results[:limit], start=1):
         snippet = item.snippet or "-"
         lines.append(f"{index}. {item.title}")
         lines.append(f"   摘要: {snippet}")
