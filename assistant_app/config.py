@@ -44,6 +44,7 @@ class AppConfig:
     feishu_log_retention_days: int
     feishu_ack_reaction_enabled: bool
     feishu_ack_emoji_type: str
+    feishu_done_emoji_type: str
 
 
 def load_env_file(env_path: str = ".env") -> None:
@@ -116,6 +117,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         feishu_log_retention_days=_read_env_int("FEISHU_LOG_RETENTION_DAYS", default=7, min_value=1),
         feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
         feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="OK"),
+        feishu_done_emoji_type=_read_env_text("FEISHU_DONE_EMOJI_TYPE", default="DONE"),
     )
 
 

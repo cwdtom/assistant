@@ -55,6 +55,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_log_retention_days, 7)
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
+        self.assertEqual(config.feishu_done_emoji_type, "DONE")
 
     def test_load_config_falls_back_to_openai_env(self) -> None:
         env = {
@@ -83,6 +84,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_allowed_open_ids, ())
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
+        self.assertEqual(config.feishu_done_emoji_type, "DONE")
 
     def test_load_config_reads_runtime_knobs_from_env(self) -> None:
         env = {
@@ -120,6 +122,7 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_LOG_RETENTION_DAYS": "10",
             "FEISHU_ACK_REACTION_ENABLED": "off",
             "FEISHU_ACK_EMOJI_TYPE": "THUMBSUP",
+            "FEISHU_DONE_EMOJI_TYPE": "DONE_CUSTOM",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -157,6 +160,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_log_retention_days, 10)
         self.assertFalse(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "THUMBSUP")
+        self.assertEqual(config.feishu_done_emoji_type, "DONE_CUSTOM")
 
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
@@ -193,6 +197,7 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_LOG_RETENTION_DAYS": "0",
             "FEISHU_ACK_REACTION_ENABLED": "invalid",
             "FEISHU_ACK_EMOJI_TYPE": "   ",
+            "FEISHU_DONE_EMOJI_TYPE": "   ",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -230,6 +235,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_log_retention_days, 7)
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "")
+        self.assertEqual(config.feishu_done_emoji_type, "")
 
     def test_load_env_file_sets_only_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

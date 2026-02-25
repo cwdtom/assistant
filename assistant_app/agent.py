@@ -183,6 +183,7 @@ class AssistantAgent:
         self._llm_trace_call_seq = 0
         self._pending_plan_task: PendingPlanTask | None = None
         self._progress_callback = progress_callback
+        self._last_task_completed = False
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_replan_retry_count = max(plan_replan_retry_count, 0)
         self._plan_observation_char_limit = max(plan_observation_char_limit, 1)
@@ -224,10 +225,15 @@ class AssistantAgent:
         text = user_input.strip()
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
+        self._last_task_completed = False
         response = self._handle_input_text(text)
         if not text.startswith("/"):
             self._save_turn_history(user_text=text, assistant_text=response)
         return response
+
+    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
+        response = self.handle_input(user_input)
+        return response, self._last_task_completed
 
     def _handle_input_text(self, text: str) -> str:
         if not text:
@@ -999,6 +1005,7 @@ class AssistantAgent:
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
         if self._pending_plan_task is task:
             self._pending_plan_task = None
+        self._last_task_completed = True
         self._emit_progress("任务状态：已完成。")
         return response
 

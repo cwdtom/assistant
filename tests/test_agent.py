@@ -269,6 +269,31 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("已完成", done_resp)
         self.assertIn("完成时间:", done_resp)
 
+    def test_handle_input_with_task_status_returns_false_for_slash_command(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        response, task_completed = agent.handle_input_with_task_status("/todo list")
+
+        self.assertIn("暂无待办", response)
+        self.assertFalse(task_completed)
+
+    def test_handle_input_with_task_status_returns_true_after_planner_completion(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["列出所有待办事项"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("已执行 /todo list 命令列出所有待办事项，当前子任务完成"),
+                _planner_done("已列出所有待办事项。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm)
+        self.db.add_todo("今天完成联调")
+
+        response, task_completed = agent.handle_input_with_task_status("看一下所有待办")
+
+        self.assertIn("已列出所有待办事项。", response)
+        self.assertTrue(task_completed)
+
     def test_handle_input_persists_user_and_assistant_turns_for_non_slash_input(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 

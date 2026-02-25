@@ -24,6 +24,16 @@ class _FakeAgent:
         return self.response
 
 
+class _TaskAwareFakeAgent(_FakeAgent):
+    def __init__(self, response: str = "", *, task_completed: bool = False) -> None:
+        super().__init__(response=response)
+        self.task_completed = task_completed
+
+    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
+        response = self.handle_input(user_input)
+        return response, self.task_completed
+
+
 class FeishuAdapterTest(unittest.TestCase):
     def test_parse_message_text_supports_json_and_plain_text(self) -> None:
         self.assertEqual(parse_message_text('{"text":"你好"}'), "你好")
@@ -245,6 +255,62 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self.assertEqual(reactions, [("om_2", "OK")])
         self.assertEqual(sent, [("oc_1", "先同步结论。"), ("oc_1", "补充下一步：今天 18:00 前完成。")])
+
+    def test_event_processor_sends_done_reaction_when_task_completed(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        agent = _TaskAwareFakeAgent(response="任务处理完成。", task_completed=True)
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.done_reaction"),
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_done",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"安排并给出结论"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self.assertEqual(agent.inputs, ["安排并给出结论"])
+        self.assertEqual(reactions, [("om_done", "OK"), ("om_done", "DONE")])
+        self.assertEqual(sent, [("oc_1", "任务处理完成。")])
+
+    def test_event_processor_uses_configured_done_emoji_type(self) -> None:
+        reactions: list[tuple[str, str]] = []
+        agent = _TaskAwareFakeAgent(response="已完成。", task_completed=True)
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda _chat_id, _text: None,
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.custom_done_emoji"),
+            done_emoji_type="CHECKMARK",
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_custom_done",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"执行并结束"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self.assertEqual(reactions, [("om_custom_done", "OK"), ("om_custom_done", "CHECKMARK")])
 
 
 if __name__ == "__main__":

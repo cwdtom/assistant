@@ -243,6 +243,7 @@ def main() -> None:
                 dedup_ttl_seconds=config.feishu_dedup_ttl_seconds,
                 ack_reaction_enabled=config.feishu_ack_reaction_enabled,
                 ack_emoji_type=config.feishu_ack_emoji_type,
+                done_emoji_type=config.feishu_done_emoji_type,
             )
             feishu_runner.start_background()
             print("助手> Feishu 长连接已在后台启动（单聊模式）。")

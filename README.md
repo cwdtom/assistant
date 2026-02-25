@@ -59,6 +59,7 @@ cp .env.example .env
 - `FEISHU_LOG_RETENTION_DAYS`：Feishu 日志保留天数（默认 `7`）
 - `FEISHU_ACK_REACTION_ENABLED`：收到单聊消息后是否先回表情（默认 `true`）
 - `FEISHU_ACK_EMOJI_TYPE`：回执表情类型（默认 `OK`，可选值参考「表情文案说明」）
+- `FEISHU_DONE_EMOJI_TYPE`：任务完成后的表情类型（默认 `DONE`，可选值参考「表情文案说明」）
 
 3. 运行
 ```bash
@@ -121,7 +122,7 @@ python main.py
 - internet_search 默认优先使用 Bocha 作为搜索源（支持 env 切换 provider，缺少 Bocha key 时自动回退 Bing），返回 Top-3 摘要和链接
 - 当 replan 判定任务可收口后，最终答复可按 `ASSISTANT_PERSONA` 做一轮人格化改写（失败自动回退原文）；改写会倾向“先结论后细节”的真人表达，并可自行决定是否拆成多条
 - 本地待办/日程提醒输出也支持按 `ASSISTANT_PERSONA` 改写（失败自动回退原文）
-- 可选启用 Feishu 长连接接入（单聊模式）：与 CLI 同进程后台运行，默认收到消息先回表情（`OK`）+ 内存去重（`message_id`）+ 先按空行做多条语义拆分、再做超长分片发送 + 发送失败最多重试 3 次
+- 可选启用 Feishu 长连接接入（单聊模式）：与 CLI 同进程后台运行，默认收到消息先回表情（`OK`），任务完成后按配置追加回表情（默认 `DONE`）+ 内存去重（`message_id`）+ 先按空行做多条语义拆分、再做超长分片发送 + 发送失败最多重试 3 次
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`

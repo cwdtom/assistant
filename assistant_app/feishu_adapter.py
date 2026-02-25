@@ -15,6 +15,7 @@ DEFAULT_FEISHU_TEXT_CHUNK_SIZE = 1500
 DEFAULT_FEISHU_DEDUP_TTL_SECONDS = 600
 DEFAULT_FEISHU_ACK_REACTION_ENABLED = True
 DEFAULT_FEISHU_ACK_EMOJI_TYPE = "OK"
+DEFAULT_FEISHU_DONE_EMOJI_TYPE = "DONE"
 
 
 class AgentLike(Protocol):
@@ -157,6 +158,7 @@ class FeishuEventProcessor:
         text_chunk_size: int = DEFAULT_FEISHU_TEXT_CHUNK_SIZE,
         ack_reaction_enabled: bool = DEFAULT_FEISHU_ACK_REACTION_ENABLED,
         ack_emoji_type: str = DEFAULT_FEISHU_ACK_EMOJI_TYPE,
+        done_emoji_type: str = DEFAULT_FEISHU_DONE_EMOJI_TYPE,
     ) -> None:
         self._agent = agent
         self._send_text = send_text
@@ -169,6 +171,7 @@ class FeishuEventProcessor:
         self._text_chunk_size = max(text_chunk_size, 1)
         self._ack_reaction_enabled = ack_reaction_enabled
         self._ack_emoji_type = ack_emoji_type.strip() or DEFAULT_FEISHU_ACK_EMOJI_TYPE
+        self._done_emoji_type = done_emoji_type.strip() or DEFAULT_FEISHU_DONE_EMOJI_TYPE
 
     def set_send_text(self, send_text: Callable[[str, str], None]) -> None:
         self._send_text = send_text
@@ -206,10 +209,30 @@ class FeishuEventProcessor:
                 )
 
         try:
-            response_text = self._agent.handle_input(message.text)
+            response_text, task_completed = self._run_agent(message.text)
         except Exception as exc:  # noqa: BLE001
             self._logger.exception("feishu event handle failed: %s", exc)
             response_text = "处理失败，请稍后重试。"
+            task_completed = False
+
+        if task_completed:
+            try:
+                self._send_reaction_with_retry(
+                    message_id=message.message_id,
+                    emoji_type=self._done_emoji_type,
+                )
+                self._logger.info(
+                    "feishu done reaction sent: message_id=%s emoji=%s",
+                    message.message_id,
+                    self._done_emoji_type,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.warning(
+                    "feishu done reaction failed: message_id=%s emoji=%s",
+                    message.message_id,
+                    self._done_emoji_type,
+                    exc_info=True,
+                )
 
         payload_text = (response_text or "").strip() or "收到。"
         semantic_messages = split_semantic_messages(payload_text)
@@ -232,6 +255,15 @@ class FeishuEventProcessor:
 
     def _send_reaction_with_retry(self, *, message_id: str, emoji_type: str) -> None:
         self._run_with_retry(lambda: self._send_reaction(message_id, emoji_type))
+
+    def _run_agent(self, user_input: str) -> tuple[str, bool]:
+        maybe_task_aware = getattr(self._agent, "handle_input_with_task_status", None)
+        if callable(maybe_task_aware):
+            result = maybe_task_aware(user_input)
+            if isinstance(result, tuple) and len(result) == 2:
+                return str(result[0]), bool(result[1])
+            return str(result), False
+        return self._agent.handle_input(user_input), False
 
     def _run_with_retry(self, operation: Callable[[], None]) -> None:
         attempts = self._send_retry_count + 1
@@ -401,6 +433,7 @@ def create_feishu_runner(
     dedup_ttl_seconds: int,
     ack_reaction_enabled: bool,
     ack_emoji_type: str,
+    done_emoji_type: str,
 ) -> FeishuLongConnectionRunner:
     # The send function is replaced once SDK client is ready in FeishuLongConnectionRunner._run().
     processor = FeishuEventProcessor(
@@ -414,6 +447,7 @@ def create_feishu_runner(
         text_chunk_size=text_chunk_size,
         ack_reaction_enabled=ack_reaction_enabled,
         ack_emoji_type=ack_emoji_type,
+        done_emoji_type=done_emoji_type,
     )
     return FeishuLongConnectionRunner(
         app_id=app_id,
