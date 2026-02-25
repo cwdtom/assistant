@@ -50,11 +50,7 @@ class PersonaRewriter:
             "scene": scene,
             "persona": persona,
             "text": normalized_text,
-            "requirements": [
-                "保持原文语言",
-                "可润色语气与表达顺序，但不得改变事实内容",
-                "输出长度控制在原文的 0.7~1.3 倍",
-            ],
+            "requirements": self._scene_requirements(scene=scene),
         }
         messages = [
             {"role": "system", "content": PERSONA_REWRITE_SYSTEM_PROMPT},
@@ -70,6 +66,22 @@ class PersonaRewriter:
         if not normalized_rewritten:
             return text
         return normalized_rewritten
+
+    @staticmethod
+    def _scene_requirements(*, scene: str) -> list[str]:
+        requirements = [
+            "保持原文语言",
+            "可润色语气与表达顺序，但不得改变事实内容",
+            "输出长度控制在原文的 0.7~1.3 倍",
+        ]
+        if scene == "final_response":
+            requirements.extend(
+                [
+                    "语气更像真人同步结果：先说结论，再补充关键细节",
+                    "由你判断是否拆成多条发送；若拆分，请用空行分隔每条内容",
+                ]
+            )
+        return requirements
 
     def _log_rewrite_error(self, *, scene: str, error: Exception) -> None:
         logger = self.logger

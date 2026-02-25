@@ -44,6 +44,17 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.reminder_delivery_retention_days, 30)
         self.assertTrue(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "")
+        self.assertFalse(config.feishu_enabled)
+        self.assertEqual(config.feishu_app_id, "")
+        self.assertEqual(config.feishu_app_secret, "")
+        self.assertEqual(config.feishu_allowed_open_ids, ())
+        self.assertEqual(config.feishu_send_retry_count, 3)
+        self.assertEqual(config.feishu_text_chunk_size, 1500)
+        self.assertEqual(config.feishu_dedup_ttl_seconds, 600)
+        self.assertEqual(config.feishu_log_path, "logs/feishu.log")
+        self.assertEqual(config.feishu_log_retention_days, 7)
+        self.assertTrue(config.feishu_ack_reaction_enabled)
+        self.assertEqual(config.feishu_ack_emoji_type, "OK")
 
     def test_load_config_falls_back_to_openai_env(self) -> None:
         env = {
@@ -68,6 +79,10 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.bocha_search_summary)
         self.assertTrue(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "")
+        self.assertFalse(config.feishu_enabled)
+        self.assertEqual(config.feishu_allowed_open_ids, ())
+        self.assertTrue(config.feishu_ack_reaction_enabled)
+        self.assertEqual(config.feishu_ack_emoji_type, "OK")
 
     def test_load_config_reads_runtime_knobs_from_env(self) -> None:
         env = {
@@ -94,6 +109,17 @@ class ConfigTest(unittest.TestCase):
             "REMINDER_DELIVERY_RETENTION_DAYS": "7",
             "PERSONA_REWRITE_ENABLED": "off",
             "ASSISTANT_PERSONA": "你是严谨的项目经理",
+            "FEISHU_ENABLED": "on",
+            "FEISHU_APP_ID": "cli_test",
+            "FEISHU_APP_SECRET": "secret_test",
+            "FEISHU_ALLOWED_OPEN_IDS": "ou_1,ou_2, ou_3 ",
+            "FEISHU_SEND_RETRY_COUNT": "5",
+            "FEISHU_TEXT_CHUNK_SIZE": "1200",
+            "FEISHU_DEDUP_TTL_SECONDS": "900",
+            "FEISHU_LOG_PATH": "logs/feishu_custom.log",
+            "FEISHU_LOG_RETENTION_DAYS": "10",
+            "FEISHU_ACK_REACTION_ENABLED": "off",
+            "FEISHU_ACK_EMOJI_TYPE": "THUMBSUP",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -120,6 +146,17 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.reminder_delivery_retention_days, 7)
         self.assertFalse(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "你是严谨的项目经理")
+        self.assertTrue(config.feishu_enabled)
+        self.assertEqual(config.feishu_app_id, "cli_test")
+        self.assertEqual(config.feishu_app_secret, "secret_test")
+        self.assertEqual(config.feishu_allowed_open_ids, ("ou_1", "ou_2", "ou_3"))
+        self.assertEqual(config.feishu_send_retry_count, 5)
+        self.assertEqual(config.feishu_text_chunk_size, 1200)
+        self.assertEqual(config.feishu_dedup_ttl_seconds, 900)
+        self.assertEqual(config.feishu_log_path, "logs/feishu_custom.log")
+        self.assertEqual(config.feishu_log_retention_days, 10)
+        self.assertFalse(config.feishu_ack_reaction_enabled)
+        self.assertEqual(config.feishu_ack_emoji_type, "THUMBSUP")
 
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
@@ -145,6 +182,17 @@ class ConfigTest(unittest.TestCase):
             "REMINDER_DELIVERY_RETENTION_DAYS": "0",
             "PERSONA_REWRITE_ENABLED": "invalid",
             "ASSISTANT_PERSONA": "   ",
+            "FEISHU_ENABLED": "invalid",
+            "FEISHU_APP_ID": "   ",
+            "FEISHU_APP_SECRET": "   ",
+            "FEISHU_ALLOWED_OPEN_IDS": " , ,, ",
+            "FEISHU_SEND_RETRY_COUNT": "-1",
+            "FEISHU_TEXT_CHUNK_SIZE": "0",
+            "FEISHU_DEDUP_TTL_SECONDS": "abc",
+            "FEISHU_LOG_PATH": "   ",
+            "FEISHU_LOG_RETENTION_DAYS": "0",
+            "FEISHU_ACK_REACTION_ENABLED": "invalid",
+            "FEISHU_ACK_EMOJI_TYPE": "   ",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -171,6 +219,17 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.reminder_delivery_retention_days, 30)
         self.assertTrue(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "")
+        self.assertFalse(config.feishu_enabled)
+        self.assertEqual(config.feishu_app_id, "")
+        self.assertEqual(config.feishu_app_secret, "")
+        self.assertEqual(config.feishu_allowed_open_ids, ())
+        self.assertEqual(config.feishu_send_retry_count, 3)
+        self.assertEqual(config.feishu_text_chunk_size, 1500)
+        self.assertEqual(config.feishu_dedup_ttl_seconds, 600)
+        self.assertEqual(config.feishu_log_path, "")
+        self.assertEqual(config.feishu_log_retention_days, 7)
+        self.assertTrue(config.feishu_ack_reaction_enabled)
+        self.assertEqual(config.feishu_ack_emoji_type, "")
 
     def test_load_env_file_sets_only_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

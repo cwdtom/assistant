@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Callable
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
 from assistant_app.config import load_config
 from assistant_app.db import AssistantDB
+from assistant_app.feishu_adapter import create_feishu_runner
 from assistant_app.llm import OpenAICompatibleClient
 from assistant_app.persona import PersonaRewriter
 from assistant_app.reminder_service import ReminderService
@@ -125,6 +127,45 @@ def _configure_llm_trace_logger(log_path: str) -> None:
     logger.addHandler(file_handler)
 
 
+def _configure_feishu_logger(log_path: str, retention_days: int) -> logging.Logger:
+    logger = logging.getLogger("assistant_app.feishu")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    path = log_path.strip()
+
+    if not path:
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            close = getattr(handler, "close", None)
+            if callable(close):
+                close()
+        logger.addHandler(logging.NullHandler())
+        return logger
+
+    abs_path = str(Path(path).expanduser().resolve())
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.NullHandler):
+            logger.removeHandler(handler)
+            continue
+        existing_path = getattr(handler, "baseFilename", None)
+        if not existing_path:
+            continue
+        if str(Path(existing_path).resolve()) == abs_path:
+            return logger
+
+    Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        abs_path,
+        when="D",
+        interval=1,
+        backupCount=max(retention_days, 1),
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(file_handler)
+    return logger
+
+
 def main() -> None:
     config = load_config()
     _configure_llm_trace_logger(config.llm_trace_log_path)
@@ -166,6 +207,7 @@ def main() -> None:
         final_response_rewriter=persona_rewriter.rewrite_final_response,
     )
     timer_engine: TimerEngine | None = None
+    feishu_runner = None
     if config.timer_enabled:
         reminder_sink = StdoutReminderSink(stream=sys.stdout)
         reminder_service = ReminderService(
@@ -181,6 +223,29 @@ def main() -> None:
             poll_interval_seconds=config.timer_poll_interval_seconds,
         )
         timer_engine.start()
+
+    if config.feishu_enabled:
+        if not config.feishu_app_id or not config.feishu_app_secret:
+            print("助手> FEISHU_ENABLED=true 但 FEISHU_APP_ID/FEISHU_APP_SECRET 未配置，已跳过 Feishu 接入。")
+        else:
+            feishu_logger = _configure_feishu_logger(
+                log_path=config.feishu_log_path,
+                retention_days=config.feishu_log_retention_days,
+            )
+            feishu_runner = create_feishu_runner(
+                app_id=config.feishu_app_id,
+                app_secret=config.feishu_app_secret,
+                agent=agent,
+                logger=feishu_logger,
+                allowed_open_ids=set(config.feishu_allowed_open_ids),
+                send_retry_count=config.feishu_send_retry_count,
+                text_chunk_size=config.feishu_text_chunk_size,
+                dedup_ttl_seconds=config.feishu_dedup_ttl_seconds,
+                ack_reaction_enabled=config.feishu_ack_reaction_enabled,
+                ack_emoji_type=config.feishu_ack_emoji_type,
+            )
+            feishu_runner.start_background()
+            print("助手> Feishu 长连接已在后台启动（单聊模式）。")
 
     try:
         _clear_terminal_history()
@@ -208,6 +273,8 @@ def main() -> None:
                 continue
             print(f"助手> {response}")
     finally:
+        if feishu_runner is not None:
+            feishu_runner.stop()
         if timer_engine is not None:
             timer_engine.stop()
 

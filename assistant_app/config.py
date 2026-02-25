@@ -33,6 +33,17 @@ class AppConfig:
     reminder_delivery_retention_days: int
     persona_rewrite_enabled: bool
     assistant_persona: str
+    feishu_enabled: bool
+    feishu_app_id: str
+    feishu_app_secret: str
+    feishu_allowed_open_ids: tuple[str, ...]
+    feishu_send_retry_count: int
+    feishu_text_chunk_size: int
+    feishu_dedup_ttl_seconds: int
+    feishu_log_path: str
+    feishu_log_retention_days: int
+    feishu_ack_reaction_enabled: bool
+    feishu_ack_emoji_type: str
 
 
 def load_env_file(env_path: str = ".env") -> None:
@@ -94,6 +105,17 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         reminder_delivery_retention_days=_read_env_int("REMINDER_DELIVERY_RETENTION_DAYS", default=30, min_value=1),
         persona_rewrite_enabled=_read_env_bool("PERSONA_REWRITE_ENABLED", default=True),
         assistant_persona=_read_env_text("ASSISTANT_PERSONA", default=""),
+        feishu_enabled=_read_env_bool("FEISHU_ENABLED", default=False),
+        feishu_app_id=_read_env_text("FEISHU_APP_ID", default=""),
+        feishu_app_secret=_read_env_text("FEISHU_APP_SECRET", default=""),
+        feishu_allowed_open_ids=_read_env_list("FEISHU_ALLOWED_OPEN_IDS"),
+        feishu_send_retry_count=_read_env_int("FEISHU_SEND_RETRY_COUNT", default=3, min_value=0),
+        feishu_text_chunk_size=_read_env_int("FEISHU_TEXT_CHUNK_SIZE", default=1500, min_value=1),
+        feishu_dedup_ttl_seconds=_read_env_int("FEISHU_DEDUP_TTL_SECONDS", default=600, min_value=1),
+        feishu_log_path=_read_env_text("FEISHU_LOG_PATH", default="logs/feishu.log"),
+        feishu_log_retention_days=_read_env_int("FEISHU_LOG_RETENTION_DAYS", default=7, min_value=1),
+        feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
+        feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="OK"),
     )
 
 
@@ -127,3 +149,12 @@ def _read_env_bool(name: str, *, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _read_env_list(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return ()
+    values = [item.strip() for item in raw.split(",")]
+    result = tuple(item for item in values if item)
+    return result

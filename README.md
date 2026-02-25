@@ -49,6 +49,16 @@ cp .env.example .env
 - `PERSONA_REWRITE_ENABLED`：是否启用人格化改写（默认 `true`；当人设为空时不会触发）
 - `ASSISTANT_PERSONA`：助手人设文本（默认空，设置后会用于最终答复和提醒文案润色）
 - `LLM_TRACE_LOG_PATH`：LLM 请求/响应日志文件路径（默认 `logs/llm_trace.log`，留空可关闭）
+- `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`，与 CLI 同进程后台运行）
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：Feishu 应用凭证（启用长连接必填）
+- `FEISHU_ALLOWED_OPEN_IDS`：单聊用户 open_id 白名单（逗号分隔，空表示不限制）
+- `FEISHU_SEND_RETRY_COUNT`：发送失败后的重试次数（默认 `3`）
+- `FEISHU_TEXT_CHUNK_SIZE`：超长回复分片字符数（默认 `1500`）
+- `FEISHU_DEDUP_TTL_SECONDS`：消息去重窗口秒数（默认 `600`）
+- `FEISHU_LOG_PATH`：Feishu 日志文件路径（默认 `logs/feishu.log`）
+- `FEISHU_LOG_RETENTION_DAYS`：Feishu 日志保留天数（默认 `7`）
+- `FEISHU_ACK_REACTION_ENABLED`：收到单聊消息后是否先回表情（默认 `true`）
+- `FEISHU_ACK_EMOJI_TYPE`：回执表情类型（默认 `OK`，可选值参考「表情文案说明」）
 
 3. 运行
 ```bash
@@ -109,8 +119,9 @@ python main.py
 - thought 上下文会显式提供时间单位契约（`time_unit_contract`），统一约束分钟/次数/时间格式，避免 `3小时 -> --duration 3` 这类误用
 - ask_user 工具触发时，会以 `请确认：...` 发起单问题澄清；输入 `TASK_CANCEL_COMMAND` 对应文本可终止当前循环任务
 - internet_search 默认优先使用 Bocha 作为搜索源（支持 env 切换 provider，缺少 Bocha key 时自动回退 Bing），返回 Top-3 摘要和链接
-- 当 replan 判定任务可收口后，最终答复可按 `ASSISTANT_PERSONA` 做一轮人格化改写（失败自动回退原文）
+- 当 replan 判定任务可收口后，最终答复可按 `ASSISTANT_PERSONA` 做一轮人格化改写（失败自动回退原文）；改写会倾向“先结论后细节”的真人表达，并可自行决定是否拆成多条
 - 本地待办/日程提醒输出也支持按 `ASSISTANT_PERSONA` 改写（失败自动回退原文）
+- 可选启用 Feishu 长连接接入（单聊模式）：与 CLI 同进程后台运行，默认收到消息先回表情（`OK`）+ 内存去重（`message_id`）+ 先按空行做多条语义拆分、再做超长分片发送 + 发送失败最多重试 3 次
 - 自然语言任务默认最多执行 20 个决策步骤（含 thought/replan/tool 动作，ask_user 等待不计步），超限后会返回“已完成部分 + 未完成原因 + 下一步建议”
 - 支持自然语言命令，示例：
   - `添加待办 买牛奶，标签是 life，优先级 1，截止 2026-02-25 18:00，提醒 2026-02-25 17:30`

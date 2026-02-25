@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from assistant_app.persona import PersonaRewriter
@@ -45,6 +46,27 @@ class PersonaRewriterTest(unittest.TestCase):
         result = rewriter.rewrite_final_response(original)
 
         self.assertEqual(result, original)
+
+    def test_rewrite_final_response_adds_human_and_multi_message_guidance(self) -> None:
+        llm = _FakeLLMClient(response="已完成。")
+        rewriter = PersonaRewriter(llm_client=llm, persona="可靠同事", enabled=True)
+
+        rewriter.rewrite_final_response("任务完成，共 3 项。")
+
+        self.assertEqual(len(llm.calls), 1)
+        payload = json.loads(llm.calls[0][1]["content"])
+        self.assertIn("语气更像真人同步结果：先说结论，再补充关键细节", payload["requirements"])
+        self.assertIn("由你判断是否拆成多条发送；若拆分，请用空行分隔每条内容", payload["requirements"])
+
+    def test_rewrite_reminder_does_not_add_multi_message_guidance(self) -> None:
+        llm = _FakeLLMClient(response="提醒：10:00 开会。")
+        rewriter = PersonaRewriter(llm_client=llm, persona="可靠同事", enabled=True)
+
+        rewriter.rewrite_reminder_content("日程提醒 #1: 10:00 开会")
+
+        self.assertEqual(len(llm.calls), 1)
+        payload = json.loads(llm.calls[0][1]["content"])
+        self.assertNotIn("由你判断是否拆成多条发送；若拆分，请用空行分隔每条内容", payload["requirements"])
 
 
 if __name__ == "__main__":

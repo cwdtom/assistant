@@ -9,6 +9,7 @@ from pathlib import Path
 from assistant_app.cli import (
     CLEAR_TERMINAL_SEQUENCE,
     _clear_terminal_history,
+    _configure_feishu_logger,
     _configure_llm_trace_logger,
     _exit_cli,
     _handle_input_with_feedback,
@@ -111,6 +112,48 @@ class CLIFeedbackTest(unittest.TestCase):
                 logger.removeHandler(handler)
                 handler.close()
             _configure_llm_trace_logger("   ")
+            self.assertFalse(logger.propagate)
+            self.assertEqual(len(logger.handlers), 1)
+            self.assertIsInstance(logger.handlers[0], logging.NullHandler)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_configure_feishu_logger_deduplicates_file_handler(self) -> None:
+        logger = logging.getLogger("assistant_app.feishu")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            with tempfile.TemporaryDirectory() as tmp:
+                path = str(Path(tmp) / "feishu.log")
+                _configure_feishu_logger(path, retention_days=7)
+                _configure_feishu_logger(path, retention_days=7)
+                file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
+                self.assertEqual(len(file_handlers), 1)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_configure_feishu_logger_empty_path_disables_output(self) -> None:
+        logger = logging.getLogger("assistant_app.feishu")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            _configure_feishu_logger("   ", retention_days=7)
             self.assertFalse(logger.propagate)
             self.assertEqual(len(logger.handlers), 1)
             self.assertIsInstance(logger.handlers[0], logging.NullHandler)
