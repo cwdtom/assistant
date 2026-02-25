@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -34,7 +36,68 @@ class _TaskAwareFakeAgent(_FakeAgent):
         return response, self.task_completed
 
 
+class _InterruptibleTaskAwareAgent:
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+        self.interrupt_calls = 0
+        self.first_call_started = threading.Event()
+        self._first_call_interrupted = threading.Event()
+
+    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
+        self.inputs.append(user_input)
+        if len(self.inputs) == 1:
+            self.first_call_started.set()
+            self._first_call_interrupted.wait(timeout=2.0)
+            return "第一条已中断", False
+        return "合并任务完成", True
+
+    def interrupt_current_task(self) -> None:
+        self.interrupt_calls += 1
+        self._first_call_interrupted.set()
+
+
+class _SlowInterruptibleTaskAwareAgent:
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+        self.interrupt_calls = 0
+        self.first_call_started = threading.Event()
+        self.release_first_call = threading.Event()
+
+    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
+        self.inputs.append(user_input)
+        if len(self.inputs) == 1:
+            self.first_call_started.set()
+            self.release_first_call.wait(timeout=2.0)
+            return "第一条完成", False
+        return "合并任务完成", True
+
+    def interrupt_current_task(self) -> None:
+        self.interrupt_calls += 1
+
+
+class _ChunkedResponseAgent:
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
+        self.inputs.append(user_input)
+        if len(self.inputs) == 1:
+            return "abcdef", False
+        return "合并任务完成", True
+
+    def interrupt_current_task(self) -> None:
+        return
+
+
 class FeishuAdapterTest(unittest.TestCase):
+    def _wait_until(self, predicate, *, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.01)
+        self.fail("condition not met within timeout")
+
     def test_parse_message_text_supports_json_and_plain_text(self) -> None:
         self.assertEqual(parse_message_text('{"text":"你好"}'), "你好")
         self.assertEqual(parse_message_text("纯文本"), "纯文本")
@@ -160,6 +223,7 @@ class FeishuAdapterTest(unittest.TestCase):
         processor.handle_event(payload)
         processor.handle_event(payload)
 
+        self._wait_until(lambda: len(agent.inputs) == 1 and len(sent) == 3 and len(reactions) == 1)
         self.assertEqual(agent.inputs, ["安排下今天"])
         self.assertEqual(reactions, [("om_1", "OK")])
         self.assertEqual(sent, [("oc_1", "ab"), ("oc_1", "cd"), ("oc_1", "ef")])
@@ -179,6 +243,7 @@ class FeishuAdapterTest(unittest.TestCase):
             send_reaction=lambda _message_id, _emoji_type: None,
             logger=logging.getLogger("test.feishu_adapter.retry"),
             send_retry_count=3,
+            send_retry_backoff_seconds=0,
         )
         payload = {
             "event": {
@@ -193,9 +258,9 @@ class FeishuAdapterTest(unittest.TestCase):
             }
         }
 
-        with patch("assistant_app.feishu_adapter.time.sleep", return_value=None):
-            processor.handle_event(payload)
+        processor.handle_event(payload)
 
+        self._wait_until(lambda: attempts["count"] == 4)
         self.assertEqual(attempts["count"], 4)
 
     def test_event_processor_can_disable_ack_reaction(self) -> None:
@@ -224,6 +289,7 @@ class FeishuAdapterTest(unittest.TestCase):
 
         processor.handle_event(payload)
 
+        self._wait_until(lambda: len(sent) == 1)
         self.assertEqual(reactions, [])
         self.assertEqual(sent, [("oc_1", "ok")])
 
@@ -253,6 +319,7 @@ class FeishuAdapterTest(unittest.TestCase):
 
         processor.handle_event(payload)
 
+        self._wait_until(lambda: len(reactions) == 1 and len(sent) == 2)
         self.assertEqual(reactions, [("om_2", "OK")])
         self.assertEqual(sent, [("oc_1", "先同步结论。"), ("oc_1", "补充下一步：今天 18:00 前完成。")])
 
@@ -281,6 +348,7 @@ class FeishuAdapterTest(unittest.TestCase):
 
         processor.handle_event(payload)
 
+        self._wait_until(lambda: len(agent.inputs) == 1 and len(reactions) == 2 and len(sent) == 1)
         self.assertEqual(agent.inputs, ["安排并给出结论"])
         self.assertEqual(reactions, [("om_done", "OK"), ("om_done", "DONE")])
         self.assertEqual(sent, [("oc_1", "任务处理完成。")])
@@ -310,7 +378,183 @@ class FeishuAdapterTest(unittest.TestCase):
 
         processor.handle_event(payload)
 
+        self._wait_until(lambda: len(reactions) == 2)
         self.assertEqual(reactions, [("om_custom_done", "OK"), ("om_custom_done", "CHECKMARK")])
+
+    def test_event_processor_interrupts_and_merges_new_input_when_busy(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        agent = _InterruptibleTaskAwareAgent()
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.interrupt_merge"),
+        )
+        first_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_busy_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"第一条需求"}',
+                },
+            }
+        }
+        second_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_busy_2",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"第二条补充"}',
+                },
+            }
+        }
+
+        first_thread = threading.Thread(target=processor.handle_event, args=(first_payload,))
+        first_thread.start()
+        self.assertTrue(agent.first_call_started.wait(timeout=2.0))
+        processor.handle_event(second_payload)
+        first_thread.join(timeout=2.0)
+        self._wait_until(lambda: len(reactions) == 3 and len(sent) == 1 and len(agent.inputs) == 2)
+
+        self.assertEqual(agent.interrupt_calls, 1)
+        self.assertEqual(agent.inputs, ["第一条需求", "第一条需求\n第二条补充"])
+        self.assertEqual(sent, [("oc_1", "合并任务完成")])
+        self.assertEqual(
+            reactions,
+            [
+                ("om_busy_1", "OK"),
+                ("om_busy_2", "OK"),
+                ("om_busy_2", "DONE"),
+            ],
+        )
+
+    def test_event_processor_acks_second_message_when_merged_task_starts(self) -> None:
+        reactions: list[tuple[str, str]] = []
+        sent: list[tuple[str, str]] = []
+        agent = _SlowInterruptibleTaskAwareAgent()
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.ack_when_merged_start"),
+        )
+        first_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_ack_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"第一条需求"}',
+                },
+            }
+        }
+        second_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_ack_2",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"第二条补充"}',
+                },
+            }
+        }
+
+        first_thread = threading.Thread(target=processor.handle_event, args=(first_payload,))
+        first_thread.start()
+        self.assertTrue(agent.first_call_started.wait(timeout=2.0))
+        processor.handle_event(second_payload)
+
+        # 第二条不在“收到时”ACK，而是在合并任务真正开始执行时ACK。
+        self.assertEqual(reactions, [("om_ack_1", "OK")])
+
+        agent.release_first_call.set()
+        first_thread.join(timeout=2.0)
+        self._wait_until(lambda: len(reactions) == 3 and len(sent) == 1)
+
+        self.assertEqual(
+            reactions,
+            [
+                ("om_ack_1", "OK"),
+                ("om_ack_2", "OK"),
+                ("om_ack_2", "DONE"),
+            ],
+        )
+        self.assertEqual(sent, [("oc_1", "合并任务完成")])
+
+    def test_event_processor_aborts_old_response_when_interrupted_during_send(self) -> None:
+        reactions: list[tuple[str, str]] = []
+        sent: list[tuple[str, str]] = []
+        first_chunk_sent = threading.Event()
+        release_first_chunk = threading.Event()
+        agent = _ChunkedResponseAgent()
+
+        def send_text(chat_id: str, text: str) -> None:
+            sent.append((chat_id, text))
+            if text == "ab" and not first_chunk_sent.is_set():
+                first_chunk_sent.set()
+                release_first_chunk.wait(timeout=2.0)
+
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=send_text,
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.abort_during_send"),
+            text_chunk_size=2,
+        )
+        first_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_abort_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"第一条需求"}',
+                },
+            }
+        }
+        second_payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_abort_2",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"第二条补充"}',
+                },
+            }
+        }
+
+        first_thread = threading.Thread(target=processor.handle_event, args=(first_payload,))
+        first_thread.start()
+        self.assertTrue(first_chunk_sent.wait(timeout=2.0))
+        processor.handle_event(second_payload)
+        release_first_chunk.set()
+        first_thread.join(timeout=2.0)
+        self._wait_until(lambda: len(reactions) == 3 and len(sent) == 4 and len(agent.inputs) == 2)
+
+        self.assertEqual(agent.inputs, ["第一条需求", "第一条需求\n第二条补充"])
+        self.assertEqual(sent, [("oc_1", "ab"), ("oc_1", "合并"), ("oc_1", "任务"), ("oc_1", "完成")])
+        self.assertEqual(
+            reactions,
+            [
+                ("om_abort_1", "OK"),
+                ("om_abort_2", "OK"),
+                ("om_abort_2", "DONE"),
+            ],
+        )
 
 
 if __name__ == "__main__":

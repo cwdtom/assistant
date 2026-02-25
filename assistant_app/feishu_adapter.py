@@ -30,6 +30,13 @@ class FeishuTextMessage:
     text: str
 
 
+@dataclass
+class _PendingTaskInput:
+    chat_id: str
+    text: str
+    latest_message_id: str
+
+
 class MessageDeduplicator:
     def __init__(self, ttl_seconds: int = DEFAULT_FEISHU_DEDUP_TTL_SECONDS) -> None:
         self._ttl_seconds = max(ttl_seconds, 1)
@@ -172,6 +179,11 @@ class FeishuEventProcessor:
         self._ack_reaction_enabled = ack_reaction_enabled
         self._ack_emoji_type = ack_emoji_type.strip() or DEFAULT_FEISHU_ACK_EMOJI_TYPE
         self._done_emoji_type = done_emoji_type.strip() or DEFAULT_FEISHU_DONE_EMOJI_TYPE
+        self._state_lock = threading.Lock()
+        self._state_condition = threading.Condition(self._state_lock)
+        self._active_task: _PendingTaskInput | None = None
+        self._pending_task: _PendingTaskInput | None = None
+        self._worker_thread: threading.Thread | None = None
 
     def set_send_text(self, send_text: Callable[[str, str], None]) -> None:
         self._send_text = send_text
@@ -192,63 +204,192 @@ class FeishuEventProcessor:
             self._logger.info("feishu event dropped: duplicate message_id=%s", message.message_id)
             return
 
-        if self._ack_reaction_enabled:
-            try:
-                self._send_reaction_with_retry(message_id=message.message_id, emoji_type=self._ack_emoji_type)
-                self._logger.info(
-                    "feishu ack reaction sent: message_id=%s emoji=%s",
-                    message.message_id,
-                    self._ack_emoji_type,
+        should_start_processing = False
+        with self._state_lock:
+            if self._active_task is None:
+                self._active_task = _PendingTaskInput(
+                    chat_id=message.chat_id,
+                    text=message.text,
+                    latest_message_id=message.message_id,
                 )
-            except Exception:  # noqa: BLE001
-                self._logger.warning(
-                    "feishu ack reaction failed: message_id=%s emoji=%s",
-                    message.message_id,
-                    self._ack_emoji_type,
-                    exc_info=True,
-                )
+            else:
+                self._enqueue_interrupting_message(message)
+            should_start_processing = self._ensure_worker_started_locked()
+            self._state_condition.notify()
 
+        if not should_start_processing:
+            return
+
+    def _ensure_worker_started_locked(self) -> bool:
+        worker = self._worker_thread
+        if worker is not None and worker.is_alive():
+            return True
+        self._worker_thread = threading.Thread(
+            target=self._process_task_queue,
+            name="feishu-event-worker",
+            daemon=True,
+        )
+        self._worker_thread.start()
+        return True
+
+    def _process_task_queue(self) -> None:
+        while True:
+            try:
+                with self._state_condition:
+                    while self._active_task is None:
+                        self._state_condition.wait(timeout=1.0)
+                        if self._active_task is None:
+                            self._worker_thread = None
+                            return
+                    active_task = self._active_task
+
+                self._send_ack_for_task_start(active_task)
+
+                task_interrupted = False
+                try:
+                    response_text, task_completed = self._run_agent(active_task.text)
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.exception("feishu event handle failed: %s", exc)
+                    response_text = "处理失败，请稍后重试。"
+                    task_completed = False
+
+                with self._state_lock:
+                    task_interrupted = self._pending_task is not None
+
+                if task_interrupted:
+                    self._logger.info(
+                        "feishu response skipped: message_id=%s interrupted_by_newer_input",
+                        active_task.latest_message_id,
+                    )
+                else:
+                    if task_completed:
+                        if self._has_pending_task():
+                            self._logger.info(
+                                "feishu done reaction skipped: message_id=%s interrupted_before_done",
+                                active_task.latest_message_id,
+                            )
+                        else:
+                            try:
+                                self._send_reaction_with_retry(
+                                    message_id=active_task.latest_message_id,
+                                    emoji_type=self._done_emoji_type,
+                                )
+                                self._logger.info(
+                                    "feishu done reaction sent: message_id=%s emoji=%s",
+                                    active_task.latest_message_id,
+                                    self._done_emoji_type,
+                                )
+                            except Exception:  # noqa: BLE001
+                                self._logger.warning(
+                                    "feishu done reaction failed: message_id=%s emoji=%s",
+                                    active_task.latest_message_id,
+                                    self._done_emoji_type,
+                                    exc_info=True,
+                                )
+
+                    payload_text = (response_text or "").strip() or "收到。"
+                    semantic_messages = split_semantic_messages(payload_text)
+                    interrupted_while_sending = False
+                    for message_index, semantic_message in enumerate(semantic_messages, start=1):
+                        chunks = split_text_chunks(semantic_message, chunk_size=self._text_chunk_size)
+                        for chunk_index, chunk in enumerate(chunks, start=1):
+                            if self._has_pending_task():
+                                interrupted_while_sending = True
+                                break
+                            self._send_with_retry(chat_id=active_task.chat_id, text=chunk)
+                            self._logger.info(
+                                "feishu response sent: message_id=%s message=%s/%s chunk=%s/%s",
+                                active_task.latest_message_id,
+                                message_index,
+                                len(semantic_messages),
+                                chunk_index,
+                                len(chunks),
+                            )
+                        if interrupted_while_sending:
+                            break
+                    if interrupted_while_sending:
+                        self._logger.info(
+                            "feishu response aborted: message_id=%s interrupted_during_send",
+                            active_task.latest_message_id,
+                        )
+
+                with self._state_lock:
+                    if self._pending_task is None:
+                        self._active_task = None
+                    else:
+                        self._active_task = self._pending_task
+                        self._pending_task = None
+            except Exception:  # noqa: BLE001
+                self._logger.exception("feishu worker loop failed unexpectedly")
+
+    def _send_ack_for_task_start(self, task: _PendingTaskInput) -> None:
+        if not self._ack_reaction_enabled:
+            return
         try:
-            response_text, task_completed = self._run_agent(message.text)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.exception("feishu event handle failed: %s", exc)
-            response_text = "处理失败，请稍后重试。"
-            task_completed = False
+            self._send_reaction_with_retry(message_id=task.latest_message_id, emoji_type=self._ack_emoji_type)
+            self._logger.info(
+                "feishu ack reaction sent: message_id=%s emoji=%s",
+                task.latest_message_id,
+                self._ack_emoji_type,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.warning(
+                "feishu ack reaction failed: message_id=%s emoji=%s",
+                task.latest_message_id,
+                self._ack_emoji_type,
+                exc_info=True,
+            )
 
-        if task_completed:
-            try:
-                self._send_reaction_with_retry(
-                    message_id=message.message_id,
-                    emoji_type=self._done_emoji_type,
-                )
-                self._logger.info(
-                    "feishu done reaction sent: message_id=%s emoji=%s",
-                    message.message_id,
-                    self._done_emoji_type,
-                )
-            except Exception:  # noqa: BLE001
-                self._logger.warning(
-                    "feishu done reaction failed: message_id=%s emoji=%s",
-                    message.message_id,
-                    self._done_emoji_type,
-                    exc_info=True,
-                )
+    def _enqueue_interrupting_message(self, message: FeishuTextMessage) -> None:
+        active_task = self._active_task
+        if active_task is None:
+            self._active_task = _PendingTaskInput(
+                chat_id=message.chat_id,
+                text=message.text,
+                latest_message_id=message.message_id,
+            )
+            return
 
-        payload_text = (response_text or "").strip() or "收到。"
-        semantic_messages = split_semantic_messages(payload_text)
+        if self._pending_task is None:
+            merged_text = self._merge_task_text(active_task.text, message.text)
+            self._pending_task = _PendingTaskInput(
+                chat_id=active_task.chat_id,
+                text=merged_text,
+                latest_message_id=message.message_id,
+            )
+        else:
+            self._pending_task.text = self._merge_task_text(self._pending_task.text, message.text)
+            self._pending_task.latest_message_id = message.message_id
 
-        for message_index, semantic_message in enumerate(semantic_messages, start=1):
-            chunks = split_text_chunks(semantic_message, chunk_size=self._text_chunk_size)
-            for chunk_index, chunk in enumerate(chunks, start=1):
-                self._send_with_retry(chat_id=message.chat_id, text=chunk)
-                self._logger.info(
-                    "feishu response sent: message_id=%s message=%s/%s chunk=%s/%s",
-                    message.message_id,
-                    message_index,
-                    len(semantic_messages),
-                    chunk_index,
-                    len(chunks),
-                )
+        self._request_agent_interrupt()
+        self._logger.info(
+            "feishu task interrupted and queued: current_message_id=%s queued_message_id=%s",
+            active_task.latest_message_id,
+            message.message_id,
+        )
+
+    @staticmethod
+    def _merge_task_text(current_text: str, new_text: str) -> str:
+        left = current_text.strip()
+        right = new_text.strip()
+        if not left:
+            return right
+        if not right:
+            return left
+        return f"{left}\n{right}"
+
+    def _request_agent_interrupt(self) -> None:
+        interrupt = getattr(self._agent, "interrupt_current_task", None)
+        if not callable(interrupt):
+            return
+        try:
+            interrupt()
+        except Exception:  # noqa: BLE001
+            self._logger.warning("feishu failed to interrupt active task", exc_info=True)
+
+    def _has_pending_task(self) -> bool:
+        with self._state_lock:
+            return self._pending_task is not None
 
     def _send_with_retry(self, *, chat_id: str, text: str) -> None:
         self._run_with_retry(lambda: self._send_text(chat_id, text))

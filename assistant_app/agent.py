@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -88,6 +89,10 @@ PLAN_TIME_UNIT_CONTRACT: dict[str, str] = {
     "schedule_view_anchor": "schedule view: day/week 使用 YYYY-MM-DD；month 使用 YYYY-MM。",
     "todo_due_remind_unit": "todo 的 --due/--remind 都是本地绝对时间，不接受“3小时后”等相对表达。",
 }
+
+
+class TaskInterruptedError(RuntimeError):
+    """Raised when an in-flight planner task is interrupted by a newer input."""
 
 
 @dataclass
@@ -184,6 +189,8 @@ class AssistantAgent:
         self._pending_plan_task: PendingPlanTask | None = None
         self._progress_callback = progress_callback
         self._last_task_completed = False
+        self._interrupt_lock = threading.Lock()
+        self._interrupt_requested = False
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_replan_retry_count = max(plan_replan_retry_count, 0)
         self._plan_observation_char_limit = max(plan_observation_char_limit, 1)
@@ -226,6 +233,7 @@ class AssistantAgent:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
         self._last_task_completed = False
+        self._clear_interrupt_request()
         response = self._handle_input_text(text)
         if not text.startswith("/"):
             self._save_turn_history(user_text=text, assistant_text=response)
@@ -234,6 +242,11 @@ class AssistantAgent:
     def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
         response = self.handle_input(user_input)
         return response, self._last_task_completed
+
+    def interrupt_current_task(self) -> None:
+        with self._interrupt_lock:
+            self._interrupt_requested = True
+        self._pending_plan_task = None
 
     def _handle_input_text(self, text: str) -> str:
         if not text:
@@ -270,43 +283,47 @@ class AssistantAgent:
             logging.getLogger(__name__).warning("保存 chat_history 失败", exc_info=True)
 
     def _run_outer_plan_loop(self, task: PendingPlanTask) -> str:
-        while True:
-            if task.step_count >= self._plan_replan_max_steps:
-                return self._finalize_planner_task(task, self._format_step_limit_response(task))
+        try:
+            while True:
+                self._raise_if_task_interrupted()
+                if task.step_count >= self._plan_replan_max_steps:
+                    return self._finalize_planner_task(task, self._format_step_limit_response(task))
 
-            self._emit_decision_progress(task)
+                self._emit_decision_progress(task)
 
-            if not task.plan_initialized:
-                if not self._initialize_plan_once(task):
+                if not task.plan_initialized:
+                    if not self._initialize_plan_once(task):
+                        return self._finalize_planner_task(task, self._planner_unavailable_text())
+
+                if task.awaiting_clarification:
+                    self._pending_plan_task = task
+                    return "请确认：请补充必要信息。"
+
+                replan_outcome, replan_response = self._run_replan_gate(task)
+                if replan_outcome == "retry":
+                    continue
+                if replan_outcome == "unavailable":
                     return self._finalize_planner_task(task, self._planner_unavailable_text())
+                if replan_outcome == "done":
+                    final_response = replan_response or self._planner_unavailable_text()
+                    final_response = self._rewrite_final_response(final_response)
+                    return self._finalize_planner_task(task, final_response)
 
-            if task.awaiting_clarification:
-                self._pending_plan_task = task
-                return "请确认：请补充必要信息。"
-
-            replan_outcome, replan_response = self._run_replan_gate(task)
-            if replan_outcome == "retry":
-                continue
-            if replan_outcome == "unavailable":
+                task.inner_context = self._new_inner_context(task)
+                loop_outcome, payload = self._run_inner_react_loop(task)
+                if loop_outcome == "replan":
+                    continue
+                if loop_outcome == "ask_user":
+                    self._pending_plan_task = task
+                    return payload or "请确认：请补充必要信息。"
+                if loop_outcome == "done_candidate":
+                    task.needs_replan = True
+                    continue
+                if loop_outcome == "step_limit":
+                    return self._finalize_planner_task(task, self._format_step_limit_response(task))
                 return self._finalize_planner_task(task, self._planner_unavailable_text())
-            if replan_outcome == "done":
-                final_response = replan_response or self._planner_unavailable_text()
-                final_response = self._rewrite_final_response(final_response)
-                return self._finalize_planner_task(task, final_response)
-
-            task.inner_context = self._new_inner_context(task)
-            loop_outcome, payload = self._run_inner_react_loop(task)
-            if loop_outcome == "replan":
-                continue
-            if loop_outcome == "ask_user":
-                self._pending_plan_task = task
-                return payload or "请确认：请补充必要信息。"
-            if loop_outcome == "done_candidate":
-                task.needs_replan = True
-                continue
-            if loop_outcome == "step_limit":
-                return self._finalize_planner_task(task, self._format_step_limit_response(task))
-            return self._finalize_planner_task(task, self._planner_unavailable_text())
+        except TaskInterruptedError:
+            return self._finalize_interrupted_task(task)
 
     def _emit_decision_progress(self, task: PendingPlanTask) -> None:
         planned_total_text = self._progress_total_text(task)
@@ -396,6 +413,7 @@ class AssistantAgent:
         outer = self._outer_context(task)
         emit_progress = False
         while True:
+            self._raise_if_task_interrupted()
             if task.step_count >= self._plan_replan_max_steps:
                 return "step_limit", None
 
@@ -539,6 +557,7 @@ class AssistantAgent:
             action_tool = str(next_action.get("tool") or "").strip().lower()
             action_input = str(next_action.get("input") or "").strip()
             self._emit_progress(f"步骤动作：{action_tool} -> {action_input}")
+            self._raise_if_task_interrupted()
             task.step_count += 1
             observation = self._execute_planner_tool(action_tool=action_tool, action_input=action_input)
             self._append_observation(task, observation)
@@ -587,6 +606,7 @@ class AssistantAgent:
         max_attempts = 1 + self._plan_replan_retry_count
         phase = self._llm_trace_phase(messages)
         for attempt in range(1, max_attempts + 1):
+            self._raise_if_task_interrupted()
             call_id = self._next_llm_trace_call_id()
             self._log_llm_trace_event(
                 {
@@ -611,6 +631,7 @@ class AssistantAgent:
                     }
                 )
                 continue
+            self._raise_if_task_interrupted()
             self._log_llm_trace_event(
                 {
                     "event": "llm_response",
@@ -1009,6 +1030,13 @@ class AssistantAgent:
         self._emit_progress("任务状态：已完成。")
         return response
 
+    def _finalize_interrupted_task(self, task: PendingPlanTask) -> str:
+        if self._pending_plan_task is task:
+            self._pending_plan_task = None
+        self._emit_progress("任务状态：已中断。")
+        self._clear_interrupt_request()
+        return "当前任务已被新消息中断，正在按最新输入重新执行。"
+
     def _rewrite_final_response(self, response: str) -> str:
         rewriter = self._final_response_rewriter
         if rewriter is None:
@@ -1044,6 +1072,18 @@ class AssistantAgent:
         if callback is None:
             return
         callback(message)
+
+    def _raise_if_task_interrupted(self) -> None:
+        if self._is_interrupt_requested():
+            raise TaskInterruptedError("task interrupted by newer input")
+
+    def _is_interrupt_requested(self) -> bool:
+        with self._interrupt_lock:
+            return self._interrupt_requested
+
+    def _clear_interrupt_request(self) -> None:
+        with self._interrupt_lock:
+            self._interrupt_requested = False
 
     def _emit_plan_progress(self, task: PendingPlanTask) -> None:
         outer = self._outer_context(task)

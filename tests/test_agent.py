@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -217,6 +218,18 @@ class FakeSearchProvider:
         return self.results[:top_k]
 
 
+class _BlockingLLMClient:
+    def __init__(self, response: str) -> None:
+        self._response = response
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def reply(self, _messages: list[dict[str, str]]) -> str:
+        self.started.set()
+        self.release.wait(timeout=2.0)
+        return self._response
+
+
 class AssistantAgentTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -293,6 +306,23 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertIn("已列出所有待办事项。", response)
         self.assertTrue(task_completed)
+
+    def test_interrupt_current_task_stops_inflight_planner_loop(self) -> None:
+        blocking_llm = _BlockingLLMClient(response=_planner_planned(["查看待办"]))
+        agent = AssistantAgent(db=self.db, llm_client=blocking_llm)
+        holder: dict[str, str] = {}
+
+        def run_handle_input() -> None:
+            holder["response"] = agent.handle_input("看一下待办")
+
+        worker = threading.Thread(target=run_handle_input)
+        worker.start()
+        self.assertTrue(blocking_llm.started.wait(timeout=2.0))
+        agent.interrupt_current_task()
+        blocking_llm.release.set()
+        worker.join(timeout=2.0)
+
+        self.assertIn("已被新消息中断", holder.get("response", ""))
 
     def test_handle_input_persists_user_and_assistant_turns_for_non_slash_input(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
