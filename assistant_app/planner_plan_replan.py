@@ -7,10 +7,18 @@ from assistant_app.planner_common import normalize_plan_items
 PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
 - todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
+  - 常用动作：add/list/view/get/update/done/delete/search
+  - 关键字段：content（待办内容）、tag（标签）、priority（优先级，数值越小优先级越高）、
+    due_at/remind_at（本地时间 YYYY-MM-DD HH:MM）、view（all|today|overdue|upcoming|inbox）、
+    keyword（搜索关键词）
 - schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
-- internet_search：互联网检索网页信息并返回摘要
-- history_search：检索历史会话（用户输入与最终回答）
-- ask_user：当信息不足时向用户发起澄清（由 thought 阶段触发）
+  - 常用动作：add/list/get/view/update/repeat/delete
+  - 关键字段：title（标题）、event_time（开始时间，YYYY-MM-DD HH:MM）、duration_minutes（分钟）、
+    remind_at（提醒时间）、interval_minutes/times/remind_start_time（重复规则）、
+    view（day|week|month）与 anchor（锚点日期）
+- internet_search：互联网检索网页信息并返回摘要（query 关键词）
+- history_search：检索历史会话（keyword 关键词，可带 limit 限制条数）
+- ask_user：当信息不足时向用户发起澄清（question 文本，由 thought 阶段触发）
 """.strip()
 
 PLAN_INTENT_EXPANSION_RULE = (
