@@ -131,8 +131,8 @@ Optional runtime flags (all supported in `.env`):
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Thought uses chat tool-calling with tools: `todo|schedule|internet_search|history_search|ask_user|done`.
-- `todo/schedule/history_search` tool calls must pass structured arguments; do not pass `/todo` or `/schedule` command strings.
-- Time unit contract is enforced in thought context to reduce unit mistakes.
+- Thought 的所有 tool calls 都必须传结构化参数；禁止传 `/todo`、`/schedule` 等命令字符串。
+- 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
 - `ask_user` sends a single clarification question prefixed with `请确认：...`.
 - `TASK_CANCEL_COMMAND` phrase interrupts current task loop.
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).

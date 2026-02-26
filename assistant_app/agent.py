@@ -977,8 +977,6 @@ class AssistantAgent:
             "completed_subtasks": completed_subtasks,
             "current_subtask_observations": current_subtask_observations,
             "user_profile": self._serialize_user_profile(),
-            "tool_contract": PLAN_TOOL_CONTRACT,
-            "time_unit_contract": PLAN_TIME_UNIT_CONTRACT,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
 
