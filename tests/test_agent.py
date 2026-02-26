@@ -2451,6 +2451,28 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertFalse(history_observation.ok)
         self.assertIn("未找到包含", history_observation.result)
 
+    def test_schedule_tool_update_with_null_tag_clears_to_default(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        schedule_id = self.db.add_schedule("项目同步", "2026-03-01 10:00", tag="work")
+
+        observation = agent._execute_schedule_system_action(
+            payload={
+                "action": "update",
+                "id": schedule_id,
+                "event_time": "2026-03-01 11:00",
+                "title": "项目同步",
+                "tag": None,
+            },
+            raw_input='{"action":"update","id":1,"event_time":"2026-03-01 11:00","title":"项目同步","tag":null}',
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("[标签:default]", observation.result)
+        updated = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated.tag, "default")
+
     def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[

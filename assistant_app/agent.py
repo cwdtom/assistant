@@ -1908,8 +1908,8 @@ class AssistantAgent:
                 "event_time": event_time,
                 "duration_minutes": applied_duration_minutes,
             }
-            if "tag" in payload and update_tag is not None:
-                schedule_update_kwargs["tag"] = update_tag
+            if "tag" in payload:
+                schedule_update_kwargs["tag"] = update_tag or "default"
             if has_remind:
                 schedule_update_kwargs["remind_at"] = parsed_remind_at
             if has_repeat_remind_start_time:
