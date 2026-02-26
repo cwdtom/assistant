@@ -51,7 +51,11 @@ class AppConfig:
 
 
 def load_env_file(env_path: str = ".env") -> None:
-    """Minimal .env loader to avoid extra dependency for MVP."""
+    """Minimal .env loader to avoid extra dependency for MVP.
+
+    `.env` values intentionally override existing process env values so local
+    project configuration is always deterministic when the file is present.
+    """
     path = Path(env_path)
     if not path.exists() or not path.is_file():
         return
@@ -63,7 +67,7 @@ def load_env_file(env_path: str = ".env") -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key:
             os.environ[key] = value
 
 

@@ -68,6 +68,7 @@ Supported input forms in CLI:
 Default model:
 - `DEEPSEEK_MODEL=deepseek-chat` (general)
 - 当前 thought tool-calling 链路不支持 `deepseek-reasoner` / thinking 模式；检测到 reasoning 输出会直接报错
+- 配置读取优先级：若系统环境变量与 `.env` 同名，最终以 `.env` 中的值为准
 
 Optional runtime flags (all supported in `.env`):
 - `LLM_TEMPERATURE`: temperature for all LLM calls (default `0.3`, range `0.0~2.0`)

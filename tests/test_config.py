@@ -268,14 +268,33 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_ack_emoji_type, "")
         self.assertEqual(config.feishu_done_emoji_type, "")
 
-    def test_load_env_file_sets_only_missing_keys(self) -> None:
+    def test_load_env_file_prefers_dotenv_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
             env_path.write_text("DEEPSEEK_API_KEY=file-key\nDEEPSEEK_MODEL=deepseek-chat\n", encoding="utf-8")
             with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "existing-key"}, clear=True):
                 load_env_file(str(env_path))
-                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "existing-key")
+                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "file-key")
                 self.assertEqual(os.environ["DEEPSEEK_MODEL"], "deepseek-chat")
+
+    def test_load_config_prefers_dotenv_over_process_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text("FEISHU_APP_ID=file-id\nFEISHU_APP_SECRET=file-secret\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"FEISHU_APP_ID": "existing-id", "FEISHU_APP_SECRET": "existing-secret"},
+                clear=True,
+            ):
+                original_cwd = Path.cwd()
+                os.chdir(tmp)
+                try:
+                    config = load_config(load_dotenv=True)
+                finally:
+                    os.chdir(original_cwd)
+
+        self.assertEqual(config.feishu_app_id, "file-id")
+        self.assertEqual(config.feishu_app_secret, "file-secret")
 
 
 if __name__ == "__main__":

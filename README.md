@@ -78,6 +78,7 @@ python main.py
 - 如需跳过自动拉取，可临时执行：`ASSISTANT_AUTO_PULL=false ./scripts/assistant.sh start`
 
 ## Core Environment Variables
+- `.env` 加载优先级最高：若系统环境与 `.env` 同名，最终以 `.env` 值为准
 - `DEEPSEEK_API_KEY`：必填
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
