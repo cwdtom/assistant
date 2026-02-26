@@ -24,6 +24,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.api_key, "deep-key")
         self.assertEqual(config.base_url, "https://api.deepseek.com")
         self.assertEqual(config.model, "deepseek-chat")
+        self.assertEqual(config.llm_temperature, 0.3)
         self.assertEqual(config.db_path, "custom.db")
         self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.plan_replan_max_steps, 20)
@@ -72,6 +73,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.api_key, "legacy-key")
         self.assertEqual(config.base_url, "https://legacy.example.com/v1")
         self.assertEqual(config.model, "legacy-model")
+        self.assertEqual(config.llm_temperature, 0.3)
         self.assertEqual(config.db_path, "assistant.db")
         self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
@@ -96,6 +98,7 @@ class ConfigTest(unittest.TestCase):
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
             "USER_PROFILE_PATH": "profiles/me.md",
+            "LLM_TEMPERATURE": "1.2",
             "PLAN_REPLAN_MAX_STEPS": "40",
             "PLAN_REPLAN_RETRY_COUNT": "4",
             "PLAN_OBSERVATION_CHAR_LIMIT": "12000",
@@ -137,6 +140,7 @@ class ConfigTest(unittest.TestCase):
             config = load_config(load_dotenv=False)
 
         self.assertEqual(config.plan_replan_max_steps, 40)
+        self.assertEqual(config.llm_temperature, 1.2)
         self.assertEqual(config.plan_replan_retry_count, 4)
         self.assertEqual(config.plan_observation_char_limit, 12000)
         self.assertEqual(config.plan_observation_history_limit, 80)
@@ -178,6 +182,7 @@ class ConfigTest(unittest.TestCase):
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
             "USER_PROFILE_PATH": "   ",
+            "LLM_TEMPERATURE": "3.5",
             "PLAN_REPLAN_MAX_STEPS": "0",
             "PLAN_REPLAN_RETRY_COUNT": "-3",
             "PLAN_OBSERVATION_CHAR_LIMIT": "bad",
@@ -218,6 +223,7 @@ class ConfigTest(unittest.TestCase):
             config = load_config(load_dotenv=False)
 
         self.assertEqual(config.plan_replan_max_steps, 20)
+        self.assertEqual(config.llm_temperature, 0.3)
         self.assertEqual(config.plan_replan_retry_count, 2)
         self.assertEqual(config.plan_observation_char_limit, 10000)
         self.assertEqual(config.plan_observation_history_limit, 100)

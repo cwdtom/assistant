@@ -10,6 +10,7 @@ class AppConfig:
     api_key: str | None
     base_url: str
     model: str
+    llm_temperature: float
     db_path: str
     user_profile_path: str
     llm_trace_log_path: str
@@ -82,6 +83,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         api_key=api_key,
         base_url=base_url,
         model=model,
+        llm_temperature=_read_env_float("LLM_TEMPERATURE", default=0.3, min_value=0.0, max_value=2.0),
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
         user_profile_path=_read_env_text("USER_PROFILE_PATH", default=""),
         llm_trace_log_path=_read_env_text("LLM_TRACE_LOG_PATH", default="logs/llm_trace.log"),
@@ -136,6 +138,19 @@ def _read_env_int(name: str, *, default: int, min_value: int) -> int:
     except ValueError:
         return default
     if value < min_value:
+        return default
+    return value
+
+
+def _read_env_float(name: str, *, default: float, min_value: float, max_value: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return default
+    if value < min_value or value > max_value:
         return default
     return value
 

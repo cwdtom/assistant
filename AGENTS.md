@@ -70,6 +70,7 @@ Default model:
 - optional `deepseek-reasoner` (stronger reasoning, usually slower)
 
 Optional runtime flags (all supported in `.env`):
+- `LLM_TEMPERATURE`: temperature for all LLM calls (default `0.3`, range `0.0~2.0`)
 - `PLAN_REPLAN_MAX_STEPS`: max plan-loop steps (default `20`)
 - `PLAN_REPLAN_RETRY_COUNT`: planner JSON retry count (default `2`)
 - `PLAN_OBSERVATION_CHAR_LIMIT`: max chars per observation (default `10000`)

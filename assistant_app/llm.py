@@ -27,15 +27,16 @@ class OpenAICompatibleClient:
     api_key: str
     base_url: str
     model: str
+    temperature: float = 0.3
     timeout: float = 30.0
 
     def reply(self, messages: list[dict[str, str]]) -> str:
-        return self._create_reply(messages=messages, temperature=0.3)
+        return self._create_reply(messages=messages, temperature=self.temperature)
 
     def reply_json(self, messages: list[dict[str, str]]) -> str:
         return self._create_reply(
             messages=messages,
-            temperature=0.0,
+            temperature=self.temperature,
             response_format={"type": "json_object"},
         )
 

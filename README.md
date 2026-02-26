@@ -37,6 +37,7 @@ python main.py
 - `DEEPSEEK_API_KEY`：必填
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
+- `LLM_TEMPERATURE`：所有 LLM 调用温度（默认 `0.3`，范围 `0.0~2.0`）
 - `ASSISTANT_DB_PATH`：SQLite 路径（默认 `assistant.db`）
 - `SEARCH_PROVIDER`：搜索 provider（`bocha|bing`）
 - `BOCHA_API_KEY`：当 provider 为 `bocha` 时推荐配置

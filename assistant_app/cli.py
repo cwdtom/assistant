@@ -130,6 +130,7 @@ def main() -> None:
             api_key=config.api_key,
             base_url=config.base_url,
             model=config.model,
+            temperature=config.llm_temperature,
         )
     persona_rewriter = PersonaRewriter(
         llm_client=llm_client,
