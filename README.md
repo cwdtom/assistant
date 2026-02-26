@@ -15,6 +15,26 @@
 - DeepSeek/OpenAI-compatible API Key（通过 `.env` 配置）
 
 ## Quick Start
+推荐先执行一键初始化脚本：
+```bash
+./scripts/bootstrap.sh
+# 开发场景可安装 dev 依赖
+./scripts/bootstrap.sh --dev
+```
+
+它会自动完成：
+- 创建 `.venv`（若不存在）
+- 安装依赖（默认 `pip install -e .`）
+- 初始化 `.env`（若不存在则由 `.env.example` 复制）
+- 初始化 SQLite 表结构
+
+也支持按需跳过：
+```bash
+./scripts/bootstrap.sh --skip-install
+./scripts/bootstrap.sh --skip-db
+./scripts/bootstrap.sh --force-env
+```
+
 1. 创建虚拟环境并安装依赖
 ```bash
 python3 -m venv .venv

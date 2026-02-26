@@ -167,6 +167,10 @@ sqlite3 /path/to/assistant.db < sql/init_assistant_db.sql
 
 ## Supplement: Dev Commands (moved from README)
 ```bash
+# one-command bootstrap
+./scripts/bootstrap.sh
+./scripts/bootstrap.sh --dev
+
 # unit tests
 python -m unittest discover -s tests -p "test_*.py"
 
