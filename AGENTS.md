@@ -92,6 +92,8 @@ Optional runtime flags (all supported in `.env`):
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text
 - `USER_PROFILE_PATH`: user profile markdown path injected into plan/replan context
+- `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
+- `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
 - `LLM_TRACE_LOG_PATH`: LLM trace log path (default `logs/llm_trace.log`, empty to disable)
 - `FEISHU_ENABLED`: enable Feishu long connection (default `false`)
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`: Feishu app credentials
@@ -136,6 +138,7 @@ Optional runtime flags (all supported in `.env`):
 - Local reminder output can also be persona-rewritten (fallback on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
+- Runtime logs use JSON Lines format (`app.log` / `llm_trace.log` / `feishu.log`) to support machine filtering.
 
 ## Supplement: View Semantics (moved from README)
 - `all`: all todos (including done)

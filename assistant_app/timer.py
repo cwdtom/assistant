@@ -17,6 +17,10 @@ class TimerEngine:
         self._reminder_service = reminder_service
         self._poll_interval_seconds = max(poll_interval_seconds, 1)
         self._logger = logger or logging.getLogger("assistant_app.timer")
+        if logger is None:
+            self._logger.propagate = False
+            if not self._logger.handlers:
+                self._logger.addHandler(logging.NullHandler())
         self._stop_event = threading.Event()
         self._state_lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -51,7 +55,13 @@ class TimerEngine:
             if self._thread is not thread:
                 return
             if thread.is_alive():
-                self._logger.warning("timer thread did not stop within %.2f seconds", join_timeout)
+                self._logger.warning(
+                    "timer thread stop timeout",
+                    extra={
+                        "event": "timer_stop_timeout",
+                        "context": {"join_timeout_seconds": join_timeout},
+                    },
+                )
                 return
             self._thread = None
 
@@ -59,11 +69,16 @@ class TimerEngine:
         stats = self._reminder_service.poll_once()
         if stats.candidate_count > 0:
             self._logger.info(
-                "timer tick candidates=%d delivered=%d skipped=%d failed=%d",
-                stats.candidate_count,
-                stats.delivered_count,
-                stats.skipped_count,
-                stats.failed_count,
+                "timer tick completed",
+                extra={
+                    "event": "timer_tick",
+                    "context": {
+                        "candidates": stats.candidate_count,
+                        "delivered": stats.delivered_count,
+                        "skipped": stats.skipped_count,
+                        "failed": stats.failed_count,
+                    },
+                },
             )
 
     def _run_loop(self) -> None:
@@ -73,7 +88,10 @@ class TimerEngine:
                 try:
                     self.tick_once()
                 except Exception:  # noqa: BLE001
-                    self._logger.exception("timer loop tick failed")
+                    self._logger.exception(
+                        "timer loop tick failed",
+                        extra={"event": "timer_tick_failed"},
+                    )
                 self._stop_event.wait(self._poll_interval_seconds)
         finally:
             with self._state_lock:

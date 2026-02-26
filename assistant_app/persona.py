@@ -89,14 +89,14 @@ class PersonaRewriter:
             return
         try:
             logger.warning(
-                json.dumps(
-                    {
-                        "event": "persona_rewrite_error",
+                "persona rewrite failed",
+                extra={
+                    "event": "persona_rewrite_error",
+                    "context": {
                         "scene": scene,
                         "error": repr(error),
                     },
-                    ensure_ascii=False,
-                )
+                },
             )
         except Exception:
             return

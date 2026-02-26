@@ -37,6 +37,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.cli_progress_color, "gray")
         self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
+        self.assertEqual(config.app_log_path, "logs/app.log")
+        self.assertEqual(config.app_log_retention_days, 7)
         self.assertTrue(config.timer_enabled)
         self.assertEqual(config.timer_poll_interval_seconds, 15)
         self.assertEqual(config.timer_lookahead_seconds, 30)
@@ -73,6 +75,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.db_path, "assistant.db")
         self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
+        self.assertEqual(config.app_log_path, "logs/app.log")
+        self.assertEqual(config.app_log_retention_days, 7)
         self.assertEqual(config.plan_replan_retry_count, 2)
         self.assertEqual(config.plan_observation_char_limit, 10000)
         self.assertEqual(config.plan_observation_history_limit, 100)
@@ -106,6 +110,8 @@ class ConfigTest(unittest.TestCase):
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "14",
             "CLI_PROGRESS_COLOR": "off",
             "LLM_TRACE_LOG_PATH": "logs/custom_llm_trace.log",
+            "APP_LOG_PATH": "logs/custom_app.log",
+            "APP_LOG_RETENTION_DAYS": "9",
             "TIMER_ENABLED": "off",
             "TIMER_POLL_INTERVAL_SECONDS": "20",
             "TIMER_LOOKAHEAD_SECONDS": "45",
@@ -145,6 +151,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 14)
         self.assertEqual(config.cli_progress_color, "off")
         self.assertEqual(config.llm_trace_log_path, "logs/custom_llm_trace.log")
+        self.assertEqual(config.app_log_path, "logs/custom_app.log")
+        self.assertEqual(config.app_log_retention_days, 9)
         self.assertFalse(config.timer_enabled)
         self.assertEqual(config.timer_poll_interval_seconds, 20)
         self.assertEqual(config.timer_lookahead_seconds, 45)
@@ -184,6 +192,8 @@ class ConfigTest(unittest.TestCase):
             "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "abc",
             "CLI_PROGRESS_COLOR": "  ",
             "LLM_TRACE_LOG_PATH": "   ",
+            "APP_LOG_PATH": "   ",
+            "APP_LOG_RETENTION_DAYS": "0",
             "TIMER_ENABLED": "invalid",
             "TIMER_POLL_INTERVAL_SECONDS": "0",
             "TIMER_LOOKAHEAD_SECONDS": "-1",
@@ -222,6 +232,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.cli_progress_color, "gray")
         self.assertEqual(config.llm_trace_log_path, "")
+        self.assertEqual(config.app_log_path, "")
+        self.assertEqual(config.app_log_retention_days, 7)
         self.assertTrue(config.timer_enabled)
         self.assertEqual(config.timer_poll_interval_seconds, 15)
         self.assertEqual(config.timer_lookahead_seconds, 30)

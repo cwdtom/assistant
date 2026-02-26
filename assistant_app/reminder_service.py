@@ -38,6 +38,10 @@ class ReminderService:
         self._catchup_seconds = 0 if catchup_seconds >= 0 else 0
         self._batch_limit = max(batch_limit, 1)
         self._logger = logger or logging.getLogger("assistant_app.timer")
+        if logger is None:
+            self._logger.propagate = False
+            if not self._logger.handlers:
+                self._logger.addHandler(logging.NullHandler())
         self._content_rewriter = content_rewriter
 
     def poll_once(self) -> ReminderPollStats:
@@ -67,7 +71,16 @@ class ReminderService:
                     skipped_count += 1
             except Exception as exc:  # noqa: BLE001
                 failed_count += 1
-                self._logger.warning("timer delivery failed: %s (%s)", event.reminder_key, exc)
+                self._logger.warning(
+                    "timer delivery failed",
+                    extra={
+                        "event": "reminder_delivery_failed",
+                        "context": {
+                            "reminder_key": event.reminder_key,
+                            "error": repr(exc),
+                        },
+                    },
+                )
 
         return ReminderPollStats(
             candidate_count=len(candidates),
@@ -83,7 +96,16 @@ class ReminderService:
         try:
             rewritten = rewriter(event.content)
         except Exception as exc:  # noqa: BLE001
-            self._logger.warning("timer content rewrite failed: %s (%s)", event.reminder_key, exc)
+            self._logger.warning(
+                "timer content rewrite failed",
+                extra={
+                    "event": "reminder_rewrite_failed",
+                    "context": {
+                        "reminder_key": event.reminder_key,
+                        "error": repr(exc),
+                    },
+                },
+            )
             return event
         normalized = rewritten.strip()
         if not normalized:

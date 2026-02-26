@@ -8,6 +8,7 @@ from pathlib import Path
 
 from assistant_app.cli import (
     CLEAR_TERMINAL_SEQUENCE,
+    _configure_app_logger,
     _clear_terminal_history,
     _configure_feishu_logger,
     _configure_llm_trace_logger,
@@ -16,6 +17,7 @@ from assistant_app.cli import (
     _resolve_progress_color,
     _should_show_waiting,
 )
+from assistant_app.logging_setup import JsonLinesFormatter
 from assistant_app.reminder_sink import ReminderEvent, StdoutReminderSink
 
 
@@ -95,6 +97,7 @@ class CLIFeedbackTest(unittest.TestCase):
                 _configure_llm_trace_logger(path)
                 file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
                 self.assertEqual(len(file_handlers), 1)
+                self.assertIsInstance(file_handlers[0].formatter, JsonLinesFormatter)
         finally:
             for handler in list(logger.handlers):
                 logger.removeHandler(handler)
@@ -137,6 +140,50 @@ class CLIFeedbackTest(unittest.TestCase):
                 _configure_feishu_logger(path, retention_days=7)
                 file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
                 self.assertEqual(len(file_handlers), 1)
+                self.assertIsInstance(file_handlers[0].formatter, JsonLinesFormatter)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_configure_app_logger_deduplicates_file_handler(self) -> None:
+        logger = logging.getLogger("assistant_app.app")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            with tempfile.TemporaryDirectory() as tmp:
+                path = str(Path(tmp) / "app.log")
+                _configure_app_logger(path, retention_days=7)
+                _configure_app_logger(path, retention_days=7)
+                file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
+                self.assertEqual(len(file_handlers), 1)
+                self.assertIsInstance(file_handlers[0].formatter, JsonLinesFormatter)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_configure_app_logger_empty_path_disables_output(self) -> None:
+        logger = logging.getLogger("assistant_app.app")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            _configure_app_logger("   ", retention_days=7)
+            self.assertFalse(logger.propagate)
+            self.assertEqual(len(logger.handlers), 1)
+            self.assertIsInstance(logger.handlers[0], logging.NullHandler)
         finally:
             for handler in list(logger.handlers):
                 logger.removeHandler(handler)

@@ -169,6 +169,7 @@ class AssistantAgent:
         llm_client: LLMClient | None = None,
         search_provider: SearchProvider | None = None,
         llm_trace_logger: logging.Logger | None = None,
+        app_logger: logging.Logger | None = None,
         progress_callback: Callable[[str], None] | None = None,
         plan_replan_max_steps: int = DEFAULT_PLAN_REPLAN_MAX_STEPS,
         plan_replan_retry_count: int = DEFAULT_PLAN_REPLAN_RETRY_COUNT,
@@ -190,6 +191,10 @@ class AssistantAgent:
         self._llm_trace_logger.propagate = False
         if not self._llm_trace_logger.handlers:
             self._llm_trace_logger.addHandler(logging.NullHandler())
+        self._app_logger = app_logger or logging.getLogger("assistant_app.app")
+        self._app_logger.propagate = False
+        if not self._app_logger.handlers:
+            self._app_logger.addHandler(logging.NullHandler())
         self._llm_trace_call_seq = 0
         self._pending_plan_task: PendingPlanTask | None = None
         self._progress_callback = progress_callback
@@ -287,7 +292,11 @@ class AssistantAgent:
         try:
             self.db.save_turn(user_content=user_text, assistant_content=assistant_text)
         except Exception:
-            logging.getLogger(__name__).warning("保存 chat_history 失败", exc_info=True)
+            self._app_logger.warning(
+                "failed to save chat history",
+                extra={"event": "chat_history_save_failed"},
+                exc_info=True,
+            )
 
     def _run_outer_plan_loop(self, task: PendingPlanTask) -> str:
         try:
@@ -782,14 +791,26 @@ class AssistantAgent:
         if not raw_path:
             return "", None
         resolved_path = self._resolve_user_profile_path(raw_path)
-        logger = logging.getLogger(__name__)
         try:
             content = resolved_path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
-            logger.warning("用户画像文件不存在，已忽略: %s", resolved_path)
+            self._app_logger.warning(
+                "user profile file not found",
+                extra={
+                    "event": "user_profile_not_found",
+                    "context": {"path": str(resolved_path)},
+                },
+            )
             return str(resolved_path), None
         except (OSError, UnicodeError):
-            logger.warning("读取用户画像文件失败，已忽略: %s", resolved_path, exc_info=True)
+            self._app_logger.warning(
+                "failed to read user profile file",
+                extra={
+                    "event": "user_profile_read_failed",
+                    "context": {"path": str(resolved_path)},
+                },
+                exc_info=True,
+            )
             return str(resolved_path), None
         if not content:
             return str(resolved_path), None

@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Callable
-from logging.handlers import TimedRotatingFileHandler
-from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
@@ -12,6 +10,11 @@ from assistant_app.config import load_config
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import create_feishu_runner
 from assistant_app.llm import OpenAICompatibleClient
+from assistant_app.logging_setup import (
+    configure_app_logger,
+    configure_feishu_logger,
+    configure_llm_trace_logger,
+)
 from assistant_app.persona import PersonaRewriter
 from assistant_app.reminder_service import ReminderService
 from assistant_app.reminder_sink import StdoutReminderSink
@@ -98,77 +101,21 @@ def _resolve_progress_color(color: str) -> tuple[str, str]:
 
 
 def _configure_llm_trace_logger(log_path: str) -> None:
-    logger = logging.getLogger("assistant_app.llm_trace")
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    path = log_path.strip()
-    if not path:
-        for handler in list(logger.handlers):
-            logger.removeHandler(handler)
-            close = getattr(handler, "close", None)
-            if callable(close):
-                close()
-        logger.addHandler(logging.NullHandler())
-        return
-
-    abs_path = str(Path(path).expanduser().resolve())
-    for handler in list(logger.handlers):
-        if isinstance(handler, logging.NullHandler):
-            logger.removeHandler(handler)
-            continue
-        existing_path = getattr(handler, "baseFilename", None)
-        if not existing_path:
-            continue
-        if str(Path(existing_path).resolve()) == abs_path:
-            return
-    Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(abs_path, encoding="utf-8")
-    file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    logger.addHandler(file_handler)
+    configure_llm_trace_logger(log_path)
 
 
 def _configure_feishu_logger(log_path: str, retention_days: int) -> logging.Logger:
-    logger = logging.getLogger("assistant_app.feishu")
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    path = log_path.strip()
+    return configure_feishu_logger(log_path, retention_days)
 
-    if not path:
-        for handler in list(logger.handlers):
-            logger.removeHandler(handler)
-            close = getattr(handler, "close", None)
-            if callable(close):
-                close()
-        logger.addHandler(logging.NullHandler())
-        return logger
 
-    abs_path = str(Path(path).expanduser().resolve())
-    for handler in list(logger.handlers):
-        if isinstance(handler, logging.NullHandler):
-            logger.removeHandler(handler)
-            continue
-        existing_path = getattr(handler, "baseFilename", None)
-        if not existing_path:
-            continue
-        if str(Path(existing_path).resolve()) == abs_path:
-            return logger
-
-    Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
-    file_handler = TimedRotatingFileHandler(
-        abs_path,
-        when="D",
-        interval=1,
-        backupCount=max(retention_days, 1),
-        encoding="utf-8",
-    )
-    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logger.addHandler(file_handler)
-    return logger
+def _configure_app_logger(log_path: str, retention_days: int) -> logging.Logger:
+    return configure_app_logger(log_path, retention_days)
 
 
 def main() -> None:
     config = load_config()
     _configure_llm_trace_logger(config.llm_trace_log_path)
+    app_logger = _configure_app_logger(config.app_log_path, config.app_log_retention_days)
     db = AssistantDB(config.db_path)
     progress_color_prefix, progress_color_suffix = _resolve_progress_color(config.cli_progress_color)
     search_provider = create_search_provider(
@@ -188,13 +135,14 @@ def main() -> None:
         llm_client=llm_client,
         persona=config.assistant_persona,
         enabled=config.persona_rewrite_enabled,
-        logger=logging.getLogger("assistant_app.llm_trace"),
+        logger=app_logger,
     )
 
     agent = AssistantAgent(
         db=db,
         llm_client=llm_client,
         search_provider=search_provider,
+        app_logger=app_logger,
         user_profile_path=config.user_profile_path,
         plan_replan_max_steps=config.plan_replan_max_steps,
         plan_replan_retry_count=config.plan_replan_retry_count,
@@ -217,11 +165,13 @@ def main() -> None:
             lookahead_seconds=config.timer_lookahead_seconds,
             catchup_seconds=config.timer_catchup_seconds,
             batch_limit=config.timer_batch_limit,
+            logger=app_logger,
             content_rewriter=persona_rewriter.rewrite_reminder_content,
         )
         timer_engine = TimerEngine(
             reminder_service=reminder_service,
             poll_interval_seconds=config.timer_poll_interval_seconds,
+            logger=app_logger,
         )
         timer_engine.start()
 
