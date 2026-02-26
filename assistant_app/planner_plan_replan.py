@@ -37,11 +37,13 @@ PLAN_ONCE_PROMPT = f"""
 输出 JSON 格式：
 {{
   "status": "planned",
+  "goal": "扩展后的目标描述",
   "plan": ["步骤1", "步骤2"]
 }}
 
 规则：
 - 只输出 planned，不要输出 done
+- goal 必须是对用户原始 goal 的扩展版本，语义不变但信息更完整、可执行
 - plan 至少包含 1 项，且应按执行顺序排列
 - {PLAN_INTENT_EXPANSION_RULE}
 - {PLANNER_HISTORY_RULE}
@@ -82,11 +84,12 @@ REPLAN_PROMPT = f"""
 
 def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()
+    goal = str(payload.get("goal") or "").strip()
     plan_items = normalize_plan_items(payload)
     if status == "planned":
-        if not plan_items:
+        if not goal or not plan_items:
             return None
-        return {"status": "planned", "plan": plan_items}
+        return {"status": "planned", "goal": goal, "plan": plan_items}
     return None
 
 

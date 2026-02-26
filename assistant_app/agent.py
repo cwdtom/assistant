@@ -405,6 +405,10 @@ class AssistantAgent:
         plan_decision = plan_payload.get("decision")
         if not isinstance(plan_decision, dict):
             return False
+        expanded_goal = str(plan_decision.get("goal") or "").strip()
+        if expanded_goal:
+            outer.goal = expanded_goal
+            task.goal = expanded_goal
         self._append_planner_decision_observation(task, phase="plan", decision=plan_decision)
         outer.latest_plan = [
             PlanStep(item=plan_item, completed=False)
@@ -657,13 +661,13 @@ class AssistantAgent:
         if payload is None:
             return None
         decision = payload.get("decision")
-        user_payload = _try_parse_json(planner_messages[-1].get("content", ""))
-        if isinstance(decision, dict) and isinstance(user_payload, dict):
+        raw_response = payload.get("raw_response")
+        raw_user_message = planner_messages[-1].get("content")
+        if isinstance(decision, dict) and isinstance(raw_user_message, str) and isinstance(raw_response, str):
             self._append_outer_message_turn(
                 task=task,
-                user_payload=user_payload,
-                assistant_phase="plan_decision",
-                decision=decision,
+                user_message_content=raw_user_message,
+                assistant_response=raw_response,
             )
         return payload
 
@@ -698,13 +702,13 @@ class AssistantAgent:
         if payload is None:
             return None
         decision = payload.get("decision")
-        user_payload = _try_parse_json(planner_messages[-1].get("content", ""))
-        if isinstance(decision, dict) and isinstance(user_payload, dict):
+        raw_response = payload.get("raw_response")
+        raw_user_message = planner_messages[-1].get("content")
+        if isinstance(decision, dict) and isinstance(raw_user_message, str) and isinstance(raw_response, str):
             self._append_outer_message_turn(
                 task=task,
-                user_payload=user_payload,
-                assistant_phase="replan_decision",
-                decision=decision,
+                user_message_content=raw_user_message,
+                assistant_response=raw_response,
             )
         return payload
 
@@ -757,7 +761,7 @@ class AssistantAgent:
 
             decision = normalizer(payload)
             if decision is not None:
-                return {"decision": decision}
+                return {"decision": decision, "raw_response": raw}
         return None
 
     def _request_thought_payload_with_retry(self, messages: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -926,14 +930,12 @@ class AssistantAgent:
         self,
         *,
         task: PendingPlanTask,
-        user_payload: dict[str, Any],
-        assistant_phase: str,
-        decision: dict[str, Any],
+        user_message_content: str,
+        assistant_response: str,
     ) -> None:
         outer_messages = self._ensure_outer_messages(task)
-        outer_messages.append({"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)})
-        assistant_payload = {"phase": assistant_phase, "decision": decision}
-        outer_messages.append({"role": "assistant", "content": json.dumps(assistant_payload, ensure_ascii=False)})
+        outer_messages.append({"role": "user", "content": user_message_content})
+        outer_messages.append({"role": "assistant", "content": assistant_response})
 
     def _build_planner_context(self, task: PendingPlanTask) -> dict[str, Any]:
         outer = self._outer_context(task)

@@ -45,9 +45,14 @@ def _thought_ask_user(question: str, current_step: str = "待澄清") -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _planner_planned(plan: list[str] | None = None) -> str:
+def _planner_planned(
+    plan: list[str] | None = None,
+    *,
+    goal: str = "扩展后的目标",
+) -> str:
     payload = {
         "status": "planned",
+        "goal": goal,
         "plan": plan or ["执行下一步"],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1543,9 +1548,10 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("recent_chat_turns", planner_user_payload)
 
     def test_replan_prompt_excludes_tool_context_and_uses_completed_subtasks(self) -> None:
+        expanded_goal = "查询默认城市天气并给出明日出行建议"
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["步骤一", "步骤二"]),
+                _planner_planned(["步骤一", "步骤二"], goal=expanded_goal),
                 _planner_done("步骤一已完成。"),
                 _planner_done("最终完成。"),
             ]
@@ -1563,6 +1569,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("time_unit_contract", replan_payload)
         self.assertNotIn("pending_final_response", replan_payload)
         self.assertNotIn("recent_chat_turns", replan_payload)
+        self.assertEqual(replan_payload.get("goal"), expanded_goal)
         latest_plan = replan_payload.get("latest_plan", [])
         self.assertEqual(
             latest_plan,
@@ -1632,6 +1639,11 @@ class AssistantAgentTest(unittest.TestCase):
 
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
         self.assertEqual(len(replan_calls), 2)
+        second_replan_history_messages = _extract_history_messages(replan_calls[-1])
+        self.assertIn(
+            {"role": "assistant", "content": _planner_replanned(["步骤二"])},
+            second_replan_history_messages,
+        )
         last_replan_payload = _extract_payload_from_messages(replan_calls[-1])
         completed = last_replan_payload.get("completed_subtasks", [])
         self.assertEqual(len(completed), 2)
@@ -1701,10 +1713,7 @@ class AssistantAgentTest(unittest.TestCase):
             thought_history_messages[-1],
             {
                 "role": "assistant",
-                "content": json.dumps(
-                    {"phase": "plan_decision", "decision": {"status": "planned", "plan": ["步骤一"]}},
-                    ensure_ascii=False,
-                ),
+                "content": _planner_planned(["步骤一"]),
             },
         )
         self.assertEqual(replan_history_messages, thought_history_messages)

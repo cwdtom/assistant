@@ -129,8 +129,10 @@ Optional runtime flags (all supported in `.env`):
 - Todo/schedule query outputs use table-style formatting in CLI.
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
+- Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
 - Thought uses chat tool-calling with tools: `todo|schedule|internet_search|history_search|ask_user|done`.
 - Thought 的所有 tool calls 都必须传结构化参数；禁止传 `/todo`、`/schedule` 等命令字符串。
+- Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
 - `ask_user` sends a single clarification question prefixed with `请确认：...`.
 - `TASK_CANCEL_COMMAND` phrase interrupts current task loop.
