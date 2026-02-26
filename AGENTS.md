@@ -92,7 +92,7 @@ Optional runtime flags (all supported in `.env`):
 - `CLI_PROGRESS_COLOR`: progress output color (`gray|off`, default `gray`)
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text
-- `USER_PROFILE_PATH`: user profile markdown path injected into plan/replan context
+- `USER_PROFILE_PATH`: user profile markdown file path (loaded content is injected into plan/replan context)
 - `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
 - `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
 - `LLM_TRACE_LOG_PATH`: LLM trace log path (default `logs/llm_trace.log`, empty to disable)

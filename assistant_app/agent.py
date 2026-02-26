@@ -865,13 +865,10 @@ class AssistantAgent:
             for item in latest_plan
         ]
 
-    def _serialize_user_profile(self) -> dict[str, str] | None:
+    def _serialize_user_profile(self) -> str | None:
         if not self._user_profile_content:
             return None
-        return {
-            "path": self._user_profile_path,
-            "content": self._user_profile_content,
-        }
+        return self._user_profile_content
 
     def _load_user_profile(self, user_profile_path: str) -> tuple[str, str | None]:
         raw_path = user_profile_path.strip()

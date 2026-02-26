@@ -1597,10 +1597,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(len(replan_calls), 1)
         self.assertTrue(thought_calls)
 
-        expected_profile = {
-            "path": str(profile_file.resolve()),
-            "content": "昵称: 凛\n偏好: 先结论后细节",
-        }
+        expected_profile = "昵称: 凛\n偏好: 先结论后细节"
         plan_payload = json.loads(plan_calls[0][-1]["content"])
         replan_payload = json.loads(replan_calls[0][-1]["content"])
         first_thought_payload = json.loads(thought_calls[0][-1]["content"])
