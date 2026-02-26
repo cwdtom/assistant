@@ -41,6 +41,56 @@ class OpenAICompatibleClientTest(unittest.TestCase):
             response_format={"type": "json_object"},
         )
 
+    def test_reply_with_tools_rejects_reasoner_model(self) -> None:
+        client = OpenAICompatibleClient(
+            api_key="test-key",
+            base_url="https://api.example.com",
+            model="deepseek-reasoner",
+            temperature=0.3,
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            client.reply_with_tools(
+                messages=[{"role": "user", "content": "你好"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "todo",
+                            "description": "执行 todo",
+                            "parameters": {"type": "object", "properties": {}, "required": []},
+                        },
+                    }
+                ],
+            )
+
+        self.assertIn("thought 阶段暂不支持 thinking 模式", str(ctx.exception))
+
+    def test_build_tool_reply_payload_normalizes_tool_calls(self) -> None:
+        payload = OpenAICompatibleClient._build_tool_reply_payload(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "todo", "arguments": "{\"command\":\"/todo list\"}"},
+                    }
+                ],
+                "reasoning_content": None,
+            }
+        )
+
+        self.assertIsInstance(payload.get("assistant_message"), dict)
+        assistant_message = payload["assistant_message"]
+        self.assertEqual(assistant_message.get("role"), "assistant")
+        self.assertIsNone(assistant_message.get("content"))
+        tool_calls = assistant_message.get("tool_calls")
+        self.assertIsInstance(tool_calls, list)
+        self.assertEqual(tool_calls[0]["function"]["name"], "todo")
+        self.assertIsNone(payload.get("reasoning_content"))
+
 
 if __name__ == "__main__":
     unittest.main()

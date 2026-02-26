@@ -14,11 +14,13 @@ from unittest.mock import patch
 
 from assistant_app.agent import (
     AssistantAgent,
+    _parse_history_search_input,
+    _parse_todo_list_options,
     _strip_think_blocks,
     _try_parse_json,
 )
 from assistant_app.db import AssistantDB
-from assistant_app.planner_thought import normalize_thought_decision
+from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.search import SearchResult
 
 
@@ -229,6 +231,145 @@ class FakeLLMClient:
         else:
             result = _planner_done("未提供可用的计划输出，请重试。")
         return result
+
+
+class FakeToolCallingLLMClient(FakeLLMClient):
+    def reply_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        del tools, tool_choice
+        self.calls.append(messages)
+        self.model_call_count += 1
+        if self._cursor < len(self.responses):
+            candidate = self.responses[self._cursor]
+            self._cursor += 1
+        elif self.responses:
+            candidate = self.responses[-1]
+        else:
+            candidate = _planner_done("未提供可用的计划输出，请重试。")
+        parsed = _try_parse_json(candidate)
+        if not isinstance(parsed, dict):
+            return {
+                "assistant_message": {"role": "assistant", "content": candidate, "tool_calls": []},
+                "reasoning_content": None,
+            }
+
+        status = str(parsed.get("status") or "").strip().lower()
+        current_step = str(parsed.get("current_step") or "").strip()
+        tool_call_payload: dict[str, Any] | None = None
+        if status == "continue":
+            next_action = parsed.get("next_action")
+            if isinstance(next_action, dict):
+                action_tool = str(next_action.get("tool") or "").strip().lower()
+                action_input = str(next_action.get("input") or "").strip()
+                if action_tool == "internet_search":
+                    arguments = {"query": action_input}
+                elif action_tool == "history_search":
+                    arguments = {"keyword": "牛奶", "limit": 20}
+                    parsed_history = _try_parse_json(action_input)
+                    if isinstance(parsed_history, dict):
+                        arguments = dict(parsed_history)
+                else:
+                    arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
+                    if arguments is None:
+                        arguments = {"action": "list"}
+                if current_step:
+                    arguments["current_step"] = current_step
+                tool_call_payload = {
+                    "name": action_tool,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                }
+        elif status == "ask_user":
+            question = str(parsed.get("question") or "").strip()
+            arguments: dict[str, Any] = {"question": question}
+            if current_step:
+                arguments["current_step"] = current_step
+            tool_call_payload = {
+                "name": "ask_user",
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            }
+        elif status == "done":
+            response = str(parsed.get("response") or "").strip()
+            arguments = {"response": response}
+            if current_step:
+                arguments["current_step"] = current_step
+            tool_call_payload = {
+                "name": "done",
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            }
+
+        if tool_call_payload is None:
+            return {
+                "assistant_message": {"role": "assistant", "content": candidate, "tool_calls": []},
+                "reasoning_content": None,
+            }
+
+        return {
+            "assistant_message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call_{self.model_call_count}",
+                        "type": "function",
+                        "function": tool_call_payload,
+                    }
+                ],
+            },
+            "reasoning_content": None,
+        }
+
+
+class FakeThinkingToolCallingLLMClient(FakeToolCallingLLMClient):
+    def reply_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        payload = super().reply_with_tools(messages, tools=tools, tool_choice=tool_choice)
+        payload["reasoning_content"] = "thinking trace"
+        return payload
+
+
+def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str, Any] | None:
+    parsed = _try_parse_json(action_input)
+    if isinstance(parsed, dict):
+        return parsed
+    text = action_input.strip()
+    if tool == "todo":
+        if text == "/todo list":
+            return {"action": "list"}
+        if text.startswith("/todo list "):
+            result: dict[str, Any] = {"action": "list"}
+            options = _parse_todo_list_options(text)
+            if options is None:
+                return None
+            tag, view = options
+            if tag is not None:
+                result["tag"] = tag
+            if view != "all":
+                result["view"] = view
+            return result
+        return {"action": "list"}
+    if tool == "schedule":
+        if text == "/schedule list":
+            return {"action": "list"}
+        return {"action": "list"}
+    if tool == "history_search":
+        if text.startswith("/history search "):
+            parsed_history = _parse_history_search_input(text.removeprefix("/history search ").strip())
+            if parsed_history is None:
+                return None
+            keyword, limit = parsed_history
+            return {"keyword": keyword, "limit": limit}
+        return None
+    return None
 
 
 class FakeSearchProvider:
@@ -1462,6 +1603,12 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("completed_subtasks", first_thought_payload)
         self.assertNotIn("recent_chat_turns", first_thought_payload)
         self.assertIn("user_profile", first_thought_payload)
+        tool_contract = first_thought_payload.get("tool_contract")
+        self.assertIsInstance(tool_contract, dict)
+        contract_text = json.dumps(tool_contract, ensure_ascii=False)
+        self.assertNotIn("/todo", contract_text)
+        self.assertNotIn("/schedule", contract_text)
+        self.assertNotIn("/history", contract_text)
         self.assertIn("time_unit_contract", first_thought_payload)
         self.assertNotIn("goal", first_thought_payload)
         self.assertNotIn("latest_plan", first_thought_payload)
@@ -1678,6 +1825,44 @@ class AssistantAgentTest(unittest.TestCase):
         second_thought_payload = json.loads(thought_calls[1][-1]["content"])
         current_subtask = second_thought_payload.get("current_subtask", {})
         self.assertEqual(current_subtask.get("item"), "A")
+
+    def test_thought_tool_calling_appends_assistant_tool_and_tool_result_messages(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看待办", "总结"]),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("查看待办完成。"),
+                _planner_done("已查看待办。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("帮我看一下待办")
+        self.assertIn("已查看待办", response)
+
+        thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
+        self.assertGreaterEqual(len(thought_calls), 2)
+        second_call_messages = thought_calls[1]
+        self.assertTrue(
+            any(
+                item.get("role") == "assistant" and isinstance(item.get("tool_calls"), list)
+                for item in second_call_messages
+            )
+        )
+        self.assertTrue(any(item.get("role") == "tool" for item in second_call_messages))
+
+    def test_thought_tool_calling_rejects_thinking_mode_response(self) -> None:
+        fake_llm = FakeThinkingToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看待办", "总结"]),
+                _thought_continue("todo", "/todo list"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 thinking 模式拒绝")
+
+        self.assertIn("暂不支持 thinking 模式", response)
 
     def test_step_limit_summary_excludes_llm_decision_records(self) -> None:
         fake_llm = FakeLLMClient(
@@ -2028,6 +2213,70 @@ class AssistantAgentTest(unittest.TestCase):
             }
         )
         self.assertIsNotNone(decision)
+
+    def test_thought_tool_call_contract_maps_continue_action(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "internet_search",
+                    "arguments": json.dumps({"query": "OpenAI Responses API"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertEqual(
+            decision,
+            {
+                "status": "continue",
+                "current_step": "",
+                "next_action": {"tool": "internet_search", "input": "OpenAI Responses API"},
+                "question": None,
+                "response": None,
+            },
+        )
+
+    def test_thought_tool_call_contract_maps_done_action(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                    "name": "done",
+                    "arguments": json.dumps({"response": "步骤完成。", "current_step": "总结"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertEqual(
+            decision,
+            {
+                "status": "done",
+                "current_step": "总结",
+                "next_action": None,
+                "question": None,
+                "response": "步骤完成。",
+            },
+        )
+
+    def test_thought_tool_call_contract_maps_todo_structured_action(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_3",
+                "type": "function",
+                "function": {
+                    "name": "todo",
+                    "arguments": json.dumps({"action": "list", "view": "today"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "todo")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "list", "view": "today"})
 
     def test_plan_replan_internet_search_tool(self) -> None:
         fake_llm = FakeLLMClient(

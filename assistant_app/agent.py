@@ -19,7 +19,12 @@ from assistant_app.planner_plan_replan import (
     normalize_plan_decision,
     normalize_replan_decision,
 )
-from assistant_app.planner_thought import THOUGHT_PROMPT, normalize_thought_decision
+from assistant_app.planner_thought import (
+    THOUGHT_PROMPT,
+    THOUGHT_TOOL_SCHEMAS,
+    normalize_thought_decision,
+    normalize_thought_tool_call,
+)
 from assistant_app.search import BingSearchProvider, SearchProvider, SearchResult
 
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
@@ -54,35 +59,68 @@ PLAN_HISTORY_MAX_TURNS = 50
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-PLAN_TOOL_CONTRACT: dict[str, list[str]] = {
-    "todo": [
-        "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
-        "[--due <YYYY-MM-DD HH:MM，本地时间>] [--remind <YYYY-MM-DD HH:MM，本地时间>]",
-        "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]",
-        "/todo get <id>",
-        "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
-        "[--due <YYYY-MM-DD HH:MM，本地时间>] [--remind <YYYY-MM-DD HH:MM，本地时间>]",
-        "/todo done <id>",
-        "/todo delete <id>",
-        "/todo search <关键词> [--tag <标签>]",
-        "/view <all|today|overdue|upcoming|inbox> [--tag <标签>]",
-    ],
-    "schedule": [
-        "/schedule add <YYYY-MM-DD HH:MM，本地时间> <标题> [--duration <>=1，单位:分钟>] "
-        "[--remind <YYYY-MM-DD HH:MM，本地时间>] [--interval <>=1，单位:分钟>] "
-        "[--times <-1|>=2，单位:次>] [--remind-start <YYYY-MM-DD HH:MM，本地时间>]",
-        "/schedule list",
-        "/schedule get <id>",
-        "/schedule view <day|week|month> [day/week 参数: YYYY-MM-DD；month 参数: YYYY-MM]",
-        "/schedule update <id> <YYYY-MM-DD HH:MM，本地时间> <标题> [--duration <>=1，单位:分钟>] "
-        "[--remind <YYYY-MM-DD HH:MM，本地时间>] [--interval <>=1，单位:分钟>] "
-        "[--times <-1|>=2，单位:次>] [--remind-start <YYYY-MM-DD HH:MM，本地时间>]",
-        "/schedule repeat <id> <on|off>",
-        "/schedule delete <id>",
-    ],
-    "internet_search": ["<关键词>"],
-    "history_search": ["/history search <关键词> [--limit <>=1>]"],
-    "ask_user": ["<单个澄清问题>"],
+PLAN_TOOL_CONTRACT: dict[str, Any] = {
+    "todo": {
+        "mode": "structured_action",
+        "actions": {
+            "add": {
+                "required": ["content"],
+                "optional": ["tag", "priority", "due_at", "remind_at"],
+            },
+            "list": {"optional": ["tag", "view"]},
+            "view": {"required": ["view"], "optional": ["tag"]},
+            "get": {"required": ["id"]},
+            "update": {
+                "required": ["id", "content"],
+                "optional": ["tag", "priority", "due_at", "remind_at"],
+            },
+            "done": {"required": ["id"]},
+            "delete": {"required": ["id"]},
+            "search": {"required": ["keyword"], "optional": ["tag"]},
+        },
+    },
+    "schedule": {
+        "mode": "structured_action",
+        "actions": {
+            "add": {
+                "required": ["event_time", "title"],
+                "optional": [
+                    "duration_minutes",
+                    "remind_at",
+                    "interval_minutes",
+                    "times",
+                    "remind_start_time",
+                ],
+            },
+            "list": {},
+            "get": {"required": ["id"]},
+            "view": {"required": ["view"], "optional": ["anchor"]},
+            "update": {
+                "required": ["id", "event_time", "title"],
+                "optional": [
+                    "duration_minutes",
+                    "remind_at",
+                    "interval_minutes",
+                    "times",
+                    "remind_start_time",
+                ],
+            },
+            "repeat": {"required": ["id", "enabled"]},
+            "delete": {"required": ["id"]},
+        },
+    },
+    "internet_search": {
+        "mode": "structured_action",
+        "actions": {"search": {"required": ["query"]}},
+    },
+    "history_search": {
+        "mode": "structured_action",
+        "actions": {"search": {"required": ["keyword"], "optional": ["limit"]}},
+    },
+    "ask_user": {
+        "mode": "structured_action",
+        "actions": {"ask": {"required": ["question"]}},
+    },
 }
 
 PLAN_TIME_UNIT_CONTRACT: dict[str, str] = {
@@ -97,6 +135,10 @@ PLAN_TIME_UNIT_CONTRACT: dict[str, str] = {
 
 class TaskInterruptedError(RuntimeError):
     """Raised when an in-flight planner task is interrupted by a newer input."""
+
+
+class ThoughtToolCallingError(RuntimeError):
+    """Raised when thought tool-calling cannot proceed."""
 
 
 @dataclass
@@ -140,7 +182,7 @@ class InnerReActContext:
     current_subtask: str = ""
     completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
     observations: list[PlannerObservation] = field(default_factory=list)
-    thought_messages: list[dict[str, str]] = field(default_factory=list)
+    thought_messages: list[dict[str, Any]] = field(default_factory=list)
     response: str | None = None
 
 
@@ -345,6 +387,8 @@ class AssistantAgent:
                 return self._finalize_planner_task(task, self._planner_unavailable_text())
         except TaskInterruptedError:
             return self._finalize_interrupted_task(task)
+        except ThoughtToolCallingError as exc:
+            return self._finalize_planner_task(task, str(exc))
 
     def _emit_decision_progress(self, task: PendingPlanTask) -> None:
         planned_total_text = self._progress_total_text(task)
@@ -577,12 +621,20 @@ class AssistantAgent:
             task.post_plan_done_count = 0
             action_tool = str(next_action.get("tool") or "").strip().lower()
             action_input = str(next_action.get("input") or "").strip()
+            tool_call_id = str(thought_payload.get("tool_call_id") or "").strip() or None
             self._emit_progress(f"步骤动作：{action_tool} -> {action_input}")
             self._raise_if_task_interrupted()
             task.step_count += 1
             observation = self._execute_planner_tool(action_tool=action_tool, action_input=action_input)
             normalized_observation = self._append_observation(task, observation)
-            self._append_thought_observation_message(task, normalized_observation)
+            if tool_call_id:
+                self._append_thought_tool_result_message(
+                    task,
+                    observation=normalized_observation,
+                    tool_call_id=tool_call_id,
+                )
+            else:
+                self._append_thought_observation_message(task, normalized_observation)
             status_text = "成功" if observation.ok else "失败"
             if observation.ok:
                 task.successful_steps += 1
@@ -627,12 +679,16 @@ class AssistantAgent:
         context_payload["phase"] = "thought"
         context_payload["current_plan_item"] = self._current_plan_item_text(task)
         planner_messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
-        request_messages = [dict(item) for item in planner_messages]
-        payload = self._request_payload_with_retry(request_messages, normalize_thought_decision)
+        request_messages = deepcopy(planner_messages)
+        payload = self._request_thought_payload_with_retry(request_messages)
         if payload is None:
             return None
         decision = payload.get("decision")
-        if isinstance(decision, dict):
+        assistant_message = payload.get("assistant_message")
+        if isinstance(assistant_message, dict):
+            self._append_thought_assistant_message(task, assistant_message)
+        elif isinstance(decision, dict):
+            # Backward-compatible path for clients without tool-calling support.
             self._append_thought_decision_message(task, decision)
         return payload
 
@@ -657,7 +713,7 @@ class AssistantAgent:
 
     def _request_payload_with_retry(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         normalizer: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> dict[str, Any] | None:
         max_attempts = 1 + self._plan_replan_retry_count
@@ -707,6 +763,64 @@ class AssistantAgent:
                 return {"decision": decision}
         return None
 
+    def _request_thought_payload_with_retry(self, messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+        max_attempts = 1 + self._plan_replan_retry_count
+        phase = self._llm_trace_phase(messages)
+        for attempt in range(1, max_attempts + 1):
+            self._raise_if_task_interrupted()
+            call_id = self._next_llm_trace_call_id()
+            self._log_llm_trace_event(
+                {
+                    "event": "llm_request",
+                    "call_id": call_id,
+                    "phase": phase,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "messages": messages,
+                    "tools": THOUGHT_TOOL_SCHEMAS,
+                }
+            )
+            try:
+                response = self._llm_reply_for_thought(messages)
+            except ThoughtToolCallingError:
+                raise
+            except Exception as exc:
+                self._log_llm_trace_event(
+                    {
+                        "event": "llm_response_error",
+                        "call_id": call_id,
+                        "phase": phase,
+                        "attempt": attempt,
+                        "error": repr(exc),
+                    }
+                )
+                continue
+
+            self._raise_if_task_interrupted()
+            self._log_llm_trace_event(
+                {
+                    "event": "llm_response",
+                    "call_id": call_id,
+                    "phase": phase,
+                    "attempt": attempt,
+                    "response": response,
+                }
+            )
+
+            decision = response.get("decision")
+            if not isinstance(decision, dict):
+                continue
+
+            payload: dict[str, Any] = {"decision": decision}
+            assistant_message = response.get("assistant_message")
+            if isinstance(assistant_message, dict):
+                payload["assistant_message"] = assistant_message
+            tool_call_id = response.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id.strip():
+                payload["tool_call_id"] = tool_call_id.strip()
+            return payload
+        return None
+
     def _build_plan_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
         outer_messages = deepcopy(self._ensure_outer_messages(task))
         context_payload = self._build_planner_context(task)
@@ -716,23 +830,36 @@ class AssistantAgent:
         messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
         return messages
 
-    def _build_thought_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+    def _build_thought_messages(self, task: PendingPlanTask) -> list[dict[str, Any]]:
         outer_messages = deepcopy(self._ensure_outer_messages(task))
         context_payload = self._build_thought_context(task)
         context_payload["phase"] = "thought"
         context_payload["current_plan_item"] = self._current_plan_item_text(task)
-        messages: list[dict[str, str]] = [{"role": "system", "content": THOUGHT_PROMPT}]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": THOUGHT_PROMPT}]
         messages.extend(outer_messages)
         messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
         return messages
 
-    def _ensure_thought_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+    def _ensure_thought_messages(self, task: PendingPlanTask) -> list[dict[str, Any]]:
         inner = self._ensure_inner_context(task)
         if inner.thought_messages:
             return inner.thought_messages
         outer_messages = deepcopy(self._ensure_outer_messages(task))
         inner.thought_messages = [{"role": "system", "content": THOUGHT_PROMPT}, *outer_messages]
         return inner.thought_messages
+
+    def _append_thought_assistant_message(self, task: PendingPlanTask, assistant_message: dict[str, Any]) -> None:
+        messages = self._ensure_thought_messages(task)
+        payload: dict[str, Any] = {"role": "assistant"}
+        content = assistant_message.get("content")
+        if content is None or isinstance(content, str):
+            payload["content"] = content
+        else:
+            payload["content"] = str(content)
+        tool_calls = assistant_message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            payload["tool_calls"] = deepcopy(tool_calls)
+        messages.append(payload)
 
     def _append_thought_decision_message(self, task: PendingPlanTask, decision: dict[str, Any]) -> None:
         messages = self._ensure_thought_messages(task)
@@ -741,6 +868,28 @@ class AssistantAgent:
             "decision": decision,
         }
         messages.append({"role": "assistant", "content": json.dumps(decision_payload, ensure_ascii=False)})
+
+    def _append_thought_tool_result_message(
+        self,
+        task: PendingPlanTask,
+        *,
+        observation: PlannerObservation,
+        tool_call_id: str,
+    ) -> None:
+        messages = self._ensure_thought_messages(task)
+        tool_payload = {
+            "tool": observation.tool,
+            "input": observation.input_text,
+            "ok": observation.ok,
+            "result": observation.result,
+        }
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": json.dumps(tool_payload, ensure_ascii=False),
+            }
+        )
 
     def _append_thought_observation_message(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
         messages = self._ensure_thought_messages(task)
@@ -962,7 +1111,7 @@ class AssistantAgent:
                 return
         outer.current_plan_index = len(outer.latest_plan)
 
-    def _llm_reply_for_planner(self, messages: list[dict[str, str]]) -> str:
+    def _llm_reply_for_planner(self, messages: list[dict[str, Any]]) -> str:
         if self.llm_client is None:
             return ""
 
@@ -974,14 +1123,75 @@ class AssistantAgent:
                 pass
         return self.llm_client.reply(messages)
 
+    def _llm_reply_for_thought(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.llm_client is None:
+            return {}
+
+        reply_with_tools = getattr(self.llm_client, "reply_with_tools", None)
+        if not callable(reply_with_tools):
+            raw = self._llm_reply_for_planner(messages)
+            payload = _try_parse_json(_strip_think_blocks(raw).strip())
+            if not isinstance(payload, dict):
+                return {}
+            decision = normalize_thought_decision(payload)
+            if decision is None:
+                return {}
+            return {"decision": decision}
+
+        try:
+            tool_response = reply_with_tools(messages, tools=THOUGHT_TOOL_SCHEMAS, tool_choice="auto")
+        except RuntimeError as exc:
+            message = str(exc)
+            lowered = message.lower()
+            if "thinking" in lowered or "reasoning_content" in lowered or "reasoner" in lowered:
+                raise ThoughtToolCallingError(message) from exc
+            raise
+
+        reasoning_content = str(tool_response.get("reasoning_content") or "").strip()
+        if reasoning_content:
+            raise ThoughtToolCallingError(
+                "当前版本 thought 阶段暂不支持 thinking 模式（检测到 reasoning_content），"
+                "请切换到非 thinking 模式后重试。"
+            )
+
+        assistant_message = tool_response.get("assistant_message")
+        if not isinstance(assistant_message, dict):
+            return {}
+
+        payload: dict[str, Any] = {"assistant_message": assistant_message}
+        tool_calls = assistant_message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            first_tool_call = tool_calls[0]
+            if not isinstance(first_tool_call, dict):
+                return {}
+            decision = normalize_thought_tool_call(first_tool_call)
+            if decision is None:
+                return {}
+            payload["decision"] = decision
+            call_id = str(first_tool_call.get("id") or "").strip()
+            if call_id:
+                payload["tool_call_id"] = call_id
+            return payload
+
+        raw_content = assistant_message.get("content")
+        content = str(raw_content or "").strip()
+        parsed_content = _try_parse_json(_strip_think_blocks(content))
+        if not isinstance(parsed_content, dict):
+            return {}
+        decision = normalize_thought_decision(parsed_content)
+        if decision is None:
+            return {}
+        payload["decision"] = decision
+        return payload
+
     def _next_llm_trace_call_id(self) -> int:
         self._llm_trace_call_seq += 1
         return self._llm_trace_call_seq
 
-    def _llm_trace_phase(self, messages: list[dict[str, str]]) -> str:
+    def _llm_trace_phase(self, messages: list[dict[str, Any]]) -> str:
         if not messages:
             return "unknown"
-        payload = _try_parse_json(messages[-1].get("content", ""))
+        payload = _try_parse_json(str(messages[-1].get("content", "")))
         if not isinstance(payload, dict):
             return "unknown"
         phase = str(payload.get("phase") or "").strip().lower()
@@ -995,30 +1205,40 @@ class AssistantAgent:
 
     def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
         if action_tool == "todo":
-            normalized_command = action_input.strip()
-            if not normalized_command.startswith("/todo") and not normalized_command.startswith("/view"):
+            normalized_input = action_input.strip()
+            # Backward-compatible fallback for non-tool-calling thought outputs.
+            if normalized_input.startswith("/todo") or normalized_input.startswith("/view"):
+                command_result = self._handle_command(normalized_input)
+                ok = _is_planner_command_success(command_result, tool="todo")
+                return PlannerObservation(tool="todo", input_text=normalized_input, ok=ok, result=command_result)
+
+            payload = _try_parse_json(normalized_input)
+            if not isinstance(payload, dict):
                 return PlannerObservation(
                     tool="todo",
                     input_text=action_input,
                     ok=False,
-                    result="todo 工具仅支持 /todo 或 /view 命令。",
+                    result="todo 工具参数无效：需要 JSON 对象。",
                 )
-            command_result = self._handle_command(normalized_command)
-            ok = _is_planner_command_success(command_result, tool="todo")
-            return PlannerObservation(tool="todo", input_text=normalized_command, ok=ok, result=command_result)
+            return self._execute_todo_system_action(payload, raw_input=normalized_input)
 
         if action_tool == "schedule":
-            normalized_command = action_input.strip()
-            if not normalized_command.startswith("/schedule"):
+            normalized_input = action_input.strip()
+            # Backward-compatible fallback for non-tool-calling thought outputs.
+            if normalized_input.startswith("/schedule"):
+                command_result = self._handle_command(normalized_input)
+                ok = _is_planner_command_success(command_result, tool="schedule")
+                return PlannerObservation(tool="schedule", input_text=normalized_input, ok=ok, result=command_result)
+
+            payload = _try_parse_json(normalized_input)
+            if not isinstance(payload, dict):
                 return PlannerObservation(
                     tool="schedule",
                     input_text=action_input,
                     ok=False,
-                    result="schedule 工具仅支持 /schedule 命令。",
+                    result="schedule 工具参数无效：需要 JSON 对象。",
                 )
-            command_result = self._handle_command(normalized_command)
-            ok = _is_planner_command_success(command_result, tool="schedule")
-            return PlannerObservation(tool="schedule", input_text=normalized_command, ok=ok, result=command_result)
+            return self._execute_schedule_system_action(payload, raw_input=normalized_input)
 
         if action_tool == "internet_search":
             query = action_input.strip()
@@ -1049,22 +1269,27 @@ class AssistantAgent:
             return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
 
         if action_tool == "history_search":
-            normalized_command = action_input.strip()
-            if not normalized_command.startswith("/history search"):
+            normalized_input = action_input.strip()
+            # Backward-compatible fallback for non-tool-calling thought outputs.
+            if normalized_input.startswith("/history search"):
+                command_result = self._handle_command(normalized_input)
+                ok = _is_planner_command_success(command_result, tool="history_search")
+                return PlannerObservation(
+                    tool="history_search",
+                    input_text=normalized_input,
+                    ok=ok,
+                    result=command_result,
+                )
+
+            payload = _try_parse_json(normalized_input)
+            if not isinstance(payload, dict):
                 return PlannerObservation(
                     tool="history_search",
                     input_text=action_input,
                     ok=False,
-                    result="history_search 工具仅支持 /history search 命令。",
+                    result="history_search 工具参数无效：需要 JSON 对象。",
                 )
-            command_result = self._handle_command(normalized_command)
-            ok = _is_planner_command_success(command_result, tool="history_search")
-            return PlannerObservation(
-                tool="history_search",
-                input_text=normalized_command,
-                ok=ok,
-                result=command_result,
-            )
+            return self._execute_history_search_system_action(payload, raw_input=normalized_input)
 
         return PlannerObservation(
             tool=action_tool or "unknown",
@@ -1072,6 +1297,829 @@ class AssistantAgent:
             ok=False,
             result=f"未知工具: {action_tool}",
         )
+
+    def _execute_todo_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in {"add", "list", "get", "update", "delete", "done", "search", "view"}:
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result="todo.action 非法。")
+
+        if action == "add":
+            content = str(payload.get("content") or "").strip()
+            if not content:
+                return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result="todo.add 缺少 content。")
+            parsed_tag = _normalize_todo_tag_value(payload.get("tag"))
+            add_tag = parsed_tag or "default"
+            if "priority" in payload:
+                add_priority = _normalize_todo_priority_value(payload.get("priority"))
+                if add_priority is None:
+                    return PlannerObservation(
+                        tool="todo",
+                        input_text=raw_input,
+                        ok=False,
+                        result="todo.add priority 需为 >=0 的整数。",
+                    )
+            else:
+                add_priority = 0
+            add_due_at = _normalize_optional_datetime_value(payload.get("due_at"), key_present="due_at" in payload)
+            if add_due_at is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="todo.add due_at 格式非法，需为 YYYY-MM-DD HH:MM。",
+                )
+            add_remind_at = _normalize_optional_datetime_value(
+                payload.get("remind_at"),
+                key_present="remind_at" in payload,
+            )
+            if add_remind_at is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="todo.add remind_at 格式非法，需为 YYYY-MM-DD HH:MM。",
+                )
+            try:
+                added_todo_id = self.db.add_todo(
+                    content,
+                    tag=add_tag,
+                    priority=add_priority,
+                    due_at=add_due_at,
+                    remind_at=add_remind_at,
+                )
+            except ValueError:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="提醒时间需要和截止时间一起设置，且优先级必须为大于等于 0 的整数。",
+                )
+            result = (
+                f"已添加待办 #{added_todo_id} [标签:{add_tag}]: {content}"
+                f"{_format_todo_meta_inline(add_due_at, add_remind_at, priority=add_priority)}"
+            )
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=result)
+
+        if action in {"list", "view"}:
+            if action == "view":
+                list_view = _normalize_todo_view_value(payload.get("view"))
+                if list_view is None:
+                    return PlannerObservation(
+                        tool="todo",
+                        input_text=raw_input,
+                        ok=False,
+                        result="todo.view 需要合法 view(all|today|overdue|upcoming|inbox)。",
+                    )
+            else:
+                if "view" in payload:
+                    list_view = _normalize_todo_view_value(payload.get("view"))
+                    if list_view is None:
+                        return PlannerObservation(
+                            tool="todo",
+                            input_text=raw_input,
+                            ok=False,
+                            result="todo.list 的 view 参数非法。",
+                        )
+                else:
+                    list_view = "all"
+            list_tag = _normalize_todo_tag_value(payload.get("tag"))
+            todos = self.db.list_todos(tag=list_tag)
+            todos = _filter_todos_by_view(todos, view_name=list_view)
+            if not todos:
+                if list_tag is None and list_view == "all":
+                    result = "暂无待办。"
+                elif list_tag is None:
+                    result = f"视图 {list_view} 下暂无待办。"
+                elif list_view == "all":
+                    result = f"标签 {list_tag} 下暂无待办。"
+                else:
+                    result = f"标签 {list_tag} 的 {list_view} 视图下暂无待办。"
+                return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result=result)
+
+            header_parts: list[str] = []
+            if list_tag is not None:
+                header_parts.append(f"标签: {list_tag}")
+            if list_view != "all":
+                header_parts.append(f"视图: {list_view}")
+            header = f"待办列表({', '.join(header_parts)}):" if header_parts else "待办列表:"
+            rows = [
+                [
+                    str(item.id),
+                    "完成" if item.done else "待办",
+                    item.tag,
+                    str(item.priority),
+                    item.content,
+                    item.created_at,
+                    item.completed_at or "-",
+                    item.due_at or "-",
+                    item.remind_at or "-",
+                ]
+                for item in todos
+            ]
+            table = _render_table(
+                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
+                rows=rows,
+            )
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=f"{header}\n{table}")
+
+        if action == "search":
+            keyword = str(payload.get("keyword") or "").strip()
+            if not keyword:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="todo.search 缺少 keyword。",
+                )
+            search_tag = _normalize_todo_tag_value(payload.get("tag"))
+            todos = self.db.search_todos(keyword, tag=search_tag)
+            if not todos:
+                if search_tag is None:
+                    return PlannerObservation(
+                        tool="todo",
+                        input_text=raw_input,
+                        ok=False,
+                        result=f"未找到包含“{keyword}”的待办。",
+                    )
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result=f"未在标签 {search_tag} 下找到包含“{keyword}”的待办。",
+                )
+            rows = [
+                [
+                    str(item.id),
+                    "完成" if item.done else "待办",
+                    item.tag,
+                    str(item.priority),
+                    item.content,
+                    item.created_at,
+                    item.completed_at or "-",
+                    item.due_at or "-",
+                    item.remind_at or "-",
+                ]
+                for item in todos
+            ]
+            table = _render_table(
+                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
+                rows=rows,
+            )
+            if search_tag is None:
+                header = f"搜索结果(关键词: {keyword}):"
+            else:
+                header = f"搜索结果(关键词: {keyword}, 标签: {search_tag}):"
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=f"{header}\n{table}")
+
+        todo_id = _normalize_positive_int_value(payload.get("id"))
+        if todo_id is None:
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result="todo.id 必须为正整数。")
+
+        if action == "get":
+            todo = self.db.get_todo(todo_id)
+            if todo is None:
+                return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result=f"未找到待办 #{todo_id}")
+            table = _render_table(
+                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
+                rows=[
+                    [
+                        str(todo.id),
+                        "完成" if todo.done else "待办",
+                        todo.tag,
+                        str(todo.priority),
+                        todo.content,
+                        todo.created_at,
+                        todo.completed_at or "-",
+                        todo.due_at or "-",
+                        todo.remind_at or "-",
+                    ]
+                ],
+            )
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=f"待办详情:\n{table}")
+
+        if action == "update":
+            content = str(payload.get("content") or "").strip()
+            if not content:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="todo.update 缺少 content。",
+                )
+            current = self.db.get_todo(todo_id)
+            if current is None:
+                return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result=f"未找到待办 #{todo_id}")
+            has_priority = "priority" in payload
+            if has_priority:
+                update_priority = _normalize_todo_priority_value(payload.get("priority"))
+                if update_priority is None:
+                    return PlannerObservation(
+                        tool="todo",
+                        input_text=raw_input,
+                        ok=False,
+                        result="todo.update priority 需为 >=0 的整数。",
+                    )
+            else:
+                update_priority = None
+            has_due = "due_at" in payload
+            update_due_at = _normalize_optional_datetime_value(payload.get("due_at"), key_present=has_due)
+            if update_due_at is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="todo.update due_at 格式非法，需为 YYYY-MM-DD HH:MM。",
+                )
+            has_remind = "remind_at" in payload
+            update_remind_at = _normalize_optional_datetime_value(payload.get("remind_at"), key_present=has_remind)
+            if update_remind_at is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="todo.update remind_at 格式非法，需为 YYYY-MM-DD HH:MM。",
+                )
+            if has_remind and update_remind_at and not ((has_due and update_due_at) or current.due_at):
+                return PlannerObservation(
+                    tool="todo",
+                    input_text=raw_input,
+                    ok=False,
+                    result="提醒时间需要和截止时间一起设置。",
+                )
+            update_kwargs: dict[str, Any] = {"content": content}
+            update_tag = _normalize_todo_tag_value(payload.get("tag"))
+            if "tag" in payload and update_tag is not None:
+                update_kwargs["tag"] = update_tag
+            if has_priority:
+                update_kwargs["priority"] = update_priority
+            if has_due:
+                update_kwargs["due_at"] = update_due_at
+            if has_remind:
+                update_kwargs["remind_at"] = update_remind_at
+            updated = self.db.update_todo(todo_id, **update_kwargs)
+            if not updated:
+                return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result=f"未找到待办 #{todo_id}")
+            todo = self.db.get_todo(todo_id)
+            if todo is None:
+                result = f"已更新待办 #{todo_id}: {content}"
+            else:
+                result = (
+                    f"已更新待办 #{todo_id} [标签:{todo.tag}]: {content}"
+                    f"{_format_todo_meta_inline(todo.due_at, todo.remind_at, priority=todo.priority)}"
+                )
+            ok = _is_planner_command_success(result, tool="todo")
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=ok, result=result)
+
+        if action == "delete":
+            deleted = self.db.delete_todo(todo_id)
+            if not deleted:
+                result = f"未找到待办 #{todo_id}"
+            else:
+                result = f"待办 #{todo_id} 已删除。"
+            ok = _is_planner_command_success(result, tool="todo")
+            return PlannerObservation(tool="todo", input_text=raw_input, ok=ok, result=result)
+
+        # done
+        done = self.db.mark_todo_done(todo_id)
+        if not done:
+            result = f"未找到待办 #{todo_id}"
+        else:
+            todo = self.db.get_todo(todo_id)
+            done_completed_at = todo.completed_at if todo is not None else _now_time_text()
+            result = f"待办 #{todo_id} 已完成。完成时间: {done_completed_at}"
+        ok = _is_planner_command_success(result, tool="todo")
+        return PlannerObservation(tool="todo", input_text=raw_input, ok=ok, result=result)
+
+    def _execute_schedule_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in {"add", "list", "get", "view", "update", "delete", "repeat"}:
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result="schedule.action 非法。")
+
+        if action == "list":
+            window_start, window_end = _default_schedule_list_window(window_days=self._schedule_max_window_days)
+            items = self.db.list_schedules(
+                window_start=window_start,
+                window_end=window_end,
+                max_window_days=self._schedule_max_window_days,
+            )
+            if not items:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result=f"前天起未来 {self._schedule_max_window_days} 天内暂无日程。",
+                )
+            table = _render_table(
+                headers=[
+                    "ID",
+                    "时间",
+                    "时长(分钟)",
+                    "标题",
+                    "提醒时间",
+                    "重复提醒开始",
+                    "重复间隔(分钟)",
+                    "重复次数",
+                    "重复启用",
+                    "创建时间",
+                ],
+                rows=[
+                    [
+                        str(item.id),
+                        item.event_time,
+                        str(item.duration_minutes),
+                        item.title,
+                        item.remind_at or "-",
+                        item.repeat_remind_start_time or "-",
+                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+                        str(item.repeat_times) if item.repeat_times is not None else "-",
+                        _repeat_enabled_text(item.repeat_enabled),
+                        item.created_at,
+                    ]
+                    for item in items
+                ],
+            )
+            return PlannerObservation(
+                tool="schedule",
+                input_text=raw_input,
+                ok=True,
+                result=f"日程列表(前天起未来 {self._schedule_max_window_days} 天):\n{table}",
+            )
+
+        if action == "view":
+            view_name = _normalize_schedule_view_value(payload.get("view"))
+            if view_name is None:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.view 需要合法 view(day|week|month)。",
+                )
+            anchor: str | None = None
+            if "anchor" in payload and payload.get("anchor") is not None:
+                anchor = _normalize_schedule_view_anchor(view_name=view_name, value=str(payload.get("anchor")))
+                if anchor is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.view 的 anchor 非法。",
+                    )
+            window_start, window_end = _resolve_schedule_view_window(view_name=view_name, anchor=anchor)
+            items = self.db.list_schedules(
+                window_start=window_start,
+                window_end=window_end,
+                max_window_days=self._schedule_max_window_days,
+            )
+            items = _filter_schedules_by_calendar_view(items, view_name=view_name, anchor=anchor)
+            if not items:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result=f"{view_name} 视图下暂无日程。",
+                )
+            table = _render_table(
+                headers=[
+                    "ID",
+                    "时间",
+                    "时长(分钟)",
+                    "标题",
+                    "提醒时间",
+                    "重复提醒开始",
+                    "重复间隔(分钟)",
+                    "重复次数",
+                    "重复启用",
+                    "创建时间",
+                ],
+                rows=[
+                    [
+                        str(item.id),
+                        item.event_time,
+                        str(item.duration_minutes),
+                        item.title,
+                        item.remind_at or "-",
+                        item.repeat_remind_start_time or "-",
+                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+                        str(item.repeat_times) if item.repeat_times is not None else "-",
+                        _repeat_enabled_text(item.repeat_enabled),
+                        item.created_at,
+                    ]
+                    for item in items
+                ],
+            )
+            title = f"日历视图({view_name}, {anchor})" if anchor else f"日历视图({view_name})"
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=True, result=f"{title}:\n{table}")
+
+        if action == "add":
+            add_event_time = _normalize_datetime_text(str(payload.get("event_time") or ""))
+            add_title = str(payload.get("title") or "").strip()
+            if not add_event_time or not add_title:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.add 缺少 event_time/title 或格式非法。",
+                )
+            if "duration_minutes" in payload:
+                add_duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("duration_minutes"))
+                if add_duration_minutes is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.add duration_minutes 需为 >=1 的整数。",
+                    )
+            else:
+                add_duration_minutes = 60
+            add_remind_at = _normalize_optional_datetime_value(payload.get("remind_at"), key_present="remind_at" in payload)
+            if add_remind_at is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.add remind_at 格式非法。",
+                )
+            if "interval_minutes" in payload:
+                add_repeat_interval_minutes = _normalize_schedule_interval_minutes_value(payload.get("interval_minutes"))
+                if add_repeat_interval_minutes is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.add interval_minutes 需为 >=1 的整数。",
+                    )
+            else:
+                add_repeat_interval_minutes = None
+            if "times" in payload:
+                add_repeat_times = _normalize_schedule_repeat_times_value(payload.get("times"))
+                if add_repeat_times is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.add times 需为 -1 或 >=2 的整数。",
+                    )
+            else:
+                add_repeat_times = -1 if add_repeat_interval_minutes is not None else 1
+            has_repeat_remind_start_time = "remind_start_time" in payload
+            add_repeat_remind_start_time = _normalize_optional_datetime_value(
+                payload.get("remind_start_time"),
+                key_present=has_repeat_remind_start_time,
+            )
+            if add_repeat_remind_start_time is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.add remind_start_time 格式非法。",
+                )
+            if add_repeat_interval_minutes is None and add_repeat_times != 1:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.add 提供 times 时必须同时提供 interval_minutes。",
+                )
+            if add_repeat_interval_minutes is not None and add_repeat_times == 1:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.add interval_minutes 存在时，times 不能为 1。",
+                )
+            if has_repeat_remind_start_time and add_repeat_interval_minutes is None:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.add 提供 remind_start_time 时必须提供 interval_minutes。",
+                )
+            event_times = _build_schedule_event_times(
+                event_time=add_event_time,
+                repeat_interval_minutes=add_repeat_interval_minutes,
+                repeat_times=add_repeat_times,
+                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
+            )
+            conflicts = self.db.find_schedule_conflicts(
+                event_times,
+                duration_minutes=add_duration_minutes,
+            )
+            if conflicts:
+                result = _format_schedule_conflicts(conflicts)
+                return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=result)
+            schedule_id = self.db.add_schedule(
+                title=add_title,
+                event_time=add_event_time,
+                duration_minutes=add_duration_minutes,
+                remind_at=add_remind_at,
+            )
+            if add_repeat_interval_minutes is not None and add_repeat_times != 1:
+                self.db.set_schedule_recurrence(
+                    schedule_id,
+                    start_time=add_event_time,
+                    repeat_interval_minutes=add_repeat_interval_minutes,
+                    repeat_times=add_repeat_times,
+                    remind_start_time=add_repeat_remind_start_time,
+                )
+            remind_meta = _format_schedule_remind_meta_inline(
+                remind_at=add_remind_at,
+                repeat_remind_start_time=add_repeat_remind_start_time,
+            )
+            if add_repeat_times == 1:
+                result = (
+                    f"已添加日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"({add_duration_minutes} 分钟){remind_meta}"
+                )
+            elif add_repeat_times == -1:
+                result = (
+                    f"已添加无限重复日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m{remind_meta})"
+                )
+            else:
+                result = (
+                    f"已添加重复日程 {add_repeat_times} 条: {add_event_time} {add_title} "
+                    f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m, "
+                    f"times={add_repeat_times}{remind_meta})"
+                )
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=True, result=result)
+
+        schedule_id = _normalize_positive_int_value(payload.get("id"))
+        if schedule_id is None:
+            return PlannerObservation(
+                tool="schedule",
+                input_text=raw_input,
+                ok=False,
+                result="schedule.id 必须为正整数。",
+            )
+
+        if action == "get":
+            item = self.db.get_schedule(schedule_id)
+            if item is None:
+                return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=f"未找到日程 #{schedule_id}")
+            table = _render_table(
+                headers=[
+                    "ID",
+                    "时间",
+                    "时长(分钟)",
+                    "标题",
+                    "提醒时间",
+                    "重复提醒开始",
+                    "重复间隔(分钟)",
+                    "重复次数",
+                    "重复启用",
+                    "创建时间",
+                ],
+                rows=[
+                    [
+                        str(item.id),
+                        item.event_time,
+                        str(item.duration_minutes),
+                        item.title,
+                        item.remind_at or "-",
+                        item.repeat_remind_start_time or "-",
+                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+                        str(item.repeat_times) if item.repeat_times is not None else "-",
+                        _repeat_enabled_text(item.repeat_enabled),
+                        item.created_at,
+                    ]
+                ],
+            )
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=True, result=f"日程详情:\n{table}")
+
+        if action == "update":
+            event_time = _normalize_datetime_text(str(payload.get("event_time") or ""))
+            title = str(payload.get("title") or "").strip()
+            if not event_time or not title:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.update 缺少 event_time/title 或格式非法。",
+                )
+            current_item = self.db.get_schedule(schedule_id)
+            if current_item is None:
+                return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=f"未找到日程 #{schedule_id}")
+            if "duration_minutes" in payload:
+                parsed_duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("duration_minutes"))
+                if parsed_duration_minutes is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.update duration_minutes 需为 >=1 的整数。",
+                    )
+            else:
+                parsed_duration_minutes = None
+            if parsed_duration_minutes is not None:
+                applied_duration_minutes = parsed_duration_minutes
+            else:
+                applied_duration_minutes = current_item.duration_minutes
+            has_remind = "remind_at" in payload
+            parsed_remind_at = _normalize_optional_datetime_value(payload.get("remind_at"), key_present=has_remind)
+            if parsed_remind_at is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.update remind_at 格式非法。",
+                )
+            if "interval_minutes" in payload:
+                repeat_interval_minutes = _normalize_schedule_interval_minutes_value(payload.get("interval_minutes"))
+                if repeat_interval_minutes is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.update interval_minutes 需为 >=1 的整数。",
+                    )
+            else:
+                repeat_interval_minutes = None
+            if "times" in payload:
+                repeat_times = _normalize_schedule_repeat_times_value(payload.get("times"))
+                if repeat_times is None:
+                    return PlannerObservation(
+                        tool="schedule",
+                        input_text=raw_input,
+                        ok=False,
+                        result="schedule.update times 需为 -1 或 >=2 的整数。",
+                    )
+            else:
+                repeat_times = -1 if repeat_interval_minutes is not None else 1
+            has_repeat_remind_start_time = "remind_start_time" in payload
+            repeat_remind_start_time = _normalize_optional_datetime_value(
+                payload.get("remind_start_time"),
+                key_present=has_repeat_remind_start_time,
+            )
+            if repeat_remind_start_time is _INVALID_OPTION_VALUE:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.update remind_start_time 格式非法。",
+                )
+            if repeat_interval_minutes is None and repeat_times != 1:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.update 提供 times 时必须同时提供 interval_minutes。",
+                )
+            if repeat_interval_minutes is not None and repeat_times == 1:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.update interval_minutes 存在时，times 不能为 1。",
+                )
+            if has_repeat_remind_start_time and repeat_interval_minutes is None:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result="schedule.update 提供 remind_start_time 时必须提供 interval_minutes。",
+                )
+            event_times = _build_schedule_event_times(
+                event_time=event_time,
+                repeat_interval_minutes=repeat_interval_minutes,
+                repeat_times=repeat_times,
+                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
+            )
+            conflicts = self.db.find_schedule_conflicts(
+                event_times,
+                duration_minutes=applied_duration_minutes,
+                exclude_schedule_id=schedule_id,
+            )
+            if conflicts:
+                return PlannerObservation(
+                    tool="schedule",
+                    input_text=raw_input,
+                    ok=False,
+                    result=_format_schedule_conflicts(conflicts),
+                )
+            schedule_update_kwargs: dict[str, Any] = {
+                "title": title,
+                "event_time": event_time,
+                "duration_minutes": applied_duration_minutes,
+            }
+            if has_remind:
+                schedule_update_kwargs["remind_at"] = parsed_remind_at
+            if has_repeat_remind_start_time:
+                schedule_update_kwargs["repeat_remind_start_time"] = repeat_remind_start_time
+            updated = self.db.update_schedule(schedule_id, **schedule_update_kwargs)
+            if not updated:
+                return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=f"未找到日程 #{schedule_id}")
+            if repeat_times == 1:
+                self.db.clear_schedule_recurrence(schedule_id)
+                item = self.db.get_schedule(schedule_id)
+                remind_meta = _format_schedule_remind_meta_inline(
+                    remind_at=item.remind_at if item else None,
+                    repeat_remind_start_time=item.repeat_remind_start_time if item else None,
+                )
+                result = f"已更新日程 #{schedule_id}: {event_time} {title} ({applied_duration_minutes} 分钟){remind_meta}"
+                ok = _is_planner_command_success(result, tool="schedule")
+                return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
+            if repeat_interval_minutes is not None:
+                remind_start_for_rule = (
+                    repeat_remind_start_time
+                    if has_repeat_remind_start_time
+                    else current_item.repeat_remind_start_time
+                )
+                self.db.set_schedule_recurrence(
+                    schedule_id,
+                    start_time=event_time,
+                    repeat_interval_minutes=repeat_interval_minutes,
+                    repeat_times=repeat_times,
+                    remind_start_time=remind_start_for_rule,
+                )
+            item = self.db.get_schedule(schedule_id)
+            remind_meta = _format_schedule_remind_meta_inline(
+                remind_at=item.remind_at if item else None,
+                repeat_remind_start_time=item.repeat_remind_start_time if item else None,
+            )
+            if repeat_times == -1:
+                result = (
+                    f"已更新为无限重复日程 #{schedule_id}: {event_time} {title} "
+                    f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m{remind_meta})"
+                )
+            else:
+                result = (
+                    f"已更新日程 #{schedule_id}: {event_time} {title} "
+                    f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m, "
+                    f"times={repeat_times}{remind_meta})"
+                )
+            ok = _is_planner_command_success(result, tool="schedule")
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
+
+        if action == "delete":
+            deleted = self.db.delete_schedule(schedule_id)
+            if not deleted:
+                result = f"未找到日程 #{schedule_id}"
+            else:
+                result = f"日程 #{schedule_id} 已删除。"
+            ok = _is_planner_command_success(result, tool="schedule")
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
+
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            return PlannerObservation(
+                tool="schedule",
+                input_text=raw_input,
+                ok=False,
+                result="schedule.repeat 需要 enabled 布尔值。",
+            )
+        changed = self.db.set_schedule_recurrence_enabled(schedule_id, enabled)
+        if not changed:
+            result = f"日程 #{schedule_id} 没有可切换的重复规则。"
+        else:
+            status = "启用" if enabled else "停用"
+            result = f"已{status}日程 #{schedule_id} 的重复规则。"
+        ok = _is_planner_command_success(result, tool="schedule")
+        return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
+
+    def _execute_history_search_system_action(
+        self,
+        payload: dict[str, Any],
+        *,
+        raw_input: str,
+    ) -> PlannerObservation:
+        keyword = str(payload.get("keyword") or "").strip()
+        if not keyword:
+            return PlannerObservation(
+                tool="history_search",
+                input_text=raw_input,
+                ok=False,
+                result="history_search.keyword 不能为空。",
+            )
+        if "limit" in payload:
+            parsed_limit = _normalize_positive_int_value(payload.get("limit"))
+            if parsed_limit is None:
+                return PlannerObservation(
+                    tool="history_search",
+                    input_text=raw_input,
+                    ok=False,
+                    result="history_search.limit 必须为正整数。",
+                )
+            history_limit = min(parsed_limit, MAX_HISTORY_LIST_LIMIT)
+        else:
+            history_limit = DEFAULT_HISTORY_LIST_LIMIT
+        turns = self.db.search_turns(keyword, limit=history_limit)
+        if not turns:
+            result = f"未找到包含“{keyword}”的历史会话。"
+            ok = _is_planner_command_success(result, tool="history_search")
+            return PlannerObservation(tool="history_search", input_text=raw_input, ok=ok, result=result)
+        rows = [
+            [
+                str(index),
+                _truncate_text(item.user_content, 300) or "-",
+                _truncate_text(item.assistant_content, 300) or "-",
+                item.created_at,
+            ]
+            for index, item in enumerate(turns, start=1)
+        ]
+        table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=rows)
+        result = f"历史搜索(关键词: {keyword}, 命中 {len(turns)} 轮):\n{table}"
+        ok = _is_planner_command_success(result, tool="history_search")
+        return PlannerObservation(tool="history_search", input_text=raw_input, ok=ok, result=result)
 
     def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> PlannerObservation:
         truncated = _truncate_text(observation.result, self._plan_observation_char_limit)
@@ -2321,6 +3369,41 @@ def _sanitize_tag(tag: str | None) -> str | None:
     if not normalized:
         return None
     return re.sub(r"\s+", "-", normalized)
+
+
+_INVALID_OPTION_VALUE = object()
+
+
+def _normalize_optional_datetime_value(value: Any, *, key_present: bool) -> str | None | object:
+    if not key_present:
+        return None
+    if value is None:
+        return None
+    normalized = _normalize_datetime_text(str(value))
+    if normalized is None:
+        return _INVALID_OPTION_VALUE
+    return normalized
+
+
+def _normalize_positive_int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text.isdigit():
+        return None
+    parsed = int(text)
+    if parsed <= 0:
+        return None
+    return parsed
 
 
 def _normalize_todo_tag_value(value: Any) -> str | None:

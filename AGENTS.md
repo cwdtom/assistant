@@ -67,7 +67,7 @@ Supported input forms in CLI:
 ## Supplement: Runtime Flags (moved from README)
 Default model:
 - `DEEPSEEK_MODEL=deepseek-chat` (general)
-- optional `deepseek-reasoner` (stronger reasoning, usually slower)
+- 当前 thought tool-calling 链路不支持 `deepseek-reasoner` / thinking 模式；检测到 reasoning 输出会直接报错
 
 Optional runtime flags (all supported in `.env`):
 - `LLM_TEMPERATURE`: temperature for all LLM calls (default `0.3`, range `0.0~2.0`)
@@ -130,8 +130,8 @@ Optional runtime flags (all supported in `.env`):
 - Todo/schedule query outputs use table-style formatting in CLI.
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
-- Supported thought actions: `todo|schedule|internet_search|history_search|ask_user`.
-- `ask_user` must use `status=ask_user`; `status=continue` is for tool actions only.
+- Thought uses chat tool-calling with tools: `todo|schedule|internet_search|history_search|ask_user|done`.
+- `todo/schedule/history_search` tool calls must pass structured arguments; do not pass `/todo` or `/schedule` command strings.
 - Time unit contract is enforced in thought context to reduce unit mistakes.
 - `ask_user` sends a single clarification question prefixed with `请确认：...`.
 - `TASK_CANCEL_COMMAND` phrase interrupts current task loop.

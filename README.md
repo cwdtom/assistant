@@ -2,6 +2,7 @@
 
 一个中文优先的本地 CLI 个人助手。当前代码已实现：
 - 自然语言任务执行（plan -> thought -> act -> observe -> replan）
+- thought 阶段使用 chat tool-calling（结构化参数）直接调用本地系统函数
 - 待办管理（CRUD、标签、优先级、视图、搜索、提醒）
 - 日程管理（CRUD、时长、重复规则、提醒、冲突检测、日历视图）
 - 历史会话持久化与检索
@@ -56,7 +57,8 @@ python main.py
 说明：
 - `/todo add|update` 支持 `--tag --priority --due --remind`
 - `/schedule add|update` 支持 `--duration --remind --interval --times --remind-start`
-- 非 `/` 开头输入会进入 plan/replan 流程，由模型决定调用本地工具或提问澄清
+- 非 `/` 开头输入会进入 plan/replan 流程；thought 使用 tool-calling 并以结构化参数直接执行本地动作（不走 `/todo` 命令串）
+- 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环
