@@ -94,14 +94,14 @@ Optional runtime flags (all supported in `.env`):
 - `USER_PROFILE_PATH`: user profile markdown path injected into plan/replan context
 - `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
 - `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
-- `LLM_TRACE_LOG_PATH`: LLM trace log path (default `logs/llm_trace.log`, empty to disable)
+- `LLM_TRACE_LOG_PATH`: LLM trace log path (default follows `APP_LOG_PATH`, empty to disable)
 - `FEISHU_ENABLED`: enable Feishu long connection (default `false`)
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`: Feishu app credentials
 - `FEISHU_ALLOWED_OPEN_IDS`: open_id whitelist (comma separated)
 - `FEISHU_SEND_RETRY_COUNT`: send retry count (default `3`)
 - `FEISHU_TEXT_CHUNK_SIZE`: long message chunk size (default `1500`)
 - `FEISHU_DEDUP_TTL_SECONDS`: dedup window in seconds (default `600`)
-- `FEISHU_LOG_PATH`: Feishu log path (default `logs/feishu.log`)
+- `FEISHU_LOG_PATH`: Feishu log path (default follows `APP_LOG_PATH`)
 - `FEISHU_LOG_RETENTION_DAYS`: Feishu log retention days (default `7`)
 - `FEISHU_ACK_REACTION_ENABLED`: send ack reaction on incoming DM (default `true`)
 - `FEISHU_ACK_EMOJI_TYPE`: ack emoji type (default `OK`)
@@ -138,7 +138,7 @@ Optional runtime flags (all supported in `.env`):
 - Local reminder output can also be persona-rewritten (fallback on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
-- Runtime logs use JSON Lines format (`app.log` / `llm_trace.log` / `feishu.log`) to support machine filtering.
+- Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 
 ## Supplement: View Semantics (moved from README)
 - `all`: all todos (including done)
