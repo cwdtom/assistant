@@ -16,11 +16,11 @@ PLANNER_CAPABILITIES_TEXT = """
 PLAN_INTENT_EXPANSION_RULE = (
     "先将用户口语化表达扩展成可执行且信息完整的目标再写计划步骤"
     "（如“看一下/看看/查一下”通常表示“查询并列出来给用户查看”；"
-    "若关键信息缺失，优先结合 recent_chat_turns 与 user_profile 补全默认信息。"
+    "若关键信息缺失，优先结合历史对话 messages 与 user_profile 补全默认信息。"
     "例如“看一下明天的天气”可扩展为“查询用户默认城市的明天天气，并输出天气结果与衣着建议”）"
 )
 PLANNER_HISTORY_RULE = (
-    "输入上下文会提供 recent_chat_turns（近 24 小时，最多 50 轮）"
+    "请求 messages 中会追加历史对话（近 24 小时，最多 50 轮）"
     "，可用于补全上下文与引用历史约束。"
 )
 PLANNER_USER_PROFILE_RULE = (

@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -131,6 +132,7 @@ class OuterPlanContext:
     latest_plan: list[PlanStep] = field(default_factory=list)
     current_plan_index: int = 0
     completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
+    outer_messages: list[dict[str, str]] | None = None
 
 
 @dataclass
@@ -138,6 +140,7 @@ class InnerReActContext:
     current_subtask: str = ""
     completed_subtasks: list[CompletedSubtask] = field(default_factory=list)
     observations: list[PlannerObservation] = field(default_factory=list)
+    thought_messages: list[dict[str, str]] = field(default_factory=list)
     response: str | None = None
 
 
@@ -225,12 +228,14 @@ class AssistantAgent:
 
     def _new_inner_context(self, task: PendingPlanTask) -> InnerReActContext:
         outer = self._outer_context(task)
+        outer_messages = self._ensure_outer_messages(task)
         return InnerReActContext(
             current_subtask=self._current_plan_item_text(task),
             completed_subtasks=[
                 CompletedSubtask(item=item.item, result=item.result) for item in outer.completed_subtasks
             ],
             observations=[],
+            thought_messages=[{"role": "system", "content": THOUGHT_PROMPT}, *deepcopy(outer_messages)],
             response=None,
         )
 
@@ -576,7 +581,8 @@ class AssistantAgent:
             self._raise_if_task_interrupted()
             task.step_count += 1
             observation = self._execute_planner_tool(action_tool=action_tool, action_input=action_input)
-            self._append_observation(task, observation)
+            normalized_observation = self._append_observation(task, observation)
+            self._append_thought_observation_message(task, normalized_observation)
             status_text = "成功" if observation.ok else "失败"
             if observation.ok:
                 task.successful_steps += 1
@@ -598,21 +604,56 @@ class AssistantAgent:
             return None
 
         planner_messages = self._build_plan_messages(task)
-        return self._request_payload_with_retry(planner_messages, normalize_plan_decision)
+        payload = self._request_payload_with_retry(planner_messages, normalize_plan_decision)
+        if payload is None:
+            return None
+        decision = payload.get("decision")
+        user_payload = _try_parse_json(planner_messages[-1].get("content", ""))
+        if isinstance(decision, dict) and isinstance(user_payload, dict):
+            self._append_outer_message_turn(
+                task=task,
+                user_payload=user_payload,
+                assistant_phase="plan_decision",
+                decision=decision,
+            )
+        return payload
 
     def _request_thought_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
         if not self.llm_client:
             return None
 
-        planner_messages = self._build_thought_messages(task)
-        return self._request_payload_with_retry(planner_messages, normalize_thought_decision)
+        planner_messages = self._ensure_thought_messages(task)
+        context_payload = self._build_thought_context(task)
+        context_payload["phase"] = "thought"
+        context_payload["current_plan_item"] = self._current_plan_item_text(task)
+        planner_messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
+        request_messages = [dict(item) for item in planner_messages]
+        payload = self._request_payload_with_retry(request_messages, normalize_thought_decision)
+        if payload is None:
+            return None
+        decision = payload.get("decision")
+        if isinstance(decision, dict):
+            self._append_thought_decision_message(task, decision)
+        return payload
 
     def _request_replan_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
         if not self.llm_client:
             return None
 
         planner_messages = self._build_replan_messages(task)
-        return self._request_payload_with_retry(planner_messages, normalize_replan_decision)
+        payload = self._request_payload_with_retry(planner_messages, normalize_replan_decision)
+        if payload is None:
+            return None
+        decision = payload.get("decision")
+        user_payload = _try_parse_json(planner_messages[-1].get("content", ""))
+        if isinstance(decision, dict) and isinstance(user_payload, dict):
+            self._append_outer_message_turn(
+                task=task,
+                user_payload=user_payload,
+                assistant_phase="replan_decision",
+                decision=decision,
+            )
+        return payload
 
     def _request_payload_with_retry(
         self,
@@ -667,38 +708,90 @@ class AssistantAgent:
         return None
 
     def _build_plan_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+        outer_messages = deepcopy(self._ensure_outer_messages(task))
         context_payload = self._build_planner_context(task)
         context_payload["phase"] = "plan"
-        return [
-            {"role": "system", "content": PLAN_ONCE_PROMPT},
-            {"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)},
-        ]
+        messages: list[dict[str, str]] = [{"role": "system", "content": PLAN_ONCE_PROMPT}]
+        messages.extend(outer_messages)
+        messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
+        return messages
 
     def _build_thought_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+        outer_messages = deepcopy(self._ensure_outer_messages(task))
         context_payload = self._build_thought_context(task)
         context_payload["phase"] = "thought"
         context_payload["current_plan_item"] = self._current_plan_item_text(task)
-        return [
-            {"role": "system", "content": THOUGHT_PROMPT},
-            {"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)},
-        ]
+        messages: list[dict[str, str]] = [{"role": "system", "content": THOUGHT_PROMPT}]
+        messages.extend(outer_messages)
+        messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
+        return messages
+
+    def _ensure_thought_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+        inner = self._ensure_inner_context(task)
+        if inner.thought_messages:
+            return inner.thought_messages
+        outer_messages = deepcopy(self._ensure_outer_messages(task))
+        inner.thought_messages = [{"role": "system", "content": THOUGHT_PROMPT}, *outer_messages]
+        return inner.thought_messages
+
+    def _append_thought_decision_message(self, task: PendingPlanTask, decision: dict[str, Any]) -> None:
+        messages = self._ensure_thought_messages(task)
+        decision_payload = {
+            "phase": "thought_decision",
+            "decision": decision,
+        }
+        messages.append({"role": "assistant", "content": json.dumps(decision_payload, ensure_ascii=False)})
+
+    def _append_thought_observation_message(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
+        messages = self._ensure_thought_messages(task)
+        observation_payload = {
+            "phase": "thought_observation",
+            "observation": {
+                "tool": observation.tool,
+                "input": observation.input_text,
+                "ok": observation.ok,
+                "result": observation.result,
+            },
+        }
+        messages.append({"role": "user", "content": json.dumps(observation_payload, ensure_ascii=False)})
 
     def _build_replan_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
+        outer_messages = deepcopy(self._ensure_outer_messages(task))
         context_payload = self._build_planner_context(task)
         context_payload["phase"] = "replan"
         context_payload["current_plan_item"] = self._current_plan_item_text(task)
-        return [
-            {"role": "system", "content": REPLAN_PROMPT},
-            {"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)},
-        ]
+        messages: list[dict[str, str]] = [{"role": "system", "content": REPLAN_PROMPT}]
+        messages.extend(outer_messages)
+        messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
+        return messages
 
-    def _build_planner_context(self, task: PendingPlanTask) -> dict[str, Any]:
+    def _ensure_outer_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
         outer = self._outer_context(task)
-        completed_subtasks = self._serialize_completed_subtasks(outer.completed_subtasks)
+        if outer.outer_messages is not None:
+            return outer.outer_messages
         recent_chat_turns = self.db.recent_turns_for_planner(
             lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
             limit=PLAN_HISTORY_MAX_TURNS,
         )
+        outer.outer_messages = self._serialize_chat_turns_as_messages(recent_chat_turns)
+        return outer.outer_messages
+
+    def _append_outer_message_turn(
+        self,
+        *,
+        task: PendingPlanTask,
+        user_payload: dict[str, Any],
+        assistant_phase: str,
+        decision: dict[str, Any],
+    ) -> None:
+        outer_messages = self._ensure_outer_messages(task)
+        outer_messages.append({"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)})
+        assistant_payload = {"phase": assistant_phase, "decision": decision}
+        outer_messages.append({"role": "assistant", "content": json.dumps(assistant_payload, ensure_ascii=False)})
+
+    def _build_planner_context(self, task: PendingPlanTask) -> dict[str, Any]:
+        outer = self._outer_context(task)
+        completed_subtasks = self._serialize_completed_subtasks(outer.completed_subtasks)
         context_payload = {
             "goal": outer.goal,
             "clarification_history": self._serialize_clarification_history(outer.clarification_history),
@@ -707,7 +800,6 @@ class AssistantAgent:
             "latest_plan": self._serialize_latest_plan(outer.latest_plan),
             "current_plan_index": outer.current_plan_index,
             "completed_subtasks": completed_subtasks,
-            "recent_chat_turns": self._serialize_chat_turns(recent_chat_turns),
             "user_profile": self._serialize_user_profile(),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
@@ -716,10 +808,6 @@ class AssistantAgent:
     def _build_thought_context(self, task: PendingPlanTask) -> dict[str, Any]:
         outer = self._outer_context(task)
         inner = self._ensure_inner_context(task)
-        recent_chat_turns = self.db.recent_turns_for_planner(
-            lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
-            limit=PLAN_HISTORY_MAX_TURNS,
-        )
         current_subtask_observations = self._serialize_observations(
             inner.observations[-self._plan_observation_history_limit :]
         )
@@ -739,7 +827,6 @@ class AssistantAgent:
             "current_subtask": current_subtask,
             "completed_subtasks": completed_subtasks,
             "current_subtask_observations": current_subtask_observations,
-            "recent_chat_turns": self._serialize_chat_turns(recent_chat_turns),
             "user_profile": self._serialize_user_profile(),
             "tool_contract": PLAN_TOOL_CONTRACT,
             "time_unit_contract": PLAN_TIME_UNIT_CONTRACT,
@@ -841,15 +928,14 @@ class AssistantAgent:
         ]
 
     @staticmethod
-    def _serialize_chat_turns(chat_turns: list[ChatTurn]) -> list[dict[str, str]]:
-        return [
-            {
-                "user_content": item.user_content,
-                "assistant_content": item.assistant_content,
-                "created_at": item.created_at,
-            }
-            for item in chat_turns
-        ]
+    def _serialize_chat_turns_as_messages(chat_turns: list[ChatTurn]) -> list[dict[str, str]]:
+        history_messages: list[dict[str, str]] = []
+        for item in chat_turns:
+            if item.user_content.strip():
+                history_messages.append({"role": "user", "content": item.user_content})
+            if item.assistant_content.strip():
+                history_messages.append({"role": "assistant", "content": item.assistant_content})
+        return history_messages
 
     @staticmethod
     def _current_plan_item_text(task: PendingPlanTask) -> str:
@@ -990,7 +1076,7 @@ class AssistantAgent:
             result=f"未知工具: {action_tool}",
         )
 
-    def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
+    def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> PlannerObservation:
         truncated = _truncate_text(observation.result, self._plan_observation_char_limit)
         normalized = PlannerObservation(
             tool=observation.tool,
@@ -1001,6 +1087,7 @@ class AssistantAgent:
         task.observations.append(normalized)
         inner = self._ensure_inner_context(task)
         inner.observations.append(normalized)
+        return normalized
 
     def _append_planner_decision_observation(
         self,

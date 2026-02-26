@@ -98,6 +98,31 @@ def _extract_phase_from_messages(messages: list[dict[str, str]]) -> str:
     return str(payload.get("phase") or "").strip().lower()
 
 
+def _extract_payload_from_messages(messages: list[dict[str, str]]) -> dict[str, Any]:
+    parsed = _try_parse_json(messages[-1].get("content", ""))
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _extract_history_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    if len(messages) <= 2:
+        return []
+    return messages[1:-1]
+
+
+def _message_payloads_by_phase(messages: list[dict[str, str]], phase: str) -> list[dict[str, Any]]:
+    matched: list[dict[str, Any]] = []
+    for item in messages:
+        payload = _try_parse_json(item.get("content", ""))
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("phase") or "").strip().lower() != phase:
+            continue
+        matched.append(payload)
+    return matched
+
+
 def _is_summary_like_step(step: str) -> bool:
     normalized = step.strip()
     if not normalized:
@@ -1366,17 +1391,17 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("plan 模块", first_messages[0]["content"])
         self.assertIn("看一下/看看/查一下", first_messages[0]["content"])
         self.assertIn("查询并列出来给用户查看", first_messages[0]["content"])
-        self.assertIn("recent_chat_turns 与 user_profile 补全默认信息", first_messages[0]["content"])
+        self.assertIn("历史对话 messages 与 user_profile 补全默认信息", first_messages[0]["content"])
         self.assertIn("查询用户默认城市的明天天气，并输出天气结果与衣着建议", first_messages[0]["content"])
         self.assertIn("history_search", first_messages[0]["content"])
-        self.assertIn("recent_chat_turns", first_messages[0]["content"])
-        planner_user_payload = json.loads(first_messages[1]["content"])
+        self.assertIn("历史对话", first_messages[0]["content"])
+        planner_user_payload = _extract_payload_from_messages(first_messages)
         self.assertNotIn("tool_contract", planner_user_payload)
         self.assertNotIn("observations", planner_user_payload)
         self.assertNotIn("time_unit_contract", planner_user_payload)
         self.assertNotIn("pending_final_response", planner_user_payload)
         self.assertIn("completed_subtasks", planner_user_payload)
-        self.assertIn("recent_chat_turns", planner_user_payload)
+        self.assertNotIn("recent_chat_turns", planner_user_payload)
 
     def test_replan_prompt_excludes_tool_context_and_uses_completed_subtasks(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1393,12 +1418,12 @@ class AssistantAgentTest(unittest.TestCase):
 
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
         self.assertEqual(len(replan_calls), 1)
-        replan_payload = json.loads(replan_calls[0][1]["content"])
+        replan_payload = _extract_payload_from_messages(replan_calls[0])
         self.assertNotIn("tool_contract", replan_payload)
         self.assertNotIn("observations", replan_payload)
         self.assertNotIn("time_unit_contract", replan_payload)
         self.assertNotIn("pending_final_response", replan_payload)
-        self.assertIn("recent_chat_turns", replan_payload)
+        self.assertNotIn("recent_chat_turns", replan_payload)
         latest_plan = replan_payload.get("latest_plan", [])
         self.assertEqual(
             latest_plan,
@@ -1431,18 +1456,18 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertGreaterEqual(len(thought_calls), 2)
         self.assertIn("history_search", thought_calls[0][0]["content"])
 
-        first_thought_payload = json.loads(thought_calls[0][1]["content"])
+        first_thought_payload = _extract_payload_from_messages(thought_calls[0])
         self.assertIn("current_subtask", first_thought_payload)
         self.assertIn("current_subtask_observations", first_thought_payload)
         self.assertIn("completed_subtasks", first_thought_payload)
-        self.assertIn("recent_chat_turns", first_thought_payload)
+        self.assertNotIn("recent_chat_turns", first_thought_payload)
         self.assertIn("user_profile", first_thought_payload)
         self.assertIn("time_unit_contract", first_thought_payload)
         self.assertNotIn("goal", first_thought_payload)
         self.assertNotIn("latest_plan", first_thought_payload)
         self.assertNotIn("observations", first_thought_payload)
 
-        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        second_thought_payload = _extract_payload_from_messages(thought_calls[1])
         completed = second_thought_payload.get("completed_subtasks", [])
         self.assertTrue(completed)
         self.assertEqual(completed[0].get("item"), "步骤一")
@@ -1467,7 +1492,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
         self.assertEqual(len(replan_calls), 2)
-        last_replan_payload = json.loads(replan_calls[-1][1]["content"])
+        last_replan_payload = _extract_payload_from_messages(replan_calls[-1])
         completed = last_replan_payload.get("completed_subtasks", [])
         self.assertEqual(len(completed), 2)
         self.assertEqual(completed[0].get("item"), "步骤一")
@@ -1475,7 +1500,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("步骤一已完成", completed[0].get("result", ""))
         self.assertIn("步骤二已完成", completed[1].get("result", ""))
 
-    def test_plan_and_replan_payload_include_recent_chat_turns_with_window_and_limit(self) -> None:
+    def test_plan_and_replan_messages_include_recent_chat_turns_with_window_and_limit(self) -> None:
         for idx in range(1, 61):
             self.db.save_turn(user_content=f"问{idx}", assistant_content=f"答{idx}")
         conn = sqlite3.connect(self.db.db_path)
@@ -1507,18 +1532,42 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(len(thought_calls), 1)
         self.assertEqual(len(replan_calls), 1)
 
-        plan_payload = json.loads(plan_calls[0][1]["content"])
-        thought_payload = json.loads(thought_calls[0][1]["content"])
-        replan_payload = json.loads(replan_calls[0][1]["content"])
-        plan_turns = plan_payload.get("recent_chat_turns", [])
-        thought_turns = thought_payload.get("recent_chat_turns", [])
-        replan_turns = replan_payload.get("recent_chat_turns", [])
-        self.assertEqual(len(plan_turns), 50)
-        self.assertEqual(len(thought_turns), 50)
-        self.assertEqual(len(replan_turns), 50)
-        self.assertEqual(plan_turns[0].get("user_content"), "问11")
-        self.assertEqual(plan_turns[-1].get("user_content"), "问60")
-        self.assertNotIn("问1", [str(item.get("user_content")) for item in plan_turns])
+        plan_payload = _extract_payload_from_messages(plan_calls[0])
+        thought_payload = _extract_payload_from_messages(thought_calls[0])
+        replan_payload = _extract_payload_from_messages(replan_calls[0])
+        self.assertNotIn("recent_chat_turns", plan_payload)
+        self.assertNotIn("recent_chat_turns", thought_payload)
+        self.assertNotIn("recent_chat_turns", replan_payload)
+
+        plan_history_messages = _extract_history_messages(plan_calls[0])
+        thought_history_messages = _extract_history_messages(thought_calls[0])
+        replan_history_messages = _extract_history_messages(replan_calls[0])
+        self.assertEqual(len(plan_history_messages), 100)
+        self.assertEqual(len(thought_history_messages), 102)
+        self.assertEqual(len(replan_history_messages), 102)
+        self.assertEqual(plan_history_messages[0], {"role": "user", "content": "问11"})
+        self.assertEqual(plan_history_messages[1], {"role": "assistant", "content": "答11"})
+        self.assertEqual(plan_history_messages[-2], {"role": "user", "content": "问60"})
+        self.assertEqual(plan_history_messages[-1], {"role": "assistant", "content": "答60"})
+        self.assertNotIn({"role": "user", "content": "问1"}, plan_history_messages)
+        self.assertEqual(
+            thought_history_messages[-2],
+            {
+                "role": "user",
+                "content": json.dumps(plan_payload, ensure_ascii=False),
+            },
+        )
+        self.assertEqual(
+            thought_history_messages[-1],
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {"phase": "plan_decision", "decision": {"status": "planned", "plan": ["步骤一"]}},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        self.assertEqual(replan_history_messages, thought_history_messages)
 
     def test_plan_and_replan_payload_include_user_profile_when_configured(self) -> None:
         profile_file = Path(self.tmp.name) / "user_profile.md"
@@ -1552,9 +1601,9 @@ class AssistantAgentTest(unittest.TestCase):
             "path": str(profile_file.resolve()),
             "content": "昵称: 凛\n偏好: 先结论后细节",
         }
-        plan_payload = json.loads(plan_calls[0][1]["content"])
-        replan_payload = json.loads(replan_calls[0][1]["content"])
-        first_thought_payload = json.loads(thought_calls[0][1]["content"])
+        plan_payload = json.loads(plan_calls[0][-1]["content"])
+        replan_payload = json.loads(replan_calls[0][-1]["content"])
+        first_thought_payload = json.loads(thought_calls[0][-1]["content"])
         self.assertEqual(plan_payload.get("user_profile"), expected_profile)
         self.assertEqual(replan_payload.get("user_profile"), expected_profile)
         self.assertEqual(first_thought_payload.get("user_profile"), expected_profile)
@@ -1584,9 +1633,9 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(len(plan_calls), 1)
         self.assertEqual(len(thought_calls), 1)
         self.assertEqual(len(replan_calls), 1)
-        plan_payload = json.loads(plan_calls[0][1]["content"])
-        thought_payload = json.loads(thought_calls[0][1]["content"])
-        replan_payload = json.loads(replan_calls[0][1]["content"])
+        plan_payload = json.loads(plan_calls[0][-1]["content"])
+        thought_payload = json.loads(thought_calls[0][-1]["content"])
+        replan_payload = json.loads(replan_calls[0][-1]["content"])
         self.assertIsNone(plan_payload.get("user_profile"))
         self.assertIsNone(thought_payload.get("user_profile"))
         self.assertIsNone(replan_payload.get("user_profile"))
@@ -1629,7 +1678,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         self.assertGreaterEqual(len(thought_calls), 2)
-        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        second_thought_payload = json.loads(thought_calls[1][-1]["content"])
         current_subtask = second_thought_payload.get("current_subtask", {})
         self.assertEqual(current_subtask.get("item"), "A")
 
@@ -1671,12 +1720,23 @@ class AssistantAgentTest(unittest.TestCase):
 
         thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         self.assertEqual(len(thought_calls), 2)
-        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        second_thought_payload = json.loads(thought_calls[1][-1]["content"])
         observations = second_thought_payload.get("current_subtask_observations", [])
         self.assertGreaterEqual(len(observations), 2)
         observed_tools = {str(item.get("tool")) for item in observations}
         self.assertIn("thought", observed_tools)
         self.assertIn("todo", observed_tools)
+
+        second_call_messages = thought_calls[1]
+        decision_messages = _message_payloads_by_phase(second_call_messages, "thought_decision")
+        self.assertTrue(decision_messages)
+        latest_decision = decision_messages[-1].get("decision", {})
+        self.assertEqual(str(latest_decision.get("status")), "continue")
+        observation_messages = _message_payloads_by_phase(second_call_messages, "thought_observation")
+        self.assertTrue(observation_messages)
+        latest_observation = observation_messages[-1].get("observation", {})
+        self.assertEqual(str(latest_observation.get("tool")), "todo")
+        self.assertTrue(latest_observation.get("ok"))
 
     def test_thought_context_observations_history_is_limited_by_config(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1700,7 +1760,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         self.assertEqual(len(thought_calls), 2)
-        second_thought_payload = json.loads(thought_calls[1][1]["content"])
+        second_thought_payload = json.loads(thought_calls[1][-1]["content"])
         observations = second_thought_payload.get("current_subtask_observations", [])
         self.assertEqual(len(observations), 2)
         self.assertEqual(observations[0].get("tool"), "thought")
@@ -1726,7 +1786,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         thought_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "thought"]
         self.assertGreaterEqual(len(thought_calls), 3)
-        first_thought_second_subtask = json.loads(thought_calls[2][1]["content"])
+        first_thought_second_subtask = json.loads(thought_calls[2][-1]["content"])
         observations = first_thought_second_subtask.get("current_subtask_observations", [])
         self.assertEqual(observations, [])
         completed = first_thought_second_subtask.get("completed_subtasks", [])
@@ -1815,7 +1875,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
         self.assertTrue(replan_calls)
-        first_replan_payload = json.loads(replan_calls[0][1]["content"])
+        first_replan_payload = json.loads(replan_calls[0][-1]["content"])
         clarification_history = first_replan_payload.get("clarification_history", [])
         self.assertEqual(
             clarification_history,
