@@ -2314,6 +2314,44 @@ class AssistantAgentTest(unittest.TestCase):
         input_payload = _try_parse_json(str(next_action.get("input") or ""))
         self.assertEqual(input_payload, {"action": "list", "view": "today"})
 
+    def test_thought_tool_call_contract_maps_schedule_structured_action_with_tag(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_4",
+                "type": "function",
+                "function": {
+                    "name": "schedule",
+                    "arguments": json.dumps(
+                        {
+                            "action": "update",
+                            "id": 1,
+                            "event_time": "2026-03-01 10:00",
+                            "title": "站会",
+                            "tag": "work",
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "schedule")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(
+            input_payload,
+            {
+                "action": "update",
+                "id": 1,
+                "event_time": "2026-03-01 10:00",
+                "title": "站会",
+                "tag": "work",
+            },
+        )
+
     def test_plan_replan_internet_search_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[

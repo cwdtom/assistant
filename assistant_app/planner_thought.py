@@ -287,6 +287,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             "id",
             "event_time",
             "title",
+            "tag",
             "duration_minutes",
             "remind_at",
             "interval_minutes",
