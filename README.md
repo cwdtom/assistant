@@ -34,6 +34,29 @@ python main.py
 # 或 assistant
 ```
 
+可选：使用启动脚本（支持后台启动/重启）
+```bash
+# 后台启动
+./scripts/assistant.sh start
+
+# 重启
+./scripts/assistant.sh restart
+
+# 查看状态 / 停止
+./scripts/assistant.sh status
+./scripts/assistant.sh stop
+
+# 当前终端前台运行（等价于 python main.py）
+./scripts/assistant.sh run
+```
+
+说明：
+- `start`/`restart` 默认会先从 `origin/<当前分支>` 拉取：
+  - 远端领先：执行 fast-forward 合并；
+  - 本地领先：跳过合并，仅启动/重启；
+  - 分叉（双方都有新提交）：报错并退出，需先手动处理分支同步。
+- 如需跳过自动拉取，可临时执行：`ASSISTANT_AUTO_PULL=false ./scripts/assistant.sh start`
+
 ## Core Environment Variables
 - `DEEPSEEK_API_KEY`：必填
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`

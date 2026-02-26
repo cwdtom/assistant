@@ -170,6 +170,15 @@ sqlite3 /path/to/assistant.db < sql/init_assistant_db.sql
 # unit tests
 python -m unittest discover -s tests -p "test_*.py"
 
+# startup helper
+./scripts/assistant.sh start
+./scripts/assistant.sh restart
+./scripts/assistant.sh status
+./scripts/assistant.sh stop
+./scripts/assistant.sh run
+# start/restart 默认先 git fetch；若远端领先则 ff merge，本地领先则跳过，分叉则报错退出
+# 临时跳过自动拉取：ASSISTANT_AUTO_PULL=false ./scripts/assistant.sh start
+
 # lint/format/type-check
 ruff check .
 ruff format .
