@@ -82,7 +82,6 @@ Optional runtime flags (all supported in `.env`):
 - `BOCHA_API_KEY`: Bocha Web Search API key (fallback to Bing when empty)
 - `BOCHA_SEARCH_SUMMARY`: whether Bocha returns summary (default `true`)
 - `SCHEDULE_MAX_WINDOW_DAYS`: max days in schedule list window (default `31`)
-- `INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS`: preview days for infinite-repeat conflict checks (default `31`)
 - `TIMER_ENABLED`: enable local reminder thread (default `true`)
 - `TIMER_POLL_INTERVAL_SECONDS`: reminder poll interval (default `15`)
 - `TIMER_LOOKAHEAD_SECONDS`: reminder lookahead window (default `30`)
@@ -123,8 +122,7 @@ Optional runtime flags (all supported in `.env`):
 - `/schedule list` default window is from two days before now to +31 days.
 - `/schedule view` computes by explicit day/week/month anchor window.
 - CLI outputs repeat metadata for schedule list/detail.
-- Schedule conflict detection checks overlapping time ranges, including duration and repeats.
-- For infinite repeats (`times=-1`), conflict check is window-based with configurable preview days.
+- Schedule add/update allows overlapping time ranges; no conflict pre-check is performed.
 - Todo supports search and `all|today|overdue|upcoming|inbox` views.
 - Todo priority is integer with smaller value = higher priority (minimum `0`).
 - Todo/schedule query outputs use table-style formatting in CLI.

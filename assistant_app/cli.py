@@ -162,7 +162,6 @@ def main() -> None:
         task_cancel_command=config.task_cancel_command,
         internet_search_top_k=config.internet_search_top_k,
         schedule_max_window_days=config.schedule_max_window_days,
-        infinite_repeat_conflict_preview_days=config.infinite_repeat_conflict_preview_days,
         final_response_rewriter=persona_rewriter.rewrite_final_response,
     )
     timer_engine: TimerEngine | None = None

@@ -803,39 +803,37 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("窗口内会", list_resp)
         self.assertNotIn("远期会", list_resp)
 
-    def test_slash_schedule_conflict_detection(self) -> None:
+    def test_slash_schedule_allows_same_time_events(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-20 09:30 站会")
 
-        conflict = agent.handle_input("/schedule add 2026-02-20 09:30 周会")
-        self.assertIn("日程冲突", conflict)
-        self.assertIn("2026-02-20 09:30", conflict)
+        added = agent.handle_input("/schedule add 2026-02-20 09:30 周会")
+        self.assertIn("已添加日程 #2", added)
+        self.assertEqual([item.title for item in self.db.list_schedules()], ["站会", "周会"])
 
-    def test_slash_schedule_conflict_detection_with_duration_overlap(self) -> None:
+    def test_slash_schedule_allows_duration_overlap(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-20 09:30 站会 --duration 60")
 
-        overlap_conflict = agent.handle_input("/schedule add 2026-02-20 10:00 周会 --duration 30")
-        self.assertIn("日程冲突", overlap_conflict)
+        overlap_added = agent.handle_input("/schedule add 2026-02-20 10:00 周会 --duration 30")
+        self.assertIn("已添加日程 #2", overlap_added)
 
         non_overlap_ok = agent.handle_input("/schedule add 2026-02-20 10:30 复盘 --duration 30")
-        self.assertIn("已添加日程 #2", non_overlap_ok)
+        self.assertIn("已添加日程 #3", non_overlap_ok)
 
-    def test_slash_schedule_conflict_detection_with_repeat(self) -> None:
+    def test_slash_schedule_allows_repeat_overlap(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-27 09:30 固定会")
 
-        conflict = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 2")
-        self.assertIn("日程冲突", conflict)
-        self.assertIn("固定会", conflict)
+        repeated = agent.handle_input("/schedule add 2026-02-20 09:30 站会 --interval 10080 --times 2")
+        self.assertIn("已添加重复日程 2 条", repeated)
 
-    def test_slash_schedule_conflict_detection_with_infinite_repeat_window(self) -> None:
+    def test_slash_schedule_allows_infinite_repeat_overlap(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-15 10:00 固定会")
 
-        conflict = agent.handle_input("/schedule add 2026-02-15 00:00 高频循环 --interval 1")
-        self.assertIn("日程冲突", conflict)
-        self.assertIn("固定会", conflict)
+        repeated = agent.handle_input("/schedule add 2026-02-15 00:00 高频循环 --interval 1")
+        self.assertIn("已添加无限重复日程 #2", repeated)
 
     def test_slash_schedule_repeat_update_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -901,13 +899,13 @@ class AssistantAgentTest(unittest.TestCase):
         resp = agent.handle_input("/schedule repeat 1 off")
         self.assertIn("没有可切换的重复规则", resp)
 
-    def test_slash_schedule_update_conflict_detection(self) -> None:
+    def test_slash_schedule_update_allows_overlap(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/schedule add 2026-02-20 09:30 站会")
         agent.handle_input("/schedule add 2026-02-21 09:30 周会")
 
-        conflict = agent.handle_input("/schedule update 1 2026-02-21 09:30 复盘会")
-        self.assertIn("日程冲突", conflict)
+        updated = agent.handle_input("/schedule update 1 2026-02-21 09:30 复盘会")
+        self.assertIn("已更新日程 #1", updated)
 
     def test_slash_schedule_calendar_view_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -1109,20 +1107,20 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn(second_text, list_resp)
         self.assertIn(third_text, list_resp)
 
-    def test_nl_schedule_add_conflict_via_intent_model(self) -> None:
+    def test_nl_schedule_add_allows_overlap_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["新增日程", "总结结果"]),
                 _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会"),
-                _planner_done("日程冲突：站会"),
+                _planner_done("已添加周会。"),
             ]
         )
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
         self.db.add_schedule("站会", "2026-02-20 09:30")
 
         result = agent.handle_input("帮我加一个 2 月 20 号 9 点半周会")
-        self.assertIn("日程冲突", result)
-        self.assertIn("站会", result)
+        self.assertIn("已添加周会", result)
+        self.assertEqual(len(self.db.list_schedules()), 2)
 
     def test_nl_schedule_view_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
@@ -2389,7 +2387,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("待办 #1 已完成", response)
         self.assertEqual(fake_llm.model_call_count, 5)
 
-    def test_planner_tool_marks_not_found_or_conflict_as_failed(self) -> None:
+    def test_planner_tool_marks_not_found_and_history_miss_as_failed(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
         self.db.add_schedule("已有会议", "2026-03-01 10:00", duration_minutes=60)
 
@@ -2405,8 +2403,8 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertFalse(todo_observation.ok)
         self.assertIn("未找到待办 #999", todo_observation.result)
-        self.assertFalse(schedule_observation.ok)
-        self.assertIn("日程冲突", schedule_observation.result)
+        self.assertTrue(schedule_observation.ok)
+        self.assertIn("已添加日程", schedule_observation.result)
         self.assertFalse(history_observation.ok)
         self.assertIn("未找到包含", history_observation.result)
 

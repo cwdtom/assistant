@@ -27,7 +27,6 @@ class AppConfig:
     bocha_api_key: str | None
     bocha_search_summary: bool
     schedule_max_window_days: int
-    infinite_repeat_conflict_preview_days: int
     cli_progress_color: str
     timer_enabled: bool
     timer_poll_interval_seconds: int
@@ -103,11 +102,6 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         bocha_api_key=bocha_api_key,
         bocha_search_summary=_read_env_bool("BOCHA_SEARCH_SUMMARY", default=True),
         schedule_max_window_days=_read_env_int("SCHEDULE_MAX_WINDOW_DAYS", default=31, min_value=1),
-        infinite_repeat_conflict_preview_days=_read_env_int(
-            "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS",
-            default=31,
-            min_value=1,
-        ),
         cli_progress_color=(os.getenv("CLI_PROGRESS_COLOR") or "gray").strip().lower() or "gray",
         timer_enabled=_read_env_bool("TIMER_ENABLED", default=True),
         timer_poll_interval_seconds=_read_env_int("TIMER_POLL_INTERVAL_SECONDS", default=15, min_value=1),

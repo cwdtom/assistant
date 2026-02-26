@@ -43,7 +43,6 @@ TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+
 HISTORY_LIMIT_OPTION_PATTERN = re.compile(r"(^|\s)--limit\s+(\d+)")
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
-DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS = 31
 DEFAULT_PLAN_REPLAN_MAX_STEPS = 20
 DEFAULT_PLAN_REPLAN_RETRY_COUNT = 2
 DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT = 10000
@@ -224,7 +223,6 @@ class AssistantAgent:
         task_cancel_command: str = DEFAULT_TASK_CANCEL_COMMAND,
         internet_search_top_k: int = DEFAULT_INTERNET_SEARCH_TOP_K,
         schedule_max_window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
-        infinite_repeat_conflict_preview_days: int = DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS,
         user_profile_path: str = "",
         user_profile_max_chars: int = DEFAULT_USER_PROFILE_MAX_CHARS,
         final_response_rewriter: Callable[[str], str] | None = None,
@@ -254,7 +252,6 @@ class AssistantAgent:
         self._task_cancel_command = task_cancel_command.strip() or DEFAULT_TASK_CANCEL_COMMAND
         self._internet_search_top_k = max(internet_search_top_k, 1)
         self._schedule_max_window_days = max(schedule_max_window_days, 1)
-        self._infinite_repeat_conflict_preview_days = max(infinite_repeat_conflict_preview_days, 1)
         self._user_profile_max_chars = max(user_profile_max_chars, 1)
         self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
         self._final_response_rewriter = final_response_rewriter
@@ -1792,19 +1789,6 @@ class AssistantAgent:
                     ok=False,
                     result="schedule.add 提供 remind_start_time 时必须提供 interval_minutes。",
                 )
-            event_times = _build_schedule_event_times(
-                event_time=add_event_time,
-                repeat_interval_minutes=add_repeat_interval_minutes,
-                repeat_times=add_repeat_times,
-                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
-            )
-            conflicts = self.db.find_schedule_conflicts(
-                event_times,
-                duration_minutes=add_duration_minutes,
-            )
-            if conflicts:
-                result = _format_schedule_conflicts(conflicts)
-                return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=result)
             schedule_id = self.db.add_schedule(
                 title=add_title,
                 event_time=add_event_time,
@@ -1975,24 +1959,6 @@ class AssistantAgent:
                     input_text=raw_input,
                     ok=False,
                     result="schedule.update 提供 remind_start_time 时必须提供 interval_minutes。",
-                )
-            event_times = _build_schedule_event_times(
-                event_time=event_time,
-                repeat_interval_minutes=repeat_interval_minutes,
-                repeat_times=repeat_times,
-                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
-            )
-            conflicts = self.db.find_schedule_conflicts(
-                event_times,
-                duration_minutes=applied_duration_minutes,
-                exclude_schedule_id=schedule_id,
-            )
-            if conflicts:
-                return PlannerObservation(
-                    tool="schedule",
-                    input_text=raw_input,
-                    ok=False,
-                    result=_format_schedule_conflicts(conflicts),
                 )
             schedule_update_kwargs: dict[str, Any] = {
                 "title": title,
@@ -2723,18 +2689,6 @@ class AssistantAgent:
                 add_repeat_times,
                 add_repeat_remind_start_time,
             ) = add_schedule_parsed
-            event_times = _build_schedule_event_times(
-                event_time=add_event_time,
-                repeat_interval_minutes=add_repeat_interval_minutes,
-                repeat_times=add_repeat_times,
-                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
-            )
-            conflicts = self.db.find_schedule_conflicts(
-                event_times,
-                duration_minutes=add_duration_minutes,
-            )
-            if conflicts:
-                return _format_schedule_conflicts(conflicts)
             schedule_id = self.db.add_schedule(
                 title=add_title,
                 event_time=add_event_time,
@@ -2796,19 +2750,6 @@ class AssistantAgent:
                 applied_duration_minutes = parsed_duration_minutes
             else:
                 applied_duration_minutes = current_item.duration_minutes
-            event_times = _build_schedule_event_times(
-                event_time=event_time,
-                repeat_interval_minutes=repeat_interval_minutes,
-                repeat_times=repeat_times,
-                infinite_repeat_conflict_preview_days=self._infinite_repeat_conflict_preview_days,
-            )
-            conflicts = self.db.find_schedule_conflicts(
-                event_times,
-                duration_minutes=applied_duration_minutes,
-                exclude_schedule_id=schedule_id,
-            )
-            if conflicts:
-                return _format_schedule_conflicts(conflicts)
             schedule_update_kwargs: dict[str, Any] = {
                 "title": title,
                 "event_time": event_time,
@@ -3662,32 +3603,6 @@ def _resolve_schedule_view_window(
     return month_start, month_end
 
 
-def _build_schedule_event_times(
-    *,
-    event_time: str,
-    repeat_interval_minutes: int | None,
-    repeat_times: int,
-    infinite_repeat_conflict_preview_days: int = DEFAULT_INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS,
-) -> list[str]:
-    base = datetime.strptime(event_time, "%Y-%m-%d %H:%M")
-    if repeat_interval_minutes is None:
-        return [base.strftime("%Y-%m-%d %H:%M")]
-
-    if repeat_times == -1:
-        # Keep conflict checks deterministic with a time-bounded preview window.
-        preview_minutes = max(infinite_repeat_conflict_preview_days, 1) * 24 * 60
-        preview_times = preview_minutes // repeat_interval_minutes + 1
-    else:
-        preview_times = max(repeat_times, 1)
-
-    result: list[str] = []
-    current = base
-    for _ in range(preview_times):
-        result.append(current.strftime("%Y-%m-%d %H:%M"))
-        current += timedelta(minutes=repeat_interval_minutes)
-    return result
-
-
 def _now_time_text() -> str:
     return datetime.now().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -3733,15 +3648,6 @@ def _repeat_enabled_text(value: bool | None) -> str:
     if value is None:
         return "-"
     return "on" if value else "off"
-
-
-def _format_schedule_conflicts(conflicts: list[Any]) -> str:
-    lines = ["日程冲突：以下时间段与现有日程重叠，请调整时间后重试。"]
-    for item in conflicts[:5]:
-        lines.append(f"- #{item.id} {item.event_time} {item.title}")
-    if len(conflicts) > 5:
-        lines.append(f"- ... 还有 {len(conflicts) - 5} 条冲突")
-    return "\n".join(lines)
 
 
 def _render_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -3812,11 +3718,7 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
         if text.startswith("未找到待办 #") or text.startswith("提醒时间需要"):
             return False
     elif tool == "schedule":
-        if (
-            text.startswith("未找到日程 #")
-            or text.startswith("日程冲突：")
-            or "没有可切换的重复规则" in text
-        ):
+        if text.startswith("未找到日程 #") or "没有可切换的重复规则" in text:
             return False
     elif tool == "history_search":
         if text.startswith("未找到包含") or text.startswith("暂无历史会话"):

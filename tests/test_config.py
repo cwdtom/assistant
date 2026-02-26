@@ -34,7 +34,6 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(config.bocha_api_key)
         self.assertTrue(config.bocha_search_summary)
         self.assertEqual(config.schedule_max_window_days, 31)
-        self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.cli_progress_color, "gray")
         self.assertEqual(config.llm_trace_log_path, "logs/app.log")
@@ -122,7 +121,6 @@ class ConfigTest(unittest.TestCase):
             "BOCHA_API_KEY": "bocha-key",
             "BOCHA_SEARCH_SUMMARY": "off",
             "SCHEDULE_MAX_WINDOW_DAYS": "45",
-            "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "14",
             "CLI_PROGRESS_COLOR": "off",
             "LLM_TRACE_LOG_PATH": "logs/custom_llm_trace.log",
             "APP_LOG_PATH": "logs/custom_app.log",
@@ -164,7 +162,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.bocha_api_key, "bocha-key")
         self.assertFalse(config.bocha_search_summary)
         self.assertEqual(config.schedule_max_window_days, 45)
-        self.assertEqual(config.infinite_repeat_conflict_preview_days, 14)
         self.assertEqual(config.cli_progress_color, "off")
         self.assertEqual(config.llm_trace_log_path, "logs/custom_llm_trace.log")
         self.assertEqual(config.app_log_path, "logs/custom_app.log")
@@ -206,7 +203,6 @@ class ConfigTest(unittest.TestCase):
             "BOCHA_API_KEY": "   ",
             "BOCHA_SEARCH_SUMMARY": "bad",
             "SCHEDULE_MAX_WINDOW_DAYS": "-7",
-            "INFINITE_REPEAT_CONFLICT_PREVIEW_DAYS": "abc",
             "CLI_PROGRESS_COLOR": "  ",
             "LLM_TRACE_LOG_PATH": "   ",
             "APP_LOG_PATH": "   ",
@@ -247,7 +243,6 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(config.bocha_api_key)
         self.assertTrue(config.bocha_search_summary)
         self.assertEqual(config.schedule_max_window_days, 31)
-        self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.cli_progress_color, "gray")
         self.assertEqual(config.llm_trace_log_path, "")
         self.assertEqual(config.app_log_path, "")

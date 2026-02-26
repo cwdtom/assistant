@@ -776,70 +776,6 @@ class AssistantDB:
         combined.sort(key=lambda item: (item.event_time, item.id))
         return combined
 
-    def find_schedule_conflicts(
-        self,
-        event_times: list[str],
-        *,
-        duration_minutes: int = 60,
-        exclude_schedule_id: int | None = None,
-    ) -> list[ScheduleItem]:
-        if not event_times:
-            return []
-
-        unique_times = sorted({item.strip() for item in event_times if item.strip()})
-        if not unique_times:
-            return []
-
-        normalized_duration = _normalize_duration_minutes(duration_minutes)
-        candidate_ranges = [_build_schedule_time_range(event_time, normalized_duration) for event_time in unique_times]
-        candidate_window_start = min(item[0] for item in candidate_ranges)
-        candidate_window_end = max(item[1] for item in candidate_ranges)
-
-        conflicts: list[ScheduleItem] = []
-        seen_keys: set[tuple[int, str]] = set()
-        with self._connect() as conn:
-            base_items = self._list_base_schedules(conn)
-            rules = self._list_recurring_rules(conn)
-
-        rule_by_schedule_id = {rule.schedule_id: rule for rule in rules}
-        for base in base_items:
-            if exclude_schedule_id is not None and base.id == exclude_schedule_id:
-                continue
-            rule = rule_by_schedule_id.get(base.id)
-            materialized = [_attach_recurrence_to_schedule(base, rule)]
-            if rule is not None and rule.enabled:
-                window_start = candidate_window_start - timedelta(minutes=base.duration_minutes)
-                if rule.repeat_times == -1:
-                    materialized.extend(
-                        _expand_recurring_schedule_items(
-                            base=base,
-                            rule=rule,
-                            window_start=window_start,
-                            window_end=candidate_window_end,
-                        )
-                    )
-                else:
-                    materialized.extend(
-                        _expand_recurring_schedule_items(
-                            base=base,
-                            rule=rule,
-                            window_start=window_start,
-                            window_end=candidate_window_end,
-                        )
-                    )
-
-            for current in materialized:
-                current_range = _build_schedule_time_range(current.event_time, current.duration_minutes)
-                if any(
-                    _schedule_ranges_overlap(current_range, candidate_range) for candidate_range in candidate_ranges
-                ):
-                    conflict_key = (current.id, current.event_time)
-                    if conflict_key not in seen_keys:
-                        seen_keys.add(conflict_key)
-                        conflicts.append(current)
-        conflicts.sort(key=lambda item: (item.event_time, item.id))
-        return conflicts
-
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1202,21 +1138,6 @@ def _normalize_duration_minutes(duration_minutes: int) -> int:
     if duration_minutes < 1:
         raise ValueError("duration_minutes must be >= 1")
     return duration_minutes
-
-
-def _build_schedule_time_range(event_time: str, duration_minutes: int) -> tuple[datetime, datetime]:
-    start = datetime.strptime(event_time, "%Y-%m-%d %H:%M")
-    end = start + timedelta(minutes=duration_minutes)
-    return start, end
-
-
-def _schedule_ranges_overlap(
-    left: tuple[datetime, datetime],
-    right: tuple[datetime, datetime],
-) -> bool:
-    left_start, left_end = left
-    right_start, right_end = right
-    return left_start < right_end and right_start < left_end
 
 
 def _normalize_schedule_window(

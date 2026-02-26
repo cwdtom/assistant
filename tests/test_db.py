@@ -213,28 +213,6 @@ class AssistantDBTest(unittest.TestCase):
         items = self.db.list_schedules()
         self.assertEqual([item.duration_minutes for item in items], [30, 30])
 
-    def test_find_schedule_conflicts(self) -> None:
-        self.db.add_schedule("晨会", "2026-02-20 09:00", duration_minutes=60)
-        second_id = self.db.add_schedule("周会", "2026-02-21 09:00", duration_minutes=60)
-
-        conflicts = self.db.find_schedule_conflicts(
-            ["2026-02-20 09:30", "2026-02-21 09:30"],
-            duration_minutes=30,
-        )
-        self.assertEqual([item.title for item in conflicts], ["晨会", "周会"])
-
-        excluded = self.db.find_schedule_conflicts(
-            ["2026-02-21 09:30"],
-            duration_minutes=30,
-            exclude_schedule_id=second_id,
-        )
-        self.assertEqual(excluded, [])
-
-    def test_find_schedule_conflicts_boundary_non_overlap(self) -> None:
-        self.db.add_schedule("晨会", "2026-02-20 09:00", duration_minutes=60)
-        conflicts = self.db.find_schedule_conflicts(["2026-02-20 10:00"], duration_minutes=30)
-        self.assertEqual(conflicts, [])
-
     def test_list_schedules_merges_recurring_rules(self) -> None:
         schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=30)
         self.assertTrue(
@@ -267,21 +245,6 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(items[0].event_time, "2026-01-01 00:00")
         self.assertEqual(items[-1].event_time, "2026-05-05 23:00")
 
-    def test_find_schedule_conflicts_with_recurring_rules(self) -> None:
-        schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=60)
-        self.assertTrue(
-            self.db.set_schedule_recurrence(
-                schedule_id,
-                start_time="2026-02-20 09:00",
-                repeat_interval_minutes=10080,
-                repeat_times=4,
-            )
-        )
-
-        conflicts = self.db.find_schedule_conflicts(["2026-02-27 09:30"], duration_minutes=30)
-        self.assertEqual(len(conflicts), 1)
-        self.assertEqual(conflicts[0].event_time, "2026-02-27 09:00")
-
     def test_recurring_schedule_can_be_disabled_and_enabled(self) -> None:
         schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00", duration_minutes=60)
         self.assertTrue(
@@ -296,8 +259,6 @@ class AssistantDBTest(unittest.TestCase):
         self.assertTrue(self.db.set_schedule_recurrence_enabled(schedule_id, False))
         disabled_items = self.db.list_schedules()
         self.assertEqual([item.event_time for item in disabled_items], ["2026-02-20 09:00"])
-        disabled_conflicts = self.db.find_schedule_conflicts(["2026-02-27 09:30"], duration_minutes=30)
-        self.assertEqual(disabled_conflicts, [])
 
         self.assertTrue(self.db.set_schedule_recurrence_enabled(schedule_id, True))
         enabled_items = self.db.list_schedules()
