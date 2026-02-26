@@ -84,6 +84,7 @@ PLAN_TOOL_CONTRACT: dict[str, Any] = {
             "add": {
                 "required": ["event_time", "title"],
                 "optional": [
+                    "tag",
                     "duration_minutes",
                     "remind_at",
                     "interval_minutes",
@@ -91,12 +92,13 @@ PLAN_TOOL_CONTRACT: dict[str, Any] = {
                     "remind_start_time",
                 ],
             },
-            "list": {},
+            "list": {"optional": ["tag"]},
             "get": {"required": ["id"]},
-            "view": {"required": ["view"], "optional": ["anchor"]},
+            "view": {"required": ["view"], "optional": ["anchor", "tag"]},
             "update": {
                 "required": ["id", "event_time", "title"],
                 "optional": [
+                    "tag",
                     "duration_minutes",
                     "remind_at",
                     "interval_minutes",
@@ -1593,53 +1595,34 @@ class AssistantAgent:
             return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result="schedule.action 非法。")
 
         if action == "list":
+            list_tag = _normalize_schedule_tag_value(payload.get("tag"))
             window_start, window_end = _default_schedule_list_window(window_days=self._schedule_max_window_days)
             items = self.db.list_schedules(
                 window_start=window_start,
                 window_end=window_end,
                 max_window_days=self._schedule_max_window_days,
+                tag=list_tag,
             )
             if not items:
                 return PlannerObservation(
                     tool="schedule",
                     input_text=raw_input,
                     ok=False,
-                    result=f"前天起未来 {self._schedule_max_window_days} 天内暂无日程。",
+                    result=(
+                        f"前天起未来 {self._schedule_max_window_days} 天内"
+                        f"{f'（标签:{list_tag}）' if list_tag else ''}暂无日程。"
+                    ),
                 )
             table = _render_table(
-                headers=[
-                    "ID",
-                    "时间",
-                    "时长(分钟)",
-                    "标题",
-                    "提醒时间",
-                    "重复提醒开始",
-                    "重复间隔(分钟)",
-                    "重复次数",
-                    "重复启用",
-                    "创建时间",
-                ],
-                rows=[
-                    [
-                        str(item.id),
-                        item.event_time,
-                        str(item.duration_minutes),
-                        item.title,
-                        item.remind_at or "-",
-                        item.repeat_remind_start_time or "-",
-                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
-                        str(item.repeat_times) if item.repeat_times is not None else "-",
-                        _repeat_enabled_text(item.repeat_enabled),
-                        item.created_at,
-                    ]
-                    for item in items
-                ],
+                headers=_schedule_table_headers(),
+                rows=_schedule_table_rows(items),
             )
+            title_suffix = f"，标签:{list_tag}" if list_tag else ""
             return PlannerObservation(
                 tool="schedule",
                 input_text=raw_input,
                 ok=True,
-                result=f"日程列表(前天起未来 {self._schedule_max_window_days} 天):\n{table}",
+                result=f"日程列表(前天起未来 {self._schedule_max_window_days} 天{title_suffix}):\n{table}",
             )
 
         if action == "view":
@@ -1662,10 +1645,12 @@ class AssistantAgent:
                         result="schedule.view 的 anchor 非法。",
                     )
             window_start, window_end = _resolve_schedule_view_window(view_name=view_name, anchor=anchor)
+            view_tag = _normalize_schedule_tag_value(payload.get("tag"))
             items = self.db.list_schedules(
                 window_start=window_start,
                 window_end=window_end,
                 max_window_days=self._schedule_max_window_days,
+                tag=view_tag,
             )
             items = _filter_schedules_by_calendar_view(items, view_name=view_name, anchor=anchor)
             if not items:
@@ -1673,43 +1658,21 @@ class AssistantAgent:
                     tool="schedule",
                     input_text=raw_input,
                     ok=False,
-                    result=f"{view_name} 视图下暂无日程。",
+                    result=f"{view_name} 视图下{f'（标签:{view_tag}）' if view_tag else ''}暂无日程。",
                 )
             table = _render_table(
-                headers=[
-                    "ID",
-                    "时间",
-                    "时长(分钟)",
-                    "标题",
-                    "提醒时间",
-                    "重复提醒开始",
-                    "重复间隔(分钟)",
-                    "重复次数",
-                    "重复启用",
-                    "创建时间",
-                ],
-                rows=[
-                    [
-                        str(item.id),
-                        item.event_time,
-                        str(item.duration_minutes),
-                        item.title,
-                        item.remind_at or "-",
-                        item.repeat_remind_start_time or "-",
-                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
-                        str(item.repeat_times) if item.repeat_times is not None else "-",
-                        _repeat_enabled_text(item.repeat_enabled),
-                        item.created_at,
-                    ]
-                    for item in items
-                ],
+                headers=_schedule_table_headers(),
+                rows=_schedule_table_rows(items),
             )
             title = f"日历视图({view_name}, {anchor})" if anchor else f"日历视图({view_name})"
+            if view_tag:
+                title = f"{title} [标签:{view_tag}]"
             return PlannerObservation(tool="schedule", input_text=raw_input, ok=True, result=f"{title}:\n{table}")
 
         if action == "add":
             add_event_time = _normalize_datetime_text(str(payload.get("event_time") or ""))
             add_title = str(payload.get("title") or "").strip()
+            add_tag = _normalize_schedule_tag_value(payload.get("tag")) or "default"
             if not add_event_time or not add_title:
                 return PlannerObservation(
                     tool="schedule",
@@ -1796,6 +1759,7 @@ class AssistantAgent:
                 event_time=add_event_time,
                 duration_minutes=add_duration_minutes,
                 remind_at=add_remind_at,
+                tag=add_tag,
             )
             if add_repeat_interval_minutes is not None and add_repeat_times != 1:
                 self.db.set_schedule_recurrence(
@@ -1811,17 +1775,17 @@ class AssistantAgent:
             )
             if add_repeat_times == 1:
                 result = (
-                    f"已添加日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"已添加日程 #{schedule_id} [标签:{add_tag}]: {add_event_time} {add_title} "
                     f"({add_duration_minutes} 分钟){remind_meta}"
                 )
             elif add_repeat_times == -1:
                 result = (
-                    f"已添加无限重复日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"已添加无限重复日程 #{schedule_id} [标签:{add_tag}]: {add_event_time} {add_title} "
                     f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m{remind_meta})"
                 )
             else:
                 result = (
-                    f"已添加重复日程 {add_repeat_times} 条: {add_event_time} {add_title} "
+                    f"已添加重复日程 {add_repeat_times} 条 [标签:{add_tag}]: {add_event_time} {add_title} "
                     f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m, "
                     f"times={add_repeat_times}{remind_meta})"
                 )
@@ -1841,32 +1805,8 @@ class AssistantAgent:
             if item is None:
                 return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=f"未找到日程 #{schedule_id}")
             table = _render_table(
-                headers=[
-                    "ID",
-                    "时间",
-                    "时长(分钟)",
-                    "标题",
-                    "提醒时间",
-                    "重复提醒开始",
-                    "重复间隔(分钟)",
-                    "重复次数",
-                    "重复启用",
-                    "创建时间",
-                ],
-                rows=[
-                    [
-                        str(item.id),
-                        item.event_time,
-                        str(item.duration_minutes),
-                        item.title,
-                        item.remind_at or "-",
-                        item.repeat_remind_start_time or "-",
-                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
-                        str(item.repeat_times) if item.repeat_times is not None else "-",
-                        _repeat_enabled_text(item.repeat_enabled),
-                        item.created_at,
-                    ]
-                ],
+                headers=_schedule_table_headers(),
+                rows=_schedule_table_rows([item]),
             )
             return PlannerObservation(tool="schedule", input_text=raw_input, ok=True, result=f"日程详情:\n{table}")
 
@@ -1883,6 +1823,7 @@ class AssistantAgent:
             current_item = self.db.get_schedule(schedule_id)
             if current_item is None:
                 return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result=f"未找到日程 #{schedule_id}")
+            update_tag = _normalize_schedule_tag_value(payload.get("tag"))
             if "duration_minutes" in payload:
                 parsed_duration_minutes = _normalize_schedule_duration_minutes_value(payload.get("duration_minutes"))
                 if parsed_duration_minutes is None:
@@ -1967,6 +1908,8 @@ class AssistantAgent:
                 "event_time": event_time,
                 "duration_minutes": applied_duration_minutes,
             }
+            if "tag" in payload and update_tag is not None:
+                schedule_update_kwargs["tag"] = update_tag
             if has_remind:
                 schedule_update_kwargs["remind_at"] = parsed_remind_at
             if has_repeat_remind_start_time:
@@ -1982,6 +1925,11 @@ class AssistantAgent:
                     repeat_remind_start_time=item.repeat_remind_start_time if item else None,
                 )
                 result = f"已更新日程 #{schedule_id}: {event_time} {title} ({applied_duration_minutes} 分钟){remind_meta}"
+                if item is not None:
+                    result = (
+                        f"已更新日程 #{schedule_id} [标签:{item.tag}]: {event_time} {title} "
+                        f"({applied_duration_minutes} 分钟){remind_meta}"
+                    )
                 ok = _is_planner_command_success(result, tool="schedule")
                 return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
             if repeat_interval_minutes is not None:
@@ -2004,12 +1952,13 @@ class AssistantAgent:
             )
             if repeat_times == -1:
                 result = (
-                    f"已更新为无限重复日程 #{schedule_id}: {event_time} {title} "
+                    f"已更新为无限重复日程 #{schedule_id} [标签:{item.tag if item else current_item.tag}]: "
+                    f"{event_time} {title} "
                     f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m{remind_meta})"
                 )
             else:
                 result = (
-                    f"已更新日程 #{schedule_id}: {event_time} {title} "
+                    f"已更新日程 #{schedule_id} [标签:{item.tag if item else current_item.tag}]: {event_time} {title} "
                     f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m, "
                     f"times={repeat_times}{remind_meta})"
                 )
@@ -2548,7 +2497,10 @@ class AssistantAgent:
             done_completed_at = todo.completed_at if todo is not None else _now_time_text()
             return f"待办 #{id_text} 已完成。完成时间: {done_completed_at}"
 
-        if command == "/schedule list":
+        if command == "/schedule list" or command.startswith("/schedule list "):
+            list_tag = _parse_schedule_list_tag_input(command.removeprefix("/schedule list").strip())
+            if list_tag is _INVALID_OPTION_VALUE:
+                return "用法: /schedule list [--tag <标签>]"
             window_start, window_end = _default_schedule_list_window(
                 window_days=self._schedule_max_window_days
             )
@@ -2556,86 +2508,45 @@ class AssistantAgent:
                 window_start=window_start,
                 window_end=window_end,
                 max_window_days=self._schedule_max_window_days,
+                tag=list_tag,
             )
             if not items:
+                if list_tag:
+                    return f"前天起未来 {self._schedule_max_window_days} 天内（标签:{list_tag}）暂无日程。"
                 return f"前天起未来 {self._schedule_max_window_days} 天内暂无日程。"
             table = _render_table(
-                headers=[
-                    "ID",
-                    "时间",
-                    "时长(分钟)",
-                    "标题",
-                    "提醒时间",
-                    "重复提醒开始",
-                    "重复间隔(分钟)",
-                    "重复次数",
-                    "重复启用",
-                    "创建时间",
-                ],
-                rows=[
-                    [
-                        str(item.id),
-                        item.event_time,
-                        str(item.duration_minutes),
-                        item.title,
-                        item.remind_at or "-",
-                        item.repeat_remind_start_time or "-",
-                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
-                        str(item.repeat_times) if item.repeat_times is not None else "-",
-                        _repeat_enabled_text(item.repeat_enabled),
-                        item.created_at,
-                    ]
-                    for item in items
-                ],
+                headers=_schedule_table_headers(),
+                rows=_schedule_table_rows(items),
             )
-            return f"日程列表(前天起未来 {self._schedule_max_window_days} 天):\n{table}"
+            title_suffix = f"，标签:{list_tag}" if list_tag else ""
+            return f"日程列表(前天起未来 {self._schedule_max_window_days} 天{title_suffix}):\n{table}"
 
         if command.startswith("/schedule view "):
-            view_parsed = _parse_schedule_view_input(command.removeprefix("/schedule view ").strip())
+            view_parsed = _parse_schedule_view_command_input(command.removeprefix("/schedule view ").strip())
             if view_parsed is None:
-                return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]"
-            view_name, anchor = view_parsed
+                return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"
+            view_name, anchor, view_tag = view_parsed
             window_start, window_end = _resolve_schedule_view_window(view_name=view_name, anchor=anchor)
             items = self.db.list_schedules(
                 window_start=window_start,
                 window_end=window_end,
                 max_window_days=self._schedule_max_window_days,
+                tag=view_tag,
             )
             items = _filter_schedules_by_calendar_view(items, view_name=view_name, anchor=anchor)
             if not items:
-                return f"{view_name} 视图下暂无日程。"
+                return f"{view_name} 视图下{f'（标签:{view_tag}）' if view_tag else ''}暂无日程。"
             table = _render_table(
-                headers=[
-                    "ID",
-                    "时间",
-                    "时长(分钟)",
-                    "标题",
-                    "提醒时间",
-                    "重复提醒开始",
-                    "重复间隔(分钟)",
-                    "重复次数",
-                    "重复启用",
-                    "创建时间",
-                ],
-                rows=[
-                    [
-                        str(item.id),
-                        item.event_time,
-                        str(item.duration_minutes),
-                        item.title,
-                        item.remind_at or "-",
-                        item.repeat_remind_start_time or "-",
-                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
-                        str(item.repeat_times) if item.repeat_times is not None else "-",
-                        _repeat_enabled_text(item.repeat_enabled),
-                        item.created_at,
-                    ]
-                    for item in items
-                ],
+                headers=_schedule_table_headers(),
+                rows=_schedule_table_rows(items),
             )
             if anchor:
-                return f"日历视图({view_name}, {anchor}):\n{table}"
-            return f"日历视图({view_name}):\n{table}"
+                title = f"日历视图({view_name}, {anchor})"
+            else:
+                title = f"日历视图({view_name})"
+            if view_tag:
+                title = f"{title} [标签:{view_tag}]"
+            return f"{title}:\n{table}"
 
         if command.startswith("/schedule get "):
             schedule_id = _parse_positive_int(command.removeprefix("/schedule get ").strip())
@@ -2645,32 +2556,8 @@ class AssistantAgent:
             if item is None:
                 return f"未找到日程 #{schedule_id}"
             table = _render_table(
-                headers=[
-                    "ID",
-                    "时间",
-                    "时长(分钟)",
-                    "标题",
-                    "提醒时间",
-                    "重复提醒开始",
-                    "重复间隔(分钟)",
-                    "重复次数",
-                    "重复启用",
-                    "创建时间",
-                ],
-                rows=[
-                    [
-                        str(item.id),
-                        item.event_time,
-                        str(item.duration_minutes),
-                        item.title,
-                        item.remind_at or "-",
-                        item.repeat_remind_start_time or "-",
-                        str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
-                        str(item.repeat_times) if item.repeat_times is not None else "-",
-                        _repeat_enabled_text(item.repeat_enabled),
-                        item.created_at,
-                    ]
-                ],
+                headers=_schedule_table_headers(),
+                rows=_schedule_table_rows([item]),
             )
             return f"日程详情:\n{table}"
 
@@ -2679,12 +2566,14 @@ class AssistantAgent:
             if add_schedule_parsed is None:
                 return (
                     "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
+                    "[--tag <标签>] "
                     "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
                     "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
                 )
             (
                 add_event_time,
                 add_title,
+                add_tag,
                 add_duration_minutes,
                 add_remind_at,
                 add_repeat_interval_minutes,
@@ -2696,6 +2585,7 @@ class AssistantAgent:
                 event_time=add_event_time,
                 duration_minutes=add_duration_minutes,
                 remind_at=add_remind_at,
+                tag=add_tag,
             )
             if add_repeat_interval_minutes is not None and add_repeat_times != 1:
                 self.db.set_schedule_recurrence(
@@ -2711,16 +2601,16 @@ class AssistantAgent:
             )
             if add_repeat_times == 1:
                 return (
-                    f"已添加日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"已添加日程 #{schedule_id} [标签:{add_tag}]: {add_event_time} {add_title} "
                     f"({add_duration_minutes} 分钟){remind_meta}"
                 )
             if add_repeat_times == -1:
                 return (
-                    f"已添加无限重复日程 #{schedule_id}: {add_event_time} {add_title} "
+                    f"已添加无限重复日程 #{schedule_id} [标签:{add_tag}]: {add_event_time} {add_title} "
                     f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m{remind_meta})"
                 )
             return (
-                f"已添加重复日程 {add_repeat_times} 条: {add_event_time} {add_title} "
+                f"已添加重复日程 {add_repeat_times} 条 [标签:{add_tag}]: {add_event_time} {add_title} "
                 f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m, "
                 f"times={add_repeat_times}{remind_meta})"
             )
@@ -2730,6 +2620,7 @@ class AssistantAgent:
             if update_schedule_parsed is None:
                 return (
                     "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
+                    "[--tag <标签>] "
                     "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
                     "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
                 )
@@ -2737,6 +2628,8 @@ class AssistantAgent:
                 schedule_id,
                 event_time,
                 title,
+                parsed_tag,
+                has_tag,
                 parsed_duration_minutes,
                 parsed_remind_at,
                 has_remind,
@@ -2757,6 +2650,8 @@ class AssistantAgent:
                 "event_time": event_time,
                 "duration_minutes": applied_duration_minutes,
             }
+            if has_tag:
+                schedule_update_kwargs["tag"] = parsed_tag
             if has_remind:
                 schedule_update_kwargs["remind_at"] = parsed_remind_at
             if has_repeat_remind_start_time:
@@ -2771,7 +2666,15 @@ class AssistantAgent:
                     remind_at=item.remind_at if item else None,
                     repeat_remind_start_time=item.repeat_remind_start_time if item else None,
                 )
-                return f"已更新日程 #{schedule_id}: {event_time} {title} ({applied_duration_minutes} 分钟){remind_meta}"
+                if item is not None:
+                    return (
+                        f"已更新日程 #{schedule_id} [标签:{item.tag}]: {event_time} {title} "
+                        f"({applied_duration_minutes} 分钟){remind_meta}"
+                    )
+                return (
+                    f"已更新日程 #{schedule_id} [标签:{parsed_tag if has_tag else current_item.tag}]: "
+                    f"{event_time} {title} ({applied_duration_minutes} 分钟){remind_meta}"
+                )
             if repeat_interval_minutes is not None:
                 remind_start_for_rule = (
                     repeat_remind_start_time
@@ -2792,11 +2695,12 @@ class AssistantAgent:
             )
             if repeat_times == -1:
                 return (
-                    f"已更新为无限重复日程 #{schedule_id}: {event_time} {title} "
+                    f"已更新为无限重复日程 #{schedule_id} [标签:{item.tag if item else current_item.tag}]: "
+                    f"{event_time} {title} "
                     f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m{remind_meta})"
                 )
             return (
-                f"已更新日程 #{schedule_id}: {event_time} {title} "
+                f"已更新日程 #{schedule_id} [标签:{item.tag if item else current_item.tag}]: {event_time} {title} "
                 f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m, "
                 f"times={repeat_times}{remind_meta})"
             )
@@ -2855,16 +2759,18 @@ class AssistantAgent:
             "/todo delete <id>\n"
             "/todo done <id>\n"
             "/schedule add <YYYY-MM-DD HH:MM> <标题> "
+            "[--tag <标签>] "
             "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
             "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]\n"
             "/schedule get <id>\n"
-            "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]\n"
+            "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]\n"
             "/schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
+            "[--tag <标签>] "
             "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
             "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]\n"
             "/schedule repeat <id> <on|off>\n"
             "/schedule delete <id>\n"
-            "/schedule list\n"
+            "/schedule list [--tag <标签>]\n"
             "你也可以直接说自然语言（会走 plan -> thought -> act -> observe -> replan 循环）。\n"
             "当前版本仅支持计划链路，不再走 chat 直聊分支。"
         )
@@ -3100,13 +3006,15 @@ def _parse_todo_search_input(raw: str) -> tuple[str, str | None] | None:
 
 def _parse_schedule_add_input(
     raw: str,
-) -> tuple[str, str, int, str | None, int | None, int, str | None] | None:
-    parsed = _parse_schedule_input(raw, default_duration_minutes=60)
+) -> tuple[str, str, str, int, str | None, int | None, int, str | None] | None:
+    parsed = _parse_schedule_input(raw, default_tag="default", default_duration_minutes=60)
     if parsed is None:
         return None
     (
         event_time,
         title,
+        tag,
+        _has_tag,
         duration_minutes,
         remind_at,
         _has_remind,
@@ -3126,6 +3034,7 @@ def _parse_schedule_add_input(
     return (
         event_time,
         title,
+        tag,
         duration_minutes,
         remind_at,
         repeat_interval_minutes,
@@ -3136,19 +3045,21 @@ def _parse_schedule_add_input(
 
 def _parse_schedule_update_input(
     raw: str,
-) -> tuple[int, str, str, int | None, str | None, bool, int | None, int, str | None, bool] | None:
+) -> tuple[int, str, str, str | None, bool, int | None, str | None, bool, int | None, int, str | None, bool] | None:
     parts = raw.strip().split(maxsplit=1)
     if len(parts) != 2:
         return None
     schedule_id = _parse_positive_int(parts[0])
     if schedule_id is None:
         return None
-    parsed = _parse_schedule_input(parts[1], default_duration_minutes=None)
+    parsed = _parse_schedule_input(parts[1], default_tag=None, default_duration_minutes=None)
     if parsed is None:
         return None
     (
         event_time,
         title,
+        tag,
+        has_tag,
         duration_minutes,
         remind_at,
         has_remind,
@@ -3167,6 +3078,8 @@ def _parse_schedule_update_input(
         schedule_id,
         event_time,
         title,
+        tag,
+        has_tag,
         duration_minutes,
         remind_at,
         has_remind,
@@ -3180,8 +3093,9 @@ def _parse_schedule_update_input(
 def _parse_schedule_input(
     raw: str,
     *,
+    default_tag: str | None,
     default_duration_minutes: int | None,
-) -> tuple[str, str, int | None, str | None, bool, int | None, int, str | None, bool] | None:
+) -> tuple[str, str, str | None, bool, int | None, str | None, bool, int | None, int, str | None, bool] | None:
     text = raw.strip()
     if not text:
         return None
@@ -3197,6 +3111,8 @@ def _parse_schedule_input(
         return None
 
     duration_minutes: int | None = default_duration_minutes
+    tag: str | None = default_tag
+    has_tag = False
     remind_at: str | None = None
     has_remind = False
     repeat_interval_minutes: int | None = None
@@ -3204,6 +3120,15 @@ def _parse_schedule_input(
     has_repeat_times = False
     repeat_remind_start_time: str | None = None
     has_repeat_remind_start_time = False
+
+    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
+    if tag_match:
+        parsed_tag = _sanitize_tag(tag_match.group(2))
+        if not parsed_tag:
+            return None
+        tag = parsed_tag
+        has_tag = True
+        working = _remove_option_span(working, tag_match.span())
 
     interval_match = SCHEDULE_INTERVAL_OPTION_PATTERN.search(working)
     if interval_match:
@@ -3254,11 +3179,13 @@ def _parse_schedule_input(
     title = re.sub(r"\s+", " ", working).strip()
     if not title:
         return None
-    if re.search(r"(^|\s)--(duration|interval|times|remind|remind-start)\b", title):
+    if re.search(r"(^|\s)--(tag|duration|interval|times|remind|remind-start)\b", title):
         return None
     return (
         event_time,
         title,
+        tag,
+        has_tag,
         duration_minutes,
         remind_at,
         has_remind,
@@ -3283,6 +3210,45 @@ def _parse_schedule_view_input(raw: str) -> tuple[str, str | None] | None:
     if anchor is None:
         return None
     return view_name, anchor
+
+
+def _parse_schedule_list_tag_input(raw: str) -> str | None | object:
+    text = raw.strip()
+    if not text:
+        return None
+    option_match = re.fullmatch(r"--tag\s+(\S+)", text)
+    if option_match is None:
+        return _INVALID_OPTION_VALUE
+    tag = _sanitize_tag(option_match.group(1))
+    if tag is None:
+        return _INVALID_OPTION_VALUE
+    return tag
+
+
+def _parse_schedule_view_command_input(raw: str) -> tuple[str, str | None, str | None] | None:
+    text = raw.strip()
+    if not text:
+        return None
+
+    working = text
+    tag: str | None = None
+
+    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
+    if tag_match:
+        parsed_tag = _sanitize_tag(tag_match.group(2))
+        if not parsed_tag:
+            return None
+        tag = parsed_tag
+        working = _remove_option_span(working, tag_match.span())
+
+    if re.search(r"(^|\s)--tag\b", working):
+        return None
+
+    view_parsed = _parse_schedule_view_input(working.strip())
+    if view_parsed is None:
+        return None
+    view_name, anchor = view_parsed
+    return view_name, anchor, tag
 
 
 def _parse_schedule_repeat_toggle_input(raw: str) -> tuple[int, bool] | None:
@@ -3348,6 +3314,12 @@ def _normalize_positive_int_value(value: Any) -> int | None:
 
 
 def _normalize_todo_tag_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _sanitize_tag(str(value))
+
+
+def _normalize_schedule_tag_value(value: Any) -> str | None:
     if value is None:
         return None
     return _sanitize_tag(str(value))
@@ -3650,6 +3622,41 @@ def _repeat_enabled_text(value: bool | None) -> str:
     if value is None:
         return "-"
     return "on" if value else "off"
+
+
+def _schedule_table_headers() -> list[str]:
+    return [
+        "ID",
+        "时间",
+        "时长(分钟)",
+        "标签",
+        "标题",
+        "提醒时间",
+        "重复提醒开始",
+        "重复间隔(分钟)",
+        "重复次数",
+        "重复启用",
+        "创建时间",
+    ]
+
+
+def _schedule_table_rows(items: list[Any]) -> list[list[str]]:
+    return [
+        [
+            str(item.id),
+            item.event_time,
+            str(item.duration_minutes),
+            item.tag,
+            item.title,
+            item.remind_at or "-",
+            item.repeat_remind_start_time or "-",
+            str(item.repeat_interval_minutes) if item.repeat_interval_minutes is not None else "-",
+            str(item.repeat_times) if item.repeat_times is not None else "-",
+            _repeat_enabled_text(item.repeat_enabled),
+            item.created_at,
+        ]
+        for item in items
+    ]
 
 
 def _render_table(headers: list[str], rows: list[list[str]]) -> str:

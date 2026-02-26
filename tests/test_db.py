@@ -153,6 +153,45 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(items[1].title, "晚上的会")
         self.assertEqual(items[0].duration_minutes, 60)
         self.assertEqual(items[1].duration_minutes, 60)
+        self.assertEqual(items[0].tag, "default")
+        self.assertEqual(items[1].tag, "default")
+
+    def test_schedule_tag_filter_and_update(self) -> None:
+        first_id = self.db.add_schedule("项目站会", "2026-02-20 09:00", tag="work")
+        second_id = self.db.add_schedule("生活采购", "2026-02-20 10:00", tag="life")
+        self.assertNotEqual(first_id, second_id)
+
+        work_items = self.db.list_schedules(tag="work")
+        self.assertEqual(len(work_items), 1)
+        self.assertEqual(work_items[0].title, "项目站会")
+        self.assertEqual(work_items[0].tag, "work")
+
+        updated = self.db.update_schedule(
+            first_id,
+            title="项目复盘",
+            event_time="2026-02-20 11:00",
+            tag="review",
+        )
+        self.assertTrue(updated)
+        changed = self.db.get_schedule(first_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.tag, "review")
+
+    def test_schedule_tag_filter_keeps_recurring_occurrences(self) -> None:
+        schedule_id = self.db.add_schedule("每周周会", "2026-02-20 09:00", tag="work")
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-02-20 09:00",
+            repeat_interval_minutes=10080,
+            repeat_times=3,
+        )
+        self.db.add_schedule("生活安排", "2026-02-21 10:00", tag="life")
+
+        work_items = self.db.list_schedules(tag="work")
+        self.assertEqual(len(work_items), 3)
+        self.assertTrue(all(item.tag == "work" for item in work_items))
+        self.assertTrue(all(item.title == "每周周会" for item in work_items))
 
     def test_add_schedules_batch(self) -> None:
         ids = self.db.add_schedules(

@@ -80,6 +80,7 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "日程开始时间，格式 YYYY-MM-DD HH:MM（本地时间）；用于 add/update。",
                     },
                     "title": {"type": "string", "description": "日程标题文本；用于 add/update。"},
+                    "tag": {"type": ["string", "null"], "description": "日程标签；null 表示不设置或清空。"},
                     "duration_minutes": {"type": "integer", "description": "日程时长，单位分钟，>=1。"},
                     "remind_at": {
                         "type": ["string", "null"],

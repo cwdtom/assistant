@@ -27,6 +27,7 @@ class TodoItem:
 class ScheduleItem:
     id: int
     title: str
+    tag: str
     event_time: str
     duration_minutes: int
     created_at: str
@@ -120,6 +121,7 @@ class AssistantDB:
                 CREATE TABLE IF NOT EXISTS schedules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
+                    tag TEXT NOT NULL DEFAULT 'default',
                     event_time TEXT NOT NULL,
                     duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes >= 1),
                     remind_at TEXT,
@@ -127,6 +129,7 @@ class AssistantDB:
                 )
                 """
             )
+            self._ensure_schedule_tag_column(conn)
             self._ensure_schedule_duration_column(conn)
             self._ensure_schedule_remind_column(conn)
             conn.execute(
@@ -206,6 +209,13 @@ class AssistantDB:
             "UPDATE schedules SET duration_minutes = 60 "
             "WHERE duration_minutes IS NULL OR duration_minutes < 1"
         )
+
+    def _ensure_schedule_tag_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
+        names = {row["name"] for row in columns}
+        if "tag" not in names:
+            conn.execute("ALTER TABLE schedules ADD COLUMN tag TEXT NOT NULL DEFAULT 'default'")
+        conn.execute("UPDATE schedules SET tag = 'default' WHERE tag IS NULL OR TRIM(tag) = ''")
 
     def _ensure_schedule_remind_column(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
@@ -610,14 +620,16 @@ class AssistantDB:
         event_time: str,
         duration_minutes: int = 60,
         remind_at: str | None = None,
+        tag: str = "default",
     ) -> int:
         timestamp = _now_iso()
+        normalized_tag = _normalize_tag(tag)
         normalized_duration = _normalize_duration_minutes(duration_minutes)
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO schedules (title, event_time, duration_minutes, remind_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (title, event_time, normalized_duration, remind_at, timestamp),
+                "INSERT INTO schedules (title, tag, event_time, duration_minutes, remind_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (title, normalized_tag, event_time, normalized_duration, remind_at, timestamp),
             )
             if cur.lastrowid is None:
                 raise RuntimeError("failed to insert schedule")
@@ -629,18 +641,20 @@ class AssistantDB:
         event_times: list[str],
         duration_minutes: int = 60,
         remind_at: str | None = None,
+        tag: str = "default",
     ) -> list[int]:
         if not event_times:
             return []
         timestamp = _now_iso()
+        normalized_tag = _normalize_tag(tag)
         normalized_duration = _normalize_duration_minutes(duration_minutes)
         created_ids: list[int] = []
         with self._connect() as conn:
             for event_time in event_times:
                 cur = conn.execute(
-                    "INSERT INTO schedules (title, event_time, duration_minutes, remind_at, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (title, event_time, normalized_duration, remind_at, timestamp),
+                    "INSERT INTO schedules (title, tag, event_time, duration_minutes, remind_at, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (title, normalized_tag, event_time, normalized_duration, remind_at, timestamp),
                 )
                 if cur.lastrowid is None:
                     raise RuntimeError("failed to insert schedule")
@@ -720,6 +734,7 @@ class AssistantDB:
         window_start: datetime | None = None,
         window_end: datetime | None = None,
         max_window_days: int = 31,
+        tag: str | None = None,
     ) -> list[ScheduleItem]:
         effective_window_start, effective_window_end = _normalize_schedule_window(
             window_start=window_start,
@@ -737,10 +752,16 @@ class AssistantDB:
             base_items = self._list_base_schedules(conn)
             rules = self._list_recurring_rules(conn)
 
+        normalized_tag = _normalize_tag(tag) if tag is not None else None
+        if normalized_tag is None:
+            filtered_base_items = base_items
+        else:
+            filtered_base_items = [item for item in base_items if item.tag == normalized_tag]
+
         rule_by_schedule_id = {rule.schedule_id: rule for rule in rules}
-        base_map = {item.id: item for item in base_items}
+        base_map = {item.id: item for item in filtered_base_items}
         combined: list[ScheduleItem] = []
-        for base in base_items:
+        for base in filtered_base_items:
             base_with_rule = _attach_recurrence_to_schedule(base, rule_by_schedule_id.get(base.id))
             if _is_schedule_item_in_window(
                 base_with_rule,
@@ -779,7 +800,8 @@ class AssistantDB:
     def get_schedule(self, schedule_id: int) -> ScheduleItem | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, title, event_time, duration_minutes, remind_at, created_at FROM schedules WHERE id = ?",
+                "SELECT id, title, tag, event_time, duration_minutes, remind_at, created_at "
+                "FROM schedules WHERE id = ?",
                 (schedule_id,),
             ).fetchone()
             rule_row = conn.execute(
@@ -808,6 +830,7 @@ class AssistantDB:
             ScheduleItem(
                 id=row["id"],
                 title=row["title"],
+                tag=_normalize_tag(str(row["tag"]) if row["tag"] is not None else None),
                 event_time=row["event_time"],
                 duration_minutes=_normalize_duration_minutes(
                     row["duration_minutes"] if row["duration_minutes"] is not None else 60
@@ -824,6 +847,7 @@ class AssistantDB:
         *,
         title: str,
         event_time: str,
+        tag: str | object = _UNSET,
         duration_minutes: int | object = _UNSET,
         remind_at: str | None | object = _UNSET,
         repeat_remind_start_time: str | None | object = _UNSET,
@@ -831,6 +855,9 @@ class AssistantDB:
         fields = ["title = ?", "event_time = ?"]
         values: list[object] = [title, event_time]
 
+        if tag is not _UNSET:
+            fields.append("tag = ?")
+            values.append(_normalize_tag(str(tag) if tag is not None else None))
         if duration_minutes is not _UNSET:
             if (
                 not isinstance(duration_minutes, int)
@@ -872,13 +899,14 @@ class AssistantDB:
 
     def _list_base_schedules(self, conn: sqlite3.Connection) -> list[ScheduleItem]:
         rows = conn.execute(
-            "SELECT id, title, event_time, duration_minutes, remind_at, created_at "
+            "SELECT id, title, tag, event_time, duration_minutes, remind_at, created_at "
             "FROM schedules ORDER BY event_time ASC, id ASC"
         ).fetchall()
         return [
             ScheduleItem(
                 id=int(row["id"]),
                 title=str(row["title"]),
+                tag=_normalize_tag(str(row["tag"]) if row["tag"] is not None else None),
                 event_time=str(row["event_time"]),
                 duration_minutes=_normalize_duration_minutes(
                     row["duration_minutes"] if row["duration_minutes"] is not None else 60
@@ -1204,6 +1232,7 @@ def _expand_recurring_schedule_items(
         ScheduleItem(
             id=base.id,
             title=base.title,
+            tag=base.tag,
             event_time=event_time,
             duration_minutes=base.duration_minutes,
             created_at=base.created_at,
@@ -1223,6 +1252,7 @@ def _attach_recurrence_to_schedule(base: ScheduleItem, rule: RecurringScheduleRu
     return ScheduleItem(
         id=base.id,
         title=base.title,
+        tag=base.tag,
         event_time=base.event_time,
         duration_minutes=base.duration_minutes,
         created_at=base.created_at,

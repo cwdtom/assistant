@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS todos (
 CREATE TABLE IF NOT EXISTS schedules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
+    tag TEXT NOT NULL DEFAULT 'default',
     event_time TEXT NOT NULL,
     duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes >= 1),
     remind_at TEXT,

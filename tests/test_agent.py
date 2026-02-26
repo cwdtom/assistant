@@ -428,6 +428,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("/schedule repeat", result)
         self.assertIn("/schedule delete", result)
         self.assertIn("--duration <>=1>", result)
+        self.assertIn("/schedule list [--tag <标签>]", result)
         self.assertIn("--interval <>=1>", result)
 
     def test_slash_commands_without_llm(self) -> None:
@@ -694,13 +695,13 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("重复间隔(分钟)", get_resp)
         self.assertIn("重复次数", get_resp)
         self.assertIn("重复启用", get_resp)
-        self.assertIn("| 1 | 2026-02-20 09:30 | 60 | 站会 |", get_resp)
+        self.assertIn("| 1 | 2026-02-20 09:30 | 60 | default | 站会 |", get_resp)
 
         update_resp = agent.handle_input("/schedule update 1 2026-02-21 10:00 复盘会")
-        self.assertIn("已更新日程 #1: 2026-02-21 10:00 复盘会 (60 分钟)", update_resp)
+        self.assertIn("已更新日程 #1 [标签:default]: 2026-02-21 10:00 复盘会 (60 分钟)", update_resp)
 
         update_duration_resp = agent.handle_input("/schedule update 1 2026-02-21 11:00 复盘会 --duration 45")
-        self.assertIn("已更新日程 #1: 2026-02-21 11:00 复盘会 (45 分钟)", update_duration_resp)
+        self.assertIn("已更新日程 #1 [标签:default]: 2026-02-21 11:00 复盘会 (45 分钟)", update_duration_resp)
         item = self.db.get_schedule(1)
         self.assertIsNotNone(item)
         assert item is not None
@@ -733,7 +734,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn(second_text, list_resp)
         self.assertIn(third_text, list_resp)
         self.assertIn("| 1440 | 3 | on |", list_resp)
-        self.assertIn("| 30 | 站会 |", list_resp)
+        self.assertIn("| 30 | default | 站会 |", list_resp)
 
         invalid = agent.handle_input(f"/schedule add {base_text} 站会 --times 3")
         self.assertIn("用法", invalid)
@@ -858,7 +859,37 @@ class AssistantAgentTest(unittest.TestCase):
         list_resp = agent.handle_input("/schedule list")
         self.assertIn(update_text, list_resp)
         self.assertIn(repeated_text, list_resp)
-        self.assertIn("| 50 | 复盘会 |", list_resp)
+        self.assertIn("| 50 | default | 复盘会 |", list_resp)
+
+    def test_slash_schedule_tag_filter_and_update(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        base_time = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+        work_text = base_time.strftime("%Y-%m-%d %H:%M")
+        review_text = (base_time + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+        life_text = (base_time + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+
+        agent.handle_input(f"/schedule add {work_text} 项目站会 --tag work")
+        agent.handle_input(f"/schedule add {life_text} 生活采购 --tag life")
+
+        work_list = agent.handle_input("/schedule list --tag work")
+        self.assertIn("日程列表(前天起未来 31 天，标签:work)", work_list)
+        self.assertIn("项目站会", work_list)
+        self.assertNotIn("生活采购", work_list)
+
+        detail = agent.handle_input("/schedule get 1")
+        self.assertIn(f"| 1 | {work_text} | 60 | work | 项目站会 |", detail)
+
+        update_resp = agent.handle_input(f"/schedule update 1 {review_text} 项目复盘 --tag review")
+        self.assertIn("已更新日程 #1 [标签:review]", update_resp)
+
+        review_day = review_text.split(" ", maxsplit=1)[0]
+        review_view = agent.handle_input(f"/schedule view day {review_day} --tag review")
+        self.assertIn(f"日历视图(day, {review_day}) [标签:review]", review_view)
+        self.assertIn("项目复盘", review_view)
+        self.assertNotIn("生活采购", review_view)
+
+        invalid = agent.handle_input("/schedule list --tag")
+        self.assertIn("用法: /schedule list [--tag <标签>]", invalid)
 
     def test_slash_schedule_update_clears_repeat_when_times_is_one(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)

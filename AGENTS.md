@@ -34,8 +34,8 @@ Supported input forms in CLI:
 - `/todo add <content> [--tag <tag>]`
 - `/todo list [--tag <tag>]`
 - `/todo done <id>`
-- `/schedule add <YYYY-MM-DD HH:MM> <title>`
-- `/schedule list`
+- `/schedule add <YYYY-MM-DD HH:MM> <title> [--tag <tag>]`
+- `/schedule list [--tag <tag>]`
 - natural language -> model intent recognition -> execute local action (e.g. `添加待办 买牛奶`, `查看日程`)
 - free text => send to LLM
 
@@ -113,6 +113,7 @@ Optional runtime flags (all supported in `.env`):
 - Every non-`/` input persists into `chat_history` with final assistant reply.
 - `/history search` supports fuzzy keyword search on user input and assistant output.
 - Schedule includes `duration_minutes` (default `60` on create).
+- Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
 - Recurring schedule supports reminder start (`--remind-start`).
@@ -156,7 +157,7 @@ Optional runtime flags (all supported in `.env`):
 
 ## Supplement: Data Model (moved from README)
 - `todos`: content, tag, priority, done status, created/done time, due/remind time.
-- `schedules`: title, start datetime, duration, reminder datetime, created time.
+- `schedules`: title, tag, start datetime, duration, reminder datetime, created time.
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.
 

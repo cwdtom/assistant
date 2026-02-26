@@ -100,7 +100,8 @@ python main.py
 
 说明：
 - `/todo add|update` 支持 `--tag --priority --due --remind`
-- `/schedule add|update` 支持 `--duration --remind --interval --times --remind-start`
+- `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
+- `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 使用 tool-calling 并以结构化参数直接执行本地动作（不走 `/todo` 命令串）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务

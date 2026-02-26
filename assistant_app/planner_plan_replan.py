@@ -13,8 +13,8 @@ PLANNER_CAPABILITIES_TEXT = """
     keyword（搜索关键词）
 - schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
   - 常用动作：add/list/get/view/update/repeat/delete
-  - 关键字段：title（标题）、event_time（开始时间，YYYY-MM-DD HH:MM）、duration_minutes（分钟）、
-    remind_at（提醒时间）、interval_minutes/times/remind_start_time（重复规则）、
+  - 关键字段：title（标题）、tag（标签）、event_time（开始时间，YYYY-MM-DD HH:MM）、
+    duration_minutes（分钟）、remind_at（提醒时间）、interval_minutes/times/remind_start_time（重复规则）、
     view（day|week|month）与 anchor（锚点日期）
 - internet_search：互联网检索网页信息并返回摘要（query 关键词）
 - history_search：检索历史会话（keyword 关键词，可带 limit 限制条数）
