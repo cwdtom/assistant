@@ -81,7 +81,7 @@ class LoggingSetupTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 log_path = Path(tmp) / "llm_trace.log"
-                configure_llm_trace_logger(str(log_path))
+                configure_llm_trace_logger(str(log_path), retention_days=7)
                 logger.info(json.dumps({"event": "llm_response", "call_id": 7}, ensure_ascii=False))
 
                 lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -113,6 +113,39 @@ class LoggingSetupTest(unittest.TestCase):
             for handler in original_handlers:
                 logger.addHandler(handler)
             logger.propagate = original_propagate
+
+    def test_configure_loggers_share_single_handler_for_same_path(self) -> None:
+        llm_logger = logging.getLogger("assistant_app.llm_trace")
+        app_logger = logging.getLogger("assistant_app.app")
+        original_llm_handlers = list(llm_logger.handlers)
+        original_app_handlers = list(app_logger.handlers)
+        original_llm_propagate = llm_logger.propagate
+        original_app_propagate = app_logger.propagate
+        try:
+            llm_logger.handlers.clear()
+            app_logger.handlers.clear()
+            llm_logger.propagate = False
+            app_logger.propagate = False
+            with tempfile.TemporaryDirectory() as tmp:
+                log_path = Path(tmp) / "merged.log"
+                configure_app_logger(str(log_path), retention_days=7)
+                configure_llm_trace_logger(str(log_path), retention_days=7)
+                self.assertEqual(len(app_logger.handlers), 1)
+                self.assertEqual(len(llm_logger.handlers), 1)
+                self.assertIs(app_logger.handlers[0], llm_logger.handlers[0])
+        finally:
+            for handler in list(llm_logger.handlers):
+                llm_logger.removeHandler(handler)
+                handler.close()
+            for handler in list(app_logger.handlers):
+                app_logger.removeHandler(handler)
+                handler.close()
+            for handler in original_llm_handlers:
+                llm_logger.addHandler(handler)
+            for handler in original_app_handlers:
+                app_logger.addHandler(handler)
+            llm_logger.propagate = original_llm_propagate
+            app_logger.propagate = original_app_propagate
 
 
 if __name__ == "__main__":

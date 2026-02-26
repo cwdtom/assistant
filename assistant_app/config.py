@@ -79,6 +79,9 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
     if search_provider not in {"bing", "bocha", "bochaai"}:
         search_provider = "bocha"
     bocha_api_key = (os.getenv("BOCHA_API_KEY") or "").strip() or None
+    app_log_path = _read_env_text("APP_LOG_PATH", default="logs/app.log")
+    llm_trace_log_path = _read_env_text("LLM_TRACE_LOG_PATH", default=app_log_path)
+    feishu_log_path = _read_env_text("FEISHU_LOG_PATH", default=app_log_path)
     return AppConfig(
         api_key=api_key,
         base_url=base_url,
@@ -86,8 +89,8 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         llm_temperature=_read_env_float("LLM_TEMPERATURE", default=0.3, min_value=0.0, max_value=2.0),
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
         user_profile_path=_read_env_text("USER_PROFILE_PATH", default=""),
-        llm_trace_log_path=_read_env_text("LLM_TRACE_LOG_PATH", default="logs/llm_trace.log"),
-        app_log_path=_read_env_text("APP_LOG_PATH", default="logs/app.log"),
+        llm_trace_log_path=llm_trace_log_path,
+        app_log_path=app_log_path,
         app_log_retention_days=_read_env_int("APP_LOG_RETENTION_DAYS", default=7, min_value=1),
         plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=20, min_value=1),
         plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=2, min_value=0),
@@ -121,7 +124,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         feishu_send_retry_count=_read_env_int("FEISHU_SEND_RETRY_COUNT", default=3, min_value=0),
         feishu_text_chunk_size=_read_env_int("FEISHU_TEXT_CHUNK_SIZE", default=1500, min_value=1),
         feishu_dedup_ttl_seconds=_read_env_int("FEISHU_DEDUP_TTL_SECONDS", default=600, min_value=1),
-        feishu_log_path=_read_env_text("FEISHU_LOG_PATH", default="logs/feishu.log"),
+        feishu_log_path=feishu_log_path,
         feishu_log_retention_days=_read_env_int("FEISHU_LOG_RETENTION_DAYS", default=7, min_value=1),
         feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
         feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="OK"),

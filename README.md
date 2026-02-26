@@ -73,10 +73,9 @@ python main.py
 - 默认数据库：`assistant.db`
 - 初始化 SQL：`sql/init_assistant_db.sql`
 - 默认日志（均为 JSON Lines）：
-  - `logs/app.log`：通用运行日志（agent/timer/reminder/persona）
-  - `logs/llm_trace.log`：LLM plan/thought/replan 调用追踪
-  - `logs/feishu.log`：Feishu 长连接与消息收发日志
-  - 以上路径可通过环境变量关闭或改路径（置空表示禁用对应日志文件）
+  - `logs/app.log`：统一日志文件（app/llm_trace/feishu 都写入该文件）
+  - 以上路径可通过环境变量覆盖；`LLM_TRACE_LOG_PATH` / `FEISHU_LOG_PATH` 默认跟随 `APP_LOG_PATH`
+  - 置空表示禁用对应日志输出
 
 ## Logging
 - 日志格式：统一 JSON Lines（每行一个 JSON 对象），核心字段包含 `ts`、`level`、`logger`。
@@ -85,14 +84,14 @@ python main.py
   - `context`：事件上下文（message_id、call_id、路径、统计值等）
 - 快速排查示例：
 ```bash
-# 看最近 30 条 LLM 请求/响应
-tail -n 30 logs/llm_trace.log
+# 看最近 30 条日志
+tail -n 30 logs/app.log
 
 # 看通用错误日志
 rg '"level": "ERROR"|"level": "WARNING"' logs/app.log
 
 # 看 Feishu 任务中断链路
-rg 'interrupted|done reaction|ack reaction' logs/feishu.log
+rg 'interrupted|done reaction|ack reaction' logs/app.log
 ```
 
 ## Test

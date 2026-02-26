@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
@@ -100,8 +101,8 @@ def _resolve_progress_color(color: str) -> tuple[str, str]:
     return PROGRESS_COLOR_PREFIX, PROGRESS_COLOR_SUFFIX
 
 
-def _configure_llm_trace_logger(log_path: str) -> None:
-    configure_llm_trace_logger(log_path)
+def _configure_llm_trace_logger(log_path: str, retention_days: int) -> logging.Logger:
+    return configure_llm_trace_logger(log_path, retention_days=retention_days)
 
 
 def _configure_feishu_logger(log_path: str, retention_days: int) -> logging.Logger:
@@ -112,10 +113,18 @@ def _configure_app_logger(log_path: str, retention_days: int) -> logging.Logger:
     return configure_app_logger(log_path, retention_days)
 
 
+def _is_same_log_path(path_a: str, path_b: str) -> bool:
+    normalized_a = path_a.strip()
+    normalized_b = path_b.strip()
+    if not normalized_a or not normalized_b:
+        return False
+    return Path(normalized_a).expanduser().resolve() == Path(normalized_b).expanduser().resolve()
+
+
 def main() -> None:
     config = load_config()
-    _configure_llm_trace_logger(config.llm_trace_log_path)
     app_logger = _configure_app_logger(config.app_log_path, config.app_log_retention_days)
+    _configure_llm_trace_logger(config.llm_trace_log_path, retention_days=config.app_log_retention_days)
     db = AssistantDB(config.db_path)
     progress_color_prefix, progress_color_suffix = _resolve_progress_color(config.cli_progress_color)
     search_provider = create_search_provider(
@@ -180,9 +189,12 @@ def main() -> None:
         if not config.feishu_app_id or not config.feishu_app_secret:
             print("助手> FEISHU_ENABLED=true 但 FEISHU_APP_ID/FEISHU_APP_SECRET 未配置，已跳过 Feishu 接入。")
         else:
+            feishu_retention_days = config.feishu_log_retention_days
+            if _is_same_log_path(config.feishu_log_path, config.app_log_path):
+                feishu_retention_days = config.app_log_retention_days
             feishu_logger = _configure_feishu_logger(
                 log_path=config.feishu_log_path,
-                retention_days=config.feishu_log_retention_days,
+                retention_days=feishu_retention_days,
             )
             feishu_runner = create_feishu_runner(
                 app_id=config.feishu_app_id,

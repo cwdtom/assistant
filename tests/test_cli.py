@@ -93,8 +93,8 @@ class CLIFeedbackTest(unittest.TestCase):
                 handler.close()
             with tempfile.TemporaryDirectory() as tmp:
                 path = str(Path(tmp) / "llm_trace.log")
-                _configure_llm_trace_logger(path)
-                _configure_llm_trace_logger(path)
+                _configure_llm_trace_logger(path, retention_days=7)
+                _configure_llm_trace_logger(path, retention_days=7)
                 file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
                 self.assertEqual(len(file_handlers), 1)
                 self.assertIsInstance(file_handlers[0].formatter, JsonLinesFormatter)
@@ -114,7 +114,7 @@ class CLIFeedbackTest(unittest.TestCase):
             for handler in list(logger.handlers):
                 logger.removeHandler(handler)
                 handler.close()
-            _configure_llm_trace_logger("   ")
+            _configure_llm_trace_logger("   ", retention_days=7)
             self.assertFalse(logger.propagate)
             self.assertEqual(len(logger.handlers), 1)
             self.assertIsInstance(logger.handlers[0], logging.NullHandler)
@@ -125,6 +125,43 @@ class CLIFeedbackTest(unittest.TestCase):
             for handler in original_handlers:
                 logger.addHandler(handler)
             logger.propagate = original_propagate
+
+    def test_configure_llm_trace_logger_shares_handler_with_app_logger_on_same_path(self) -> None:
+        llm_logger = logging.getLogger("assistant_app.llm_trace")
+        app_logger = logging.getLogger("assistant_app.app")
+        original_llm_handlers = list(llm_logger.handlers)
+        original_app_handlers = list(app_logger.handlers)
+        original_llm_propagate = llm_logger.propagate
+        original_app_propagate = app_logger.propagate
+        try:
+            for handler in list(llm_logger.handlers):
+                llm_logger.removeHandler(handler)
+                handler.close()
+            for handler in list(app_logger.handlers):
+                app_logger.removeHandler(handler)
+                handler.close()
+            with tempfile.TemporaryDirectory() as tmp:
+                path = str(Path(tmp) / "merged.log")
+                _configure_app_logger(path, retention_days=7)
+                _configure_llm_trace_logger(path, retention_days=7)
+                llm_handlers = [handler for handler in llm_logger.handlers if isinstance(handler, logging.FileHandler)]
+                app_handlers = [handler for handler in app_logger.handlers if isinstance(handler, logging.FileHandler)]
+                self.assertEqual(len(llm_handlers), 1)
+                self.assertEqual(len(app_handlers), 1)
+                self.assertIs(llm_handlers[0], app_handlers[0])
+        finally:
+            for handler in list(llm_logger.handlers):
+                llm_logger.removeHandler(handler)
+                handler.close()
+            for handler in list(app_logger.handlers):
+                app_logger.removeHandler(handler)
+                handler.close()
+            for handler in original_llm_handlers:
+                llm_logger.addHandler(handler)
+            for handler in original_app_handlers:
+                app_logger.addHandler(handler)
+            llm_logger.propagate = original_llm_propagate
+            app_logger.propagate = original_app_propagate
 
     def test_configure_feishu_logger_deduplicates_file_handler(self) -> None:
         logger = logging.getLogger("assistant_app.feishu")

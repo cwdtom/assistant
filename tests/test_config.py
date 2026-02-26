@@ -37,7 +37,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.infinite_repeat_conflict_preview_days, 31)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.cli_progress_color, "gray")
-        self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
+        self.assertEqual(config.llm_trace_log_path, "logs/app.log")
         self.assertEqual(config.app_log_path, "logs/app.log")
         self.assertEqual(config.app_log_retention_days, 7)
         self.assertTrue(config.timer_enabled)
@@ -55,7 +55,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_send_retry_count, 3)
         self.assertEqual(config.feishu_text_chunk_size, 1500)
         self.assertEqual(config.feishu_dedup_ttl_seconds, 600)
-        self.assertEqual(config.feishu_log_path, "logs/feishu.log")
+        self.assertEqual(config.feishu_log_path, "logs/app.log")
         self.assertEqual(config.feishu_log_retention_days, 7)
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
@@ -76,7 +76,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.llm_temperature, 0.3)
         self.assertEqual(config.db_path, "assistant.db")
         self.assertEqual(config.user_profile_path, "")
-        self.assertEqual(config.llm_trace_log_path, "logs/llm_trace.log")
+        self.assertEqual(config.llm_trace_log_path, "logs/app.log")
         self.assertEqual(config.app_log_path, "logs/app.log")
         self.assertEqual(config.app_log_retention_days, 7)
         self.assertEqual(config.plan_replan_retry_count, 2)
@@ -93,6 +93,18 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
         self.assertEqual(config.feishu_done_emoji_type, "DONE")
+
+    def test_load_config_log_paths_follow_app_log_path_by_default(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "deep-key",
+            "APP_LOG_PATH": "logs/merged.log",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = load_config(load_dotenv=False)
+
+        self.assertEqual(config.app_log_path, "logs/merged.log")
+        self.assertEqual(config.llm_trace_log_path, "logs/merged.log")
+        self.assertEqual(config.feishu_log_path, "logs/merged.log")
 
     def test_load_config_reads_runtime_knobs_from_env(self) -> None:
         env = {
