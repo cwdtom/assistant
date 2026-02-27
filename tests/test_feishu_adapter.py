@@ -449,6 +449,41 @@ class FeishuAdapterTest(unittest.TestCase):
         )
         self.assertEqual(rewrite_calls, ["执行结果：已添加待办 #1"])
 
+    def test_event_processor_async_subtask_progress_without_rewriter_sends_raw_text(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        agent = _ProgressReportingTaskAwareAgent(
+            progress_result="执行结果：已添加待办 #1",
+            response="任务处理完成。",
+            task_completed=True,
+        )
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.async_progress_raw"),
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_progress_raw_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"执行任务"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(
+            lambda: len(reactions) == 2
+            and ("oc_1", "执行结果：已添加待办 #1") in sent
+            and ("oc_1", "任务处理完成。") in sent
+        )
+
     def test_event_processor_async_subtask_progress_send_failure_drops_without_retry(self) -> None:
         sent: list[tuple[str, str]] = []
         reactions: list[tuple[str, str]] = []
