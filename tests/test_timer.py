@@ -49,6 +49,17 @@ class _BlockingReminderService:
         return _Stats()
 
 
+class _FakePeriodicTask:
+    def __init__(self, raises: bool = False) -> None:
+        self.raises = raises
+        self.call_count = 0
+
+    def __call__(self) -> None:
+        self.call_count += 1
+        if self.raises:
+            raise RuntimeError("periodic task failed")
+
+
 class TimerEngineTest(unittest.TestCase):
     @staticmethod
     def _wait_until(predicate, timeout: float = 2.0) -> bool:  # type: ignore[no-untyped-def]
@@ -105,6 +116,36 @@ class TimerEngineTest(unittest.TestCase):
 
         service.release.set()
         self.assertTrue(self._wait_until(lambda: not engine.running, timeout=2.0))
+
+    def test_tick_once_runs_periodic_tasks(self) -> None:
+        service = _FakeReminderService()
+        periodic = _FakePeriodicTask()
+        engine = TimerEngine(
+            reminder_service=service,
+            periodic_tasks=[periodic],
+            poll_interval_seconds=1,
+        )
+
+        engine.tick_once()
+
+        self.assertEqual(service.poll_count, 1)
+        self.assertEqual(periodic.call_count, 1)
+
+    def test_tick_once_continues_when_periodic_task_fails(self) -> None:
+        service = _FakeReminderService()
+        failing = _FakePeriodicTask(raises=True)
+        succeeding = _FakePeriodicTask()
+        engine = TimerEngine(
+            reminder_service=service,
+            periodic_tasks=[failing, succeeding],
+            poll_interval_seconds=1,
+        )
+
+        engine.tick_once()
+
+        self.assertEqual(service.poll_count, 1)
+        self.assertEqual(failing.call_count, 1)
+        self.assertEqual(succeeding.call_count, 1)
 
 
 if __name__ == "__main__":

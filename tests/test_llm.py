@@ -41,6 +41,21 @@ class OpenAICompatibleClientTest(unittest.TestCase):
             response_format={"type": "json_object"},
         )
 
+    def test_reply_with_temperature_overrides_configured_temperature(self) -> None:
+        client = OpenAICompatibleClient(
+            api_key="test-key",
+            base_url="https://api.example.com",
+            model="test-model",
+            temperature=0.6,
+        )
+        messages = [{"role": "user", "content": "请严格输出"}]
+
+        with patch.object(client, "_create_reply", return_value="ok") as mock_create:
+            result = client.reply_with_temperature(messages, temperature=0.0)
+
+        self.assertEqual(result, "ok")
+        mock_create.assert_called_once_with(messages=messages, temperature=0.0)
+
     def test_reply_with_tools_rejects_reasoner_model(self) -> None:
         client = OpenAICompatibleClient(
             api_key="test-key",

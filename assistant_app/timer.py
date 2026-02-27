@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 
 from assistant_app.reminder_service import ReminderService
 
@@ -11,10 +12,12 @@ class TimerEngine:
         self,
         *,
         reminder_service: ReminderService,
+        periodic_tasks: list[Callable[[], None]] | None = None,
         poll_interval_seconds: int = 15,
         logger: logging.Logger | None = None,
     ) -> None:
         self._reminder_service = reminder_service
+        self._periodic_tasks = list(periodic_tasks or [])
         self._poll_interval_seconds = max(poll_interval_seconds, 1)
         self._logger = logger or logging.getLogger("assistant_app.timer")
         if logger is None:
@@ -80,6 +83,17 @@ class TimerEngine:
                     },
                 },
             )
+        for index, task in enumerate(self._periodic_tasks):
+            try:
+                task()
+            except Exception:  # noqa: BLE001
+                self._logger.exception(
+                    "timer periodic task failed",
+                    extra={
+                        "event": "timer_periodic_task_failed",
+                        "context": {"task_index": index},
+                    },
+                )
 
     def _run_loop(self) -> None:
         current_thread = threading.current_thread()

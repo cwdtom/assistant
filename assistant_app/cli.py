@@ -21,6 +21,7 @@ from assistant_app.reminder_service import ReminderService
 from assistant_app.reminder_sink import StdoutReminderSink
 from assistant_app.search import create_search_provider
 from assistant_app.timer import TimerEngine
+from assistant_app.user_profile_refresh import UserProfileRefreshService
 
 CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
 PROGRESS_COLOR_PREFIX = "\033[90m"
@@ -164,6 +165,19 @@ def main() -> None:
         schedule_max_window_days=config.schedule_max_window_days,
         final_response_rewriter=persona_rewriter.rewrite_final_response,
     )
+    user_profile_refresh_service: UserProfileRefreshService | None = None
+    if config.user_profile_refresh_enabled:
+        user_profile_refresh_service = UserProfileRefreshService(
+            db=db,
+            llm_client=llm_client,
+            user_profile_path=config.user_profile_path,
+            agent_reloader=agent.reload_user_profile,
+            logger=app_logger,
+            scheduled_hour=config.user_profile_refresh_hour,
+            lookback_days=config.user_profile_refresh_lookback_days,
+            max_turns=config.user_profile_refresh_max_turns,
+        )
+        agent.set_user_profile_refresh_runner(user_profile_refresh_service.run_manual_refresh)
     timer_engine: TimerEngine | None = None
     feishu_runner = None
     if config.timer_enabled:
@@ -179,6 +193,9 @@ def main() -> None:
         )
         timer_engine = TimerEngine(
             reminder_service=reminder_service,
+            periodic_tasks=[user_profile_refresh_service.poll_scheduled]
+            if user_profile_refresh_service is not None
+            else None,
             poll_interval_seconds=config.timer_poll_interval_seconds,
             logger=app_logger,
         )

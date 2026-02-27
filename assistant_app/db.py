@@ -1099,6 +1099,30 @@ class AssistantDB:
             for row in rows
         ]
 
+    def recent_turns_since(self, *, since: datetime, limit: int = 10000) -> list[ChatTurn]:
+        normalized_limit = max(limit, 1)
+        normalized_since = since.replace(microsecond=0).isoformat(sep=" ")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_content, assistant_content, created_at
+                FROM chat_history
+                WHERE created_at >= ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (normalized_since, normalized_limit),
+            ).fetchall()
+        rows.reverse()
+        return [
+            ChatTurn(
+                user_content=str(row["user_content"] or ""),
+                assistant_content=str(row["assistant_content"] or ""),
+                created_at=str(row["created_at"] or ""),
+            )
+            for row in rows
+        ]
+
     def search_turns(self, keyword: str, *, limit: int = 20) -> list[ChatTurn]:
         text = keyword.strip()
         if not text:

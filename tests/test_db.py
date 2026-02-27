@@ -564,6 +564,34 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(turns[-1].assistant_content, "最近回答7")
         self.assertNotIn("两天前的问题", [item.user_content for item in turns])
 
+    def test_recent_turns_since_applies_time_window_and_limit(self) -> None:
+        self.db.save_turn(user_content="窗口外", assistant_content="窗口外回答")
+        self.db.save_turn(user_content="窗口内1", assistant_content="窗口内回答1")
+        self.db.save_turn(user_content="窗口内2", assistant_content="窗口内回答2")
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "UPDATE chat_history SET created_at = ? WHERE id = 1",
+                ("2026-01-01 09:00:00",),
+            )
+            conn.execute(
+                "UPDATE chat_history SET created_at = ? WHERE id = 2",
+                ("2026-02-20 10:00:00",),
+            )
+            conn.execute(
+                "UPDATE chat_history SET created_at = ? WHERE id = 3",
+                ("2026-02-20 11:00:00",),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        turns = self.db.recent_turns_since(since=datetime(2026, 2, 20, 9, 30), limit=1)
+
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0].user_content, "窗口内2")
+
     def test_chat_history_legacy_schema_is_migrated_to_turn_schema(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_chat_history.db"
         conn = sqlite3.connect(str(legacy_path))

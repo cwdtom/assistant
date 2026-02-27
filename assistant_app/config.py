@@ -13,6 +13,10 @@ class AppConfig:
     llm_temperature: float
     db_path: str
     user_profile_path: str
+    user_profile_refresh_enabled: bool
+    user_profile_refresh_hour: int
+    user_profile_refresh_lookback_days: int
+    user_profile_refresh_max_turns: int
     llm_trace_log_path: str
     app_log_path: str
     app_log_retention_days: int
@@ -92,6 +96,12 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         llm_temperature=_read_env_float("LLM_TEMPERATURE", default=0.3, min_value=0.0, max_value=2.0),
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
         user_profile_path=_read_env_text("USER_PROFILE_PATH", default=""),
+        user_profile_refresh_enabled=_read_env_bool("USER_PROFILE_REFRESH_ENABLED", default=True),
+        user_profile_refresh_hour=_read_env_hour("USER_PROFILE_REFRESH_HOUR", default=4),
+        user_profile_refresh_lookback_days=_read_env_int(
+            "USER_PROFILE_REFRESH_LOOKBACK_DAYS", default=30, min_value=1
+        ),
+        user_profile_refresh_max_turns=_read_env_int("USER_PROFILE_REFRESH_MAX_TURNS", default=10000, min_value=1),
         llm_trace_log_path=llm_trace_log_path,
         app_log_path=app_log_path,
         app_log_retention_days=_read_env_int("APP_LOG_RETENTION_DAYS", default=7, min_value=1),
@@ -139,6 +149,13 @@ def _read_env_int(name: str, *, default: int, min_value: int) -> int:
     except ValueError:
         return default
     if value < min_value:
+        return default
+    return value
+
+
+def _read_env_hour(name: str, *, default: int) -> int:
+    value = _read_env_int(name, default=default, min_value=0)
+    if value > 23:
         return default
     return value
 

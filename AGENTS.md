@@ -31,6 +31,7 @@ Current MVP constraints:
 ## Command Contract (MVP)
 Supported input forms in CLI:
 - `/help`
+- `/profile refresh`
 - `/todo add <content> [--tag <tag>]`
 - `/todo list [--tag <tag>]`
 - `/todo done <id>`
@@ -93,6 +94,10 @@ Optional runtime flags (all supported in `.env`):
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text
 - `USER_PROFILE_PATH`: user profile markdown file path (loaded content is injected into plan/replan context)
+- `USER_PROFILE_REFRESH_ENABLED`: enable daily user_profile refresh task (default `true`)
+- `USER_PROFILE_REFRESH_HOUR`: refresh trigger hour in local time (default `4`, range `0~23`)
+- `USER_PROFILE_REFRESH_LOOKBACK_DAYS`: chat lookback window in days for refresh prompt (default `30`)
+- `USER_PROFILE_REFRESH_MAX_TURNS`: max chat turns injected into refresh prompt (default `10000`)
 - `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
 - `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
 - `LLM_TRACE_LOG_PATH`: LLM trace log path (default follows `APP_LOG_PATH`, empty to disable)
@@ -113,6 +118,8 @@ Optional runtime flags (all supported in `.env`):
 - Every non-`/` input persists into `chat_history` with final assistant reply.
 - `/history search` supports fuzzy keyword search on user input and assistant output.
 - Schedule includes `duration_minutes` (default `60` on create).
+- `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
+- Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).

@@ -95,6 +95,8 @@ python main.py
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
 - `LLM_TEMPERATURE`：所有 LLM 调用温度（默认 `0.3`，范围 `0.0~2.0`）
 - `ASSISTANT_DB_PATH`：SQLite 路径（默认 `assistant.db`）
+- `USER_PROFILE_PATH`：user_profile 文件路径（用于计划上下文与自动刷新）
+- `USER_PROFILE_REFRESH_ENABLED`：是否启用 user_profile 自动刷新（默认 `true`）
 - `SEARCH_PROVIDER`：搜索 provider（`bocha|bing`）
 - `BOCHA_API_KEY`：当 provider 为 `bocha` 时推荐配置
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
@@ -104,6 +106,7 @@ python main.py
 
 ## Command Overview
 - `/help`
+- `/profile refresh`
 - `/todo add|list|get|update|delete|done|search`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
@@ -114,6 +117,7 @@ python main.py
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 使用 tool-calling 并以结构化参数直接执行本地动作（不走 `/todo` 命令串）
+- `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 

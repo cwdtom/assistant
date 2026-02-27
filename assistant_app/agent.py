@@ -227,6 +227,7 @@ class AssistantAgent:
         schedule_max_window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
         user_profile_path: str = "",
         user_profile_max_chars: int = DEFAULT_USER_PROFILE_MAX_CHARS,
+        user_profile_refresh_runner: Callable[[], str] | None = None,
         final_response_rewriter: Callable[[str], str] | None = None,
     ) -> None:
         self.db = db
@@ -256,10 +257,14 @@ class AssistantAgent:
         self._schedule_max_window_days = max(schedule_max_window_days, 1)
         self._user_profile_max_chars = max(user_profile_max_chars, 1)
         self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
+        self._user_profile_refresh_runner = user_profile_refresh_runner
         self._final_response_rewriter = final_response_rewriter
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._progress_callback = callback
+
+    def set_user_profile_refresh_runner(self, runner: Callable[[], str] | None) -> None:
+        self._user_profile_refresh_runner = runner
 
     @staticmethod
     def _outer_context(task: PendingPlanTask) -> OuterPlanContext:
@@ -1017,6 +1022,12 @@ class AssistantAgent:
         if not self._user_profile_content:
             return None
         return self._user_profile_content
+
+    def reload_user_profile(self) -> bool:
+        loaded_path, loaded_content = self._load_user_profile(self._user_profile_path)
+        self._user_profile_path = loaded_path
+        self._user_profile_content = loaded_content
+        return loaded_content is not None
 
     def _load_user_profile(self, user_profile_path: str) -> tuple[str, str | None]:
         raw_path = user_profile_path.strip()
@@ -2242,6 +2253,22 @@ class AssistantAgent:
         if command == "/help":
             return self._help_text()
 
+        if command == "/profile refresh":
+            runner = self._user_profile_refresh_runner
+            if runner is None:
+                return "当前未启用 user_profile 刷新服务。请先配置 USER_PROFILE_PATH 和 LLM。"
+            try:
+                return runner()
+            except Exception as exc:  # noqa: BLE001
+                self._app_logger.warning(
+                    "manual user profile refresh failed",
+                    extra={
+                        "event": "user_profile_manual_refresh_failed",
+                        "context": {"error": repr(exc)},
+                    },
+                )
+                return f"刷新 user_profile 失败: {exc}"
+
         if command == "/view list":
             return self._todo_view_list_text()
 
@@ -2745,6 +2772,7 @@ class AssistantAgent:
         return (
             "可用命令:\n"
             "/help\n"
+            "/profile refresh\n"
             "/history list [--limit <>=1>]\n"
             "/history search <关键词> [--limit <>=1>]\n"
             "/view list\n"

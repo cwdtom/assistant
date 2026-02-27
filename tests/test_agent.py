@@ -421,6 +421,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("/view list", result)
         self.assertIn("/history list", result)
         self.assertIn("/history search <关键词>", result)
+        self.assertIn("/profile refresh", result)
         self.assertIn("/todo update", result)
         self.assertIn("/todo delete", result)
         self.assertIn("/schedule list", result)
@@ -462,6 +463,47 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertIn("暂无待办", response)
         self.assertFalse(task_completed)
+
+    def test_profile_refresh_command_returns_runner_output(self) -> None:
+        profile_content = "# 最新画像\n- 偏好: 咖啡"
+        call_count = 0
+
+        def _runner() -> str:
+            nonlocal call_count
+            call_count += 1
+            return profile_content
+
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=None,
+            user_profile_refresh_runner=_runner,
+        )
+
+        result = agent.handle_input("/profile refresh")
+
+        self.assertEqual(result, profile_content)
+        self.assertEqual(call_count, 1)
+
+    def test_profile_refresh_command_handles_runner_error(self) -> None:
+        def _runner() -> str:
+            raise RuntimeError("refresh failed")
+
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=None,
+            user_profile_refresh_runner=_runner,
+        )
+
+        result = agent.handle_input("/profile refresh")
+
+        self.assertIn("刷新 user_profile 失败", result)
+
+    def test_profile_refresh_command_requires_runner(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        result = agent.handle_input("/profile refresh")
+
+        self.assertIn("当前未启用 user_profile 刷新服务", result)
 
     def test_handle_input_with_task_status_returns_true_after_planner_completion(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1819,6 +1861,23 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNone(plan_payload.get("user_profile"))
         self.assertIsNone(thought_payload.get("user_profile"))
         self.assertIsNone(replan_payload.get("user_profile"))
+
+    def test_reload_user_profile_refreshes_content(self) -> None:
+        profile_file = Path(self.tmp.name) / "user_profile.md"
+        profile_file.write_text("偏好: 咖啡", encoding="utf-8")
+        with patch("assistant_app.agent.PROJECT_ROOT", Path(self.tmp.name)):
+            agent = AssistantAgent(
+                db=self.db,
+                llm_client=None,
+                user_profile_path="user_profile.md",
+            )
+        self.assertIn("咖啡", agent._serialize_user_profile() or "")
+
+        profile_file.write_text("偏好: 红茶", encoding="utf-8")
+        reloaded = agent.reload_user_profile()
+
+        self.assertTrue(reloaded)
+        self.assertIn("红茶", agent._serialize_user_profile() or "")
 
     def test_user_profile_too_long_raises_on_agent_init(self) -> None:
         profile_file = Path(self.tmp.name) / "user_profile.md"

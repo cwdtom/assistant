@@ -40,6 +40,9 @@ class OpenAICompatibleClient:
             response_format={"type": "json_object"},
         )
 
+    def reply_with_temperature(self, messages: list[dict[str, Any]], *, temperature: float) -> str:
+        return self._create_reply(messages=messages, temperature=temperature)
+
     def reply_with_tools(
         self,
         messages: list[dict[str, Any]],
