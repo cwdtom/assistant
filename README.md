@@ -8,6 +8,7 @@
 - 历史会话持久化与检索
 - 本地提醒线程（待办、单次日程、重复日程）
 - 可选 Feishu 长连接接入
+- Feishu 任务执行中可异步回传子任务完成进度（支持 persona 润色）
 
 ## Runtime Requirements
 - Python 3.10+

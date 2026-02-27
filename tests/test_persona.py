@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import unittest
 
 from assistant_app.persona import PersonaRewriter
@@ -67,6 +68,36 @@ class PersonaRewriterTest(unittest.TestCase):
         self.assertEqual(len(llm.calls), 1)
         payload = json.loads(llm.calls[0][1]["content"])
         self.assertNotIn("由你判断是否拆成多条发送；若拆分，请用空行分隔每条内容", payload["requirements"])
+
+    def test_rewrite_progress_update_adds_result_only_guidance(self) -> None:
+        llm = _FakeLLMClient(response="已完成待办创建。")
+        rewriter = PersonaRewriter(llm_client=llm, persona="可靠同事", enabled=True)
+
+        rewriter.rewrite_progress_update("已完成待办创建。")
+
+        self.assertEqual(len(llm.calls), 1)
+        payload = json.loads(llm.calls[0][1]["content"])
+        self.assertIn("只输出子任务完成文本本体，不添加任何解释、前后缀或额外包装文案", payload["requirements"])
+        self.assertIn("可润色语气，但必须完整保留原始子任务名称与完成状态事实", payload["requirements"])
+
+    def test_rewrite_progress_update_does_not_block_on_shared_lock(self) -> None:
+        llm = _FakeLLMClient(response="进度消息")
+        rewriter = PersonaRewriter(llm_client=llm, persona="可靠同事", enabled=True)
+        holder: dict[str, str] = {}
+
+        def _run() -> None:
+            holder["result"] = rewriter.rewrite_progress_update("原始进度")
+
+        with rewriter._lock:
+            worker = threading.Thread(target=_run)
+            worker.start()
+            worker.join(timeout=0.3)
+            finished_while_locked = not worker.is_alive()
+        worker.join(timeout=1.0)
+
+        self.assertTrue(finished_while_locked)
+        self.assertEqual(holder.get("result"), "进度消息")
+        self.assertEqual(len(llm.calls), 1)
 
 
 if __name__ == "__main__":

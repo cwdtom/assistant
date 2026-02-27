@@ -206,6 +206,7 @@ class PendingPlanTask:
     successful_steps: int = 0
     failed_steps: int = 0
     last_reported_plan_signature: tuple[tuple[str, bool], ...] | None = None
+    last_notified_completed_subtask_count: int = 0
 
 
 class AssistantAgent:
@@ -259,12 +260,16 @@ class AssistantAgent:
         self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
         self._user_profile_refresh_runner = user_profile_refresh_runner
         self._final_response_rewriter = final_response_rewriter
+        self._subtask_result_callback: Callable[[str], None] | None = None
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._progress_callback = callback
 
     def set_user_profile_refresh_runner(self, runner: Callable[[], str] | None) -> None:
         self._user_profile_refresh_runner = runner
+
+    def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None:
+        self._subtask_result_callback = callback
 
     @staticmethod
     def _outer_context(task: PendingPlanTask) -> OuterPlanContext:
@@ -480,6 +485,7 @@ class AssistantAgent:
         task.needs_replan = False
         self._emit_progress(f"重规划完成：共 {len(outer.latest_plan)} 步。")
         self._emit_plan_progress(task)
+        self._notify_replan_continue_subtask_result(task)
         return "ok", None
 
     def _run_inner_react_loop(self, task: PendingPlanTask) -> tuple[str, str | None]:
@@ -2095,6 +2101,31 @@ class AssistantAgent:
                 result=_truncate_text(normalized_result, self._plan_observation_char_limit),
             )
         )
+
+    def _notify_replan_continue_subtask_result(self, task: PendingPlanTask) -> None:
+        callback = self._subtask_result_callback
+        if callback is None:
+            return
+        outer = self._outer_context(task)
+        completed_subtasks = outer.completed_subtasks
+        total_completed = len(completed_subtasks)
+        if total_completed <= 0:
+            return
+        if task.last_notified_completed_subtask_count >= total_completed:
+            return
+        task.last_notified_completed_subtask_count = total_completed
+        latest_item = completed_subtasks[-1].item.strip()
+        if not latest_item:
+            return
+        latest_result = f"{latest_item}已完成"
+        try:
+            callback(latest_result)
+        except Exception:
+            self._app_logger.warning(
+                "failed to notify replan continue subtask result",
+                extra={"event": "replan_continue_subtask_notify_failed"},
+                exc_info=True,
+            )
 
     @staticmethod
     def _latest_success_observation_result(task: PendingPlanTask) -> str:

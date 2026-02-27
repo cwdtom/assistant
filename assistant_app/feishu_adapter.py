@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import re
 import threading
 import time
@@ -21,6 +22,8 @@ DEFAULT_FEISHU_DONE_EMOJI_TYPE = "DONE"
 class AgentLike(Protocol):
     def handle_input(self, user_input: str) -> str: ...
 
+    def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None: ...
+
 
 @dataclass(frozen=True)
 class FeishuTextMessage:
@@ -35,6 +38,13 @@ class _PendingTaskInput:
     chat_id: str
     text: str
     latest_message_id: str
+
+
+@dataclass(frozen=True)
+class _SubtaskResultUpdate:
+    chat_id: str
+    message_id: str
+    result: str
 
 
 class MessageDeduplicator:
@@ -158,6 +168,7 @@ class FeishuEventProcessor:
         send_text: Callable[[str, str], None],
         send_reaction: Callable[[str, str], None],
         logger: logging.Logger,
+        progress_content_rewriter: Callable[[str], str] | None = None,
         allowed_open_ids: set[str] | None = None,
         deduplicator: MessageDeduplicator | None = None,
         send_retry_count: int = DEFAULT_FEISHU_SEND_RETRY_COUNT,
@@ -179,17 +190,89 @@ class FeishuEventProcessor:
         self._ack_reaction_enabled = ack_reaction_enabled
         self._ack_emoji_type = ack_emoji_type.strip() or DEFAULT_FEISHU_ACK_EMOJI_TYPE
         self._done_emoji_type = done_emoji_type.strip() or DEFAULT_FEISHU_DONE_EMOJI_TYPE
+        self._progress_content_rewriter = progress_content_rewriter
+        self._progress_queue: queue.Queue[_SubtaskResultUpdate] = queue.Queue()
+        self._progress_worker_lock = threading.Lock()
+        self._progress_worker: threading.Thread | None = None
         self._state_lock = threading.Lock()
         self._state_condition = threading.Condition(self._state_lock)
         self._active_task: _PendingTaskInput | None = None
         self._pending_task: _PendingTaskInput | None = None
         self._worker_thread: threading.Thread | None = None
+        self._bind_subtask_result_callback()
 
     def set_send_text(self, send_text: Callable[[str, str], None]) -> None:
         self._send_text = send_text
 
     def set_send_reaction(self, send_reaction: Callable[[str, str], None]) -> None:
         self._send_reaction = send_reaction
+
+    def _bind_subtask_result_callback(self) -> None:
+        setter = getattr(self._agent, "set_subtask_result_callback", None)
+        if not callable(setter):
+            return
+        try:
+            setter(self._on_subtask_result_update)
+        except Exception:  # noqa: BLE001
+            self._logger.warning("failed to bind subtask result callback", exc_info=True)
+
+    def _on_subtask_result_update(self, result: str) -> None:
+        normalized_result = result.strip()
+        if not normalized_result:
+            return
+        with self._state_lock:
+            active_task = self._active_task
+            if active_task is None:
+                return
+            update = _SubtaskResultUpdate(
+                chat_id=active_task.chat_id,
+                message_id=active_task.latest_message_id,
+                result=normalized_result,
+            )
+        self._ensure_progress_worker_started()
+        self._progress_queue.put(update)
+
+    def _ensure_progress_worker_started(self) -> None:
+        with self._progress_worker_lock:
+            worker = self._progress_worker
+            if worker is not None and worker.is_alive():
+                return
+            self._progress_worker = threading.Thread(
+                target=self._process_subtask_result_queue,
+                name="feishu-subtask-result-worker",
+                daemon=True,
+            )
+            self._progress_worker.start()
+
+    def _process_subtask_result_queue(self) -> None:
+        while True:
+            update = self._progress_queue.get()
+            message = update.result
+            rewriter = self._progress_content_rewriter
+            if rewriter is not None:
+                try:
+                    rewritten = rewriter(message)
+                    normalized_rewritten = rewritten.strip()
+                    if normalized_rewritten:
+                        message = normalized_rewritten
+                except Exception:  # noqa: BLE001
+                    self._logger.warning(
+                        "feishu subtask progress rewrite failed: message_id=%s",
+                        update.message_id,
+                        exc_info=True,
+                    )
+            try:
+                self._send_text(update.chat_id, message)
+                self._logger.info(
+                    "feishu subtask progress sent: message_id=%s",
+                    update.message_id,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.warning(
+                    "feishu subtask progress dropped: message_id=%s",
+                    update.message_id,
+                    exc_info=True,
+                )
 
     def handle_event(self, event_payload: Any) -> None:
         message = extract_text_message(event_payload)
@@ -582,6 +665,7 @@ def create_feishu_runner(
     app_secret: str,
     agent: AgentLike,
     logger: logging.Logger,
+    progress_content_rewriter: Callable[[str], str] | None,
     allowed_open_ids: set[str] | None,
     send_retry_count: int,
     text_chunk_size: int,
@@ -596,6 +680,7 @@ def create_feishu_runner(
         send_text=lambda _chat_id, _text: None,
         send_reaction=lambda _message_id, _emoji_type: None,
         logger=logger,
+        progress_content_rewriter=progress_content_rewriter,
         allowed_open_ids=allowed_open_ids,
         deduplicator=MessageDeduplicator(ttl_seconds=dedup_ttl_seconds),
         send_retry_count=send_retry_count,

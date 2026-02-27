@@ -1417,6 +1417,64 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertGreaterEqual(len(phases), 5)
         self.assertEqual(phases[:5], ["plan", "thought", "thought", "replan", "thought"])
 
+    def test_replan_continue_notifies_latest_subtask_result(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["新增待办", "总结结果"]),
+                _thought_continue("todo", "/todo add 买牛奶 --tag life"),
+                _planner_done("待办创建已完成。"),
+                _planner_replanned(["总结结果"]),
+                _planner_done("总结完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        progress_updates: list[str] = []
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        agent.set_subtask_result_callback(progress_updates.append)
+
+        response = agent.handle_input("帮我新增待办并总结")
+
+        self.assertIn("最终完成", response)
+        self.assertEqual(progress_updates, ["新增待办已完成"])
+
+    def test_replan_done_does_not_notify_subtask_result(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["收尾"]),
+                _planner_done("收尾步骤完成。"),
+                _planner_done("任务已完成。"),
+            ]
+        )
+        progress_updates: list[str] = []
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        agent.set_subtask_result_callback(progress_updates.append)
+
+        response = agent.handle_input("直接收尾")
+
+        self.assertIn("任务已完成", response)
+        self.assertEqual(progress_updates, [])
+
+    def test_replan_continue_without_completed_subtask_does_not_notify(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["确认信息", "执行创建"]),
+                _thought_ask_user("要添加什么待办？"),
+                _planner_replanned(["执行创建"]),
+                _planner_done("执行创建完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        progress_updates: list[str] = []
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        agent.set_subtask_result_callback(progress_updates.append)
+
+        first = agent.handle_input("帮我加一个待办")
+        self.assertIn("请确认", first)
+        final = agent.handle_input("买牛奶")
+
+        self.assertIn("最终完成", final)
+        self.assertEqual(progress_updates, [])
+
     def test_thought_done_only_marks_subtask_and_replan_decides_final(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[

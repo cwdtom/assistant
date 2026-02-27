@@ -32,12 +32,15 @@ class PersonaRewriter:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def rewrite_final_response(self, text: str) -> str:
-        return self._rewrite_text(text=text, scene="final_response")
+        return self._rewrite_text(text=text, scene="final_response", use_lock=True)
 
     def rewrite_reminder_content(self, text: str) -> str:
-        return self._rewrite_text(text=text, scene="reminder")
+        return self._rewrite_text(text=text, scene="reminder", use_lock=True)
 
-    def _rewrite_text(self, *, text: str, scene: str) -> str:
+    def rewrite_progress_update(self, text: str) -> str:
+        return self._rewrite_text(text=text, scene="progress_update", use_lock=False)
+
+    def _rewrite_text(self, *, text: str, scene: str, use_lock: bool) -> str:
         normalized_text = text.strip()
         if not normalized_text:
             return text
@@ -57,7 +60,10 @@ class PersonaRewriter:
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
-            with self._lock:
+            if use_lock:
+                with self._lock:
+                    rewritten = self.llm_client.reply(messages)
+            else:
                 rewritten = self.llm_client.reply(messages)
         except Exception as exc:  # noqa: BLE001
             self._log_rewrite_error(scene=scene, error=exc)
@@ -79,6 +85,13 @@ class PersonaRewriter:
                 [
                     "语气更像真人同步结果：先说结论，再补充关键细节",
                     "由你判断是否拆成多条发送；若拆分，请用空行分隔每条内容",
+                ]
+            )
+        if scene == "progress_update":
+            requirements.extend(
+                [
+                    "只输出子任务完成文本本体，不添加任何解释、前后缀或额外包装文案",
+                    "可润色语气，但必须完整保留原始子任务名称与完成状态事实",
                 ]
             )
         return requirements

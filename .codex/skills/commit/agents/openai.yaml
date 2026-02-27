@@ -1,0 +1,4 @@
+interface:
+  display_name: "CR README Commit"
+  short_description: "先执行代码审查，再同步README一致性并完成规范提交流程"
+  default_prompt: "Use $commit to review changes, align README with code, and create a clean commit."

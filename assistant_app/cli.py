@@ -217,6 +217,7 @@ def main() -> None:
                 app_secret=config.feishu_app_secret,
                 agent=agent,
                 logger=feishu_logger,
+                progress_content_rewriter=persona_rewriter.rewrite_progress_update,
                 allowed_open_ids=set(config.feishu_allowed_open_ids),
                 send_retry_count=config.feishu_send_retry_count,
                 text_chunk_size=config.feishu_text_chunk_size,

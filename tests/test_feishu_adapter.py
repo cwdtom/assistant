@@ -89,6 +89,36 @@ class _ChunkedResponseAgent:
         return
 
 
+class _ProgressReportingTaskAwareAgent:
+    def __init__(
+        self,
+        *,
+        progress_result: str = "执行结果",
+        response: str = "任务处理完成。",
+        task_completed: bool = True,
+    ) -> None:
+        self.progress_result = progress_result
+        self.response = response
+        self.task_completed = task_completed
+        self.inputs: list[str] = []
+        self._subtask_result_callback = None
+
+    def set_subtask_result_callback(self, callback) -> None:  # type: ignore[no-untyped-def]
+        self._subtask_result_callback = callback
+
+    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
+        self.inputs.append(user_input)
+        callback = self._subtask_result_callback
+        if callable(callback):
+            callback(self.progress_result)
+        return self.response, self.task_completed
+
+    def emit_progress_result(self, result: str) -> None:
+        callback = self._subtask_result_callback
+        if callable(callback):
+            callback(result)
+
+
 class FeishuAdapterTest(unittest.TestCase):
     def _wait_until(self, predicate, *, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
         deadline = time.monotonic() + timeout
@@ -380,6 +410,104 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(lambda: len(reactions) == 2)
         self.assertEqual(reactions, [("om_custom_done", "OK"), ("om_custom_done", "CHECKMARK")])
+
+    def test_event_processor_async_subtask_progress_rewrites_then_sends(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        rewrite_calls: list[str] = []
+        agent = _ProgressReportingTaskAwareAgent(
+            progress_result="执行结果：已添加待办 #1",
+            response="任务处理完成。",
+            task_completed=True,
+        )
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.async_progress"),
+            progress_content_rewriter=lambda text: rewrite_calls.append(text) or f"润色后：{text}",
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_progress_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"执行任务"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(
+            lambda: len(reactions) == 2
+            and ("oc_1", "润色后：执行结果：已添加待办 #1") in sent
+            and ("oc_1", "任务处理完成。") in sent
+        )
+        self.assertEqual(rewrite_calls, ["执行结果：已添加待办 #1"])
+
+    def test_event_processor_async_subtask_progress_send_failure_drops_without_retry(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        progress_attempts = {"count": 0}
+        agent = _ProgressReportingTaskAwareAgent(
+            progress_result="执行结果：已添加待办 #1",
+            response="最终消息",
+            task_completed=True,
+        )
+
+        def send_text(chat_id: str, text: str) -> None:
+            if text == "润色后：执行结果：已添加待办 #1":
+                progress_attempts["count"] += 1
+                raise RuntimeError("progress send failed")
+            sent.append((chat_id, text))
+
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=send_text,
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.async_progress_drop"),
+            progress_content_rewriter=lambda text: f"润色后：{text}",
+            send_retry_count=3,
+            send_retry_backoff_seconds=0,
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_progress_2",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"执行任务"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(lambda: len(reactions) == 2 and ("oc_1", "最终消息") in sent)
+        self._wait_until(lambda: progress_attempts["count"] == 1)
+        self.assertEqual(progress_attempts["count"], 1)
+
+    def test_event_processor_drops_subtask_progress_when_no_active_task(self) -> None:
+        sent: list[tuple[str, str]] = []
+        agent = _ProgressReportingTaskAwareAgent()
+        FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda _message_id, _emoji_type: None,
+            logger=logging.getLogger("test.feishu_adapter.drop_progress_without_active_task"),
+            progress_content_rewriter=lambda text: f"润色后：{text}",
+        )
+
+        agent.emit_progress_result("执行结果：已添加待办 #1")
+        time.sleep(0.05)
+
+        self.assertEqual(sent, [])
 
     def test_event_processor_interrupts_and_merges_new_input_when_busy(self) -> None:
         sent: list[tuple[str, str]] = []
