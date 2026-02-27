@@ -108,7 +108,7 @@ def extract_text_message(event_payload: Any) -> FeishuTextMessage | None:
         _read_path(event_payload, "event.message.message_type"),
         _read_path(event_payload, "message.message_type"),
     )
-    if message_type != "text":
+    if message_type not in {"text", "post"}:
         return None
 
     chat_type = _first_non_empty(
@@ -143,7 +143,7 @@ def extract_text_message(event_payload: Any) -> FeishuTextMessage | None:
     if not isinstance(raw_content, str):
         return None
 
-    text = parse_message_text(raw_content).strip()
+    text = convert_message_to_text(message_type=message_type, raw_content=raw_content).strip()
     if not text:
         return None
 
@@ -158,6 +158,14 @@ def extract_text_message(event_payload: Any) -> FeishuTextMessage | None:
         open_id=open_id,
         text=text,
     )
+
+
+def convert_message_to_text(*, message_type: str, raw_content: str) -> str:
+    if message_type == "text":
+        return parse_message_text(raw_content)
+    if message_type == "post":
+        return raw_content.strip()
+    return ""
 
 
 class FeishuEventProcessor:

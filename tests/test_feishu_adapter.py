@@ -161,6 +161,32 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(message.open_id, "ou_1")
         self.assertEqual(message.text, "你好")
 
+    def test_extract_post_message_keeps_raw_json_as_text(self) -> None:
+        raw_content = (
+            '{"zh_cn":{"title":"日报","content":[[{"tag":"text","text":"今天完成联调"}],'
+            '[{"tag":"text","text":"明天继续"}]]}}'
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_2"}},
+                "message": {
+                    "message_type": "post",
+                    "chat_type": "p2p",
+                    "message_id": "om_2",
+                    "chat_id": "oc_2",
+                    "content": raw_content,
+                },
+            }
+        }
+
+        message = extract_text_message(payload)
+
+        assert message is not None
+        self.assertEqual(message.message_id, "om_2")
+        self.assertEqual(message.chat_id, "oc_2")
+        self.assertEqual(message.open_id, "ou_2")
+        self.assertEqual(message.text, raw_content)
+
     def test_extract_text_message_skips_non_text_or_non_p2p(self) -> None:
         non_text = {
             "event": {
