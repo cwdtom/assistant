@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
@@ -32,6 +33,13 @@ class UserProfileRefreshResult:
     reason: str
     profile_content: str | None = None
     used_turns: int = 0
+
+
+@dataclass(frozen=True)
+class _RefreshPreparation:
+    profile_path: Path
+    current_profile: str
+    turns: list[ChatTurn]
 
 
 class UserProfileRefreshService:
@@ -89,7 +97,104 @@ class UserProfileRefreshService:
             return False
         return self._last_poll_time < due_time <= now
 
-    def _run_refresh(self, *, trigger: str, now: datetime) -> UserProfileRefreshResult:
+    def _run_refresh(self, *, trigger: Literal["scheduled", "manual"], now: datetime) -> UserProfileRefreshResult:
+        prepared = self._prepare_refresh(trigger=trigger, now=now)
+        if isinstance(prepared, UserProfileRefreshResult):
+            return prepared
+
+        llm_client = self._llm_client
+        if llm_client is None:
+            return self._skip(
+                trigger=trigger,
+                reason="当前未配置 LLM，无法刷新 user_profile。",
+                event="user_profile_refresh_no_llm",
+                path=prepared.profile_path,
+            )
+
+        messages = self._build_messages(
+            current_profile=prepared.current_profile,
+            turns=prepared.turns,
+            now=now,
+        )
+        try:
+            refreshed = self._reply_with_temperature_zero(llm_client=llm_client, messages=messages).strip()
+        except Exception as exc:  # noqa: BLE001
+            return self._fail(
+                trigger=trigger,
+                reason=f"调用 LLM 刷新 user_profile 失败: {exc}",
+                event="user_profile_refresh_llm_failed",
+                path=prepared.profile_path,
+                error=repr(exc),
+                turns=len(prepared.turns),
+            )
+        if not refreshed:
+            return self._fail(
+                trigger=trigger,
+                reason="LLM 返回空内容，未刷新 user_profile。",
+                event="user_profile_refresh_empty_output",
+                path=prepared.profile_path,
+                turns=len(prepared.turns),
+            )
+
+        try:
+            prepared.profile_path.write_text(refreshed, encoding="utf-8")
+            latest_profile = prepared.profile_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            return self._fail(
+                trigger=trigger,
+                reason=f"写回 user_profile 文件失败: {exc}",
+                event="user_profile_refresh_write_failed",
+                path=prepared.profile_path,
+                error=repr(exc),
+                turns=len(prepared.turns),
+            )
+
+        try:
+            reload_ok = self._agent_reloader()
+        except Exception as exc:  # noqa: BLE001
+            return self._fail(
+                trigger=trigger,
+                reason=f"user_profile 文件已更新，但 reload 失败: {exc}",
+                event="user_profile_refresh_reload_failed",
+                path=prepared.profile_path,
+                error=repr(exc),
+                turns=len(prepared.turns),
+            )
+        if not reload_ok:
+            return self._fail(
+                trigger=trigger,
+                reason="user_profile 文件已更新，但 reload 未生效。",
+                event="user_profile_refresh_reload_not_applied",
+                path=prepared.profile_path,
+                turns=len(prepared.turns),
+            )
+
+        self._logger.info(
+            "user profile refresh succeeded",
+            extra={
+                "event": "user_profile_refresh_succeeded",
+                "context": {
+                    "trigger": trigger,
+                    "path": str(prepared.profile_path),
+                    "turns": len(prepared.turns),
+                    "lookback_days": self._lookback_days,
+                    "max_turns": self._max_turns,
+                },
+            },
+        )
+        return UserProfileRefreshResult(
+            ok=True,
+            reason=f"user_profile 刷新成功（使用 {len(prepared.turns)} 条对话）。",
+            profile_content=latest_profile,
+            used_turns=len(prepared.turns),
+        )
+
+    def _prepare_refresh(
+        self,
+        *,
+        trigger: Literal["scheduled", "manual"],
+        now: datetime,
+    ) -> _RefreshPreparation | UserProfileRefreshResult:
         profile_path = _resolve_profile_path(self._user_profile_path)
         if profile_path is None:
             return self._skip(
@@ -104,14 +209,6 @@ class UserProfileRefreshService:
                 event="user_profile_refresh_path_missing",
                 path=profile_path,
             )
-        llm_client = self._llm_client
-        if llm_client is None:
-            return self._skip(
-                trigger=trigger,
-                reason="当前未配置 LLM，无法刷新 user_profile。",
-                event="user_profile_refresh_no_llm",
-                path=profile_path,
-            )
         try:
             current_profile = profile_path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError) as exc:
@@ -122,7 +219,6 @@ class UserProfileRefreshService:
                 path=profile_path,
                 error=repr(exc),
             )
-
         turns = self._collect_chat_turns(now=now)
         if not turns:
             return self._skip(
@@ -130,72 +226,12 @@ class UserProfileRefreshService:
                 reason=f"最近 {self._lookback_days} 天暂无可用对话，已跳过 user_profile 刷新。",
                 event="user_profile_refresh_no_turns",
                 path=profile_path,
+                level="info",
             )
-
-        messages = self._build_messages(current_profile=current_profile, turns=turns, now=now)
-        try:
-            refreshed = self._reply_with_temperature_zero(llm_client=llm_client, messages=messages).strip()
-        except Exception as exc:  # noqa: BLE001
-            return self._fail(
-                trigger=trigger,
-                reason=f"调用 LLM 刷新 user_profile 失败: {exc}",
-                event="user_profile_refresh_llm_failed",
-                path=profile_path,
-                error=repr(exc),
-                turns=len(turns),
-            )
-        if not refreshed:
-            return self._fail(
-                trigger=trigger,
-                reason="LLM 返回空内容，未刷新 user_profile。",
-                event="user_profile_refresh_empty_output",
-                path=profile_path,
-                turns=len(turns),
-            )
-
-        try:
-            profile_path.write_text(refreshed, encoding="utf-8")
-            latest_profile = profile_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            return self._fail(
-                trigger=trigger,
-                reason=f"写回 user_profile 文件失败: {exc}",
-                event="user_profile_refresh_write_failed",
-                path=profile_path,
-                error=repr(exc),
-                turns=len(turns),
-            )
-
-        try:
-            self._agent_reloader()
-        except Exception as exc:  # noqa: BLE001
-            return self._fail(
-                trigger=trigger,
-                reason=f"user_profile 文件已更新，但 reload 失败: {exc}",
-                event="user_profile_refresh_reload_failed",
-                path=profile_path,
-                error=repr(exc),
-                turns=len(turns),
-            )
-
-        self._logger.info(
-            "user profile refresh succeeded",
-            extra={
-                "event": "user_profile_refresh_succeeded",
-                "context": {
-                    "trigger": trigger,
-                    "path": str(profile_path),
-                    "turns": len(turns),
-                    "lookback_days": self._lookback_days,
-                    "max_turns": self._max_turns,
-                },
-            },
-        )
-        return UserProfileRefreshResult(
-            ok=True,
-            reason=f"user_profile 刷新成功（使用 {len(turns)} 条对话）。",
-            profile_content=latest_profile,
-            used_turns=len(turns),
+        return _RefreshPreparation(
+            profile_path=profile_path,
+            current_profile=current_profile,
+            turns=turns,
         )
 
     def _collect_chat_turns(self, *, now: datetime) -> list[ChatTurn]:
@@ -239,7 +275,10 @@ class UserProfileRefreshService:
         reply_with_temperature = getattr(llm_client, "reply_with_temperature", None)
         if callable(reply_with_temperature):
             return str(reply_with_temperature(messages, temperature=0.0))
-        return str(llm_client.reply(messages))
+        raw_temperature = getattr(llm_client, "temperature", None)
+        if isinstance(raw_temperature, (int, float)) and float(raw_temperature) == 0.0:
+            return str(llm_client.reply(messages))
+        raise RuntimeError("当前 LLM 客户端不支持 temperature 覆盖，无法保证 user_profile 刷新温度为 0。")
 
     def _skip(
         self,
@@ -248,17 +287,19 @@ class UserProfileRefreshService:
         reason: str,
         event: str,
         path: Path | None = None,
+        level: Literal["info", "warning"] = "warning",
     ) -> UserProfileRefreshResult:
         context: dict[str, object] = {"trigger": trigger}
         if path is not None:
             context["path"] = str(path)
-        self._logger.warning(
-            "user profile refresh skipped",
-            extra={
-                "event": event,
-                "context": context,
-            },
-        )
+        log_extra = {
+            "event": event,
+            "context": context,
+        }
+        if level == "info":
+            self._logger.info("user profile refresh skipped", extra=log_extra)
+        else:
+            self._logger.warning("user profile refresh skipped", extra=log_extra)
         return UserProfileRefreshResult(ok=False, reason=reason)
 
     def _fail(

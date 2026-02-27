@@ -2256,7 +2256,7 @@ class AssistantAgent:
         if command == "/profile refresh":
             runner = self._user_profile_refresh_runner
             if runner is None:
-                return "当前未启用 user_profile 刷新服务。请先配置 USER_PROFILE_PATH 和 LLM。"
+                return "当前未启用 user_profile 刷新服务。请检查 USER_PROFILE_REFRESH_ENABLED、USER_PROFILE_PATH 与 LLM 配置。"
             try:
                 return runner()
             except Exception as exc:  # noqa: BLE001

@@ -38,6 +38,17 @@ class _FakeLLMClient:
         return self.reply(messages)
 
 
+class _NoTemperatureLLMClient:
+    def __init__(self, *, temperature: float, reply_text: str) -> None:
+        self.temperature = temperature
+        self.reply_text = reply_text
+        self.calls = 0
+
+    def reply(self, _messages: list[dict[str, str]]) -> str:
+        self.calls += 1
+        return self.reply_text
+
+
 class UserProfileRefreshServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -207,6 +218,54 @@ class UserProfileRefreshServiceTest(unittest.TestCase):
         self.assertEqual(self.profile_path.read_text(encoding="utf-8"), original)
         self.assertEqual(self.reload_count, 0)
         self.assertEqual(llm.temperature_calls, [0.0])
+
+    def test_manual_refresh_fails_when_temperature_override_is_not_supported(self) -> None:
+        original = self.profile_path.read_text(encoding="utf-8")
+        llm = _NoTemperatureLLMClient(temperature=0.3, reply_text="# 不应写入")
+        service = UserProfileRefreshService(
+            db=self.db,
+            llm_client=llm,
+            user_profile_path=str(self.profile_path),
+            agent_reloader=self._reload_agent,
+            clock=_MutableClock(datetime(2026, 2, 27, 12, 0)),
+        )
+
+        result = service.run_manual_refresh()
+
+        self.assertIn("不支持 temperature 覆盖", result)
+        self.assertEqual(llm.calls, 0)
+        self.assertEqual(self.profile_path.read_text(encoding="utf-8"), original)
+        self.assertEqual(self.reload_count, 0)
+
+    def test_manual_refresh_allows_reply_fallback_when_client_temperature_is_zero(self) -> None:
+        llm = _NoTemperatureLLMClient(temperature=0.0, reply_text="# 温度已锁定")
+        service = UserProfileRefreshService(
+            db=self.db,
+            llm_client=llm,
+            user_profile_path=str(self.profile_path),
+            agent_reloader=self._reload_agent,
+            clock=_MutableClock(datetime(2026, 2, 27, 12, 0)),
+        )
+
+        result = service.run_manual_refresh()
+
+        self.assertEqual(result, "# 温度已锁定")
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(self.reload_count, 1)
+
+    def test_manual_refresh_reports_failure_when_reloader_returns_false(self) -> None:
+        llm = _FakeLLMClient(replies=["# 新画像但未加载"])
+        service = UserProfileRefreshService(
+            db=self.db,
+            llm_client=llm,
+            user_profile_path=str(self.profile_path),
+            agent_reloader=lambda: False,
+            clock=_MutableClock(datetime(2026, 2, 27, 12, 0)),
+        )
+
+        result = service.run_manual_refresh()
+
+        self.assertIn("reload 未生效", result)
 
 
 if __name__ == "__main__":
