@@ -180,12 +180,18 @@ python -m unittest discover -s tests -p "test_*.py"
 
 # startup helper
 ./scripts/assistant.sh start
+./scripts/assistant.sh start work
 ./scripts/assistant.sh restart
+./scripts/assistant.sh status work
 ./scripts/assistant.sh status
+./scripts/assistant.sh list
+./scripts/assistant.sh list work
+./scripts/assistant.sh stop work
 ./scripts/assistant.sh stop
 ./scripts/assistant.sh run
 # start/restart 默认先 git fetch；若远端领先则 ff merge，本地领先则跳过，分叉则报错退出
 # 临时跳过自动拉取：ASSISTANT_AUTO_PULL=false ./scripts/assistant.sh start
+# 也可设置默认别名：ASSISTANT_ALIAS=work ./scripts/assistant.sh start
 
 # lint/format/type-check
 ruff check .

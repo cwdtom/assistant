@@ -59,11 +59,21 @@ python main.py
 # 后台启动
 ./scripts/assistant.sh start
 
+# 以别名启动多实例（会使用独立 pid/stdin/log 文件）
+./scripts/assistant.sh start work
+./scripts/assistant.sh --alias sidecar start
+
 # 重启
 ./scripts/assistant.sh restart
 
+# 针对某个别名查看状态 / 停止
+./scripts/assistant.sh status work
+./scripts/assistant.sh stop work
+
 # 查看状态 / 停止
 ./scripts/assistant.sh status
+./scripts/assistant.sh list
+./scripts/assistant.sh list work
 ./scripts/assistant.sh stop
 
 # 当前终端前台运行（等价于 python main.py）
@@ -76,6 +86,7 @@ python main.py
   - 本地领先：跳过合并，仅启动/重启；
   - 分叉（双方都有新提交）：报错并退出，需先手动处理分支同步。
 - 如需跳过自动拉取，可临时执行：`ASSISTANT_AUTO_PULL=false ./scripts/assistant.sh start`
+- 可用 `ASSISTANT_ALIAS` 设置默认别名，例如：`ASSISTANT_ALIAS=work ./scripts/assistant.sh start`
 
 ## Core Environment Variables
 - `.env` 加载优先级最高：若系统环境与 `.env` 同名，最终以 `.env` 值为准

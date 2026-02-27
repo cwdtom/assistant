@@ -4,12 +4,40 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/logs"
-PID_FILE="$LOG_DIR/assistant.pid"
-STDIN_PIPE="$LOG_DIR/assistant.stdin"
-APP_LOG_FILE="$LOG_DIR/assistant.stdout.log"
+DEFAULT_INSTANCE_ALIAS="default"
+INSTANCE_ALIAS="${ASSISTANT_ALIAS:-$DEFAULT_INSTANCE_ALIAS}"
+PID_FILE=""
+STDIN_PIPE=""
+APP_LOG_FILE=""
 AUTO_PULL_FLAG="${ASSISTANT_AUTO_PULL:-true}"
 AUTO_PULL_REMOTE="${ASSISTANT_AUTO_PULL_REMOTE:-origin}"
 AUTO_PULL_BRANCH="${ASSISTANT_AUTO_PULL_BRANCH:-}"
+
+resolve_runtime_paths() {
+  local suffix=""
+  if [[ "$INSTANCE_ALIAS" != "$DEFAULT_INSTANCE_ALIAS" ]]; then
+    suffix=".$INSTANCE_ALIAS"
+  fi
+
+  PID_FILE="$LOG_DIR/assistant${suffix}.pid"
+  STDIN_PIPE="$LOG_DIR/assistant${suffix}.stdin"
+  APP_LOG_FILE="$LOG_DIR/assistant${suffix}.stdout.log"
+}
+
+validate_alias() {
+  if [[ -z "$INSTANCE_ALIAS" ]]; then
+    echo "Assistant alias cannot be empty." >&2
+    return 1
+  fi
+
+  if [[ "$INSTANCE_ALIAS" =~ [^a-zA-Z0-9._-] ]]; then
+    echo "Invalid assistant alias: $INSTANCE_ALIAS" >&2
+    echo "Allowed chars: letters, numbers, dot, underscore, hyphen." >&2
+    return 1
+  fi
+
+  resolve_runtime_paths
+}
 
 resolve_python_bin() {
   local venv_python="$ROOT_DIR/.venv/bin/python"
@@ -101,7 +129,7 @@ start_background() {
   fi
 
   if is_running; then
-    echo "Assistant is already running (pid $(cat "$PID_FILE"))."
+    echo "Assistant ($INSTANCE_ALIAS) is already running (pid $(cat "$PID_FILE"))."
     return 0
   fi
 
@@ -126,7 +154,7 @@ start_background() {
   echo "$pid" >"$PID_FILE"
   sleep 0.3
   if kill -0 "$pid" >/dev/null 2>&1; then
-    echo "Assistant started in background (pid $pid)."
+    echo "Assistant ($INSTANCE_ALIAS) started in background (pid $pid)."
     echo "Log file: $APP_LOG_FILE"
   else
     echo "Assistant failed to start. Check logs: $APP_LOG_FILE" >&2
@@ -137,7 +165,7 @@ start_background() {
 
 stop_background() {
   if ! is_running; then
-    echo "Assistant is not running."
+    echo "Assistant ($INSTANCE_ALIAS) is not running."
     rm -f "$PID_FILE"
     return 0
   fi
@@ -158,14 +186,76 @@ stop_background() {
   fi
 
   rm -f "$PID_FILE"
-  echo "Assistant stopped."
+  rm -f "$STDIN_PIPE"
+  echo "Assistant ($INSTANCE_ALIAS) stopped."
 }
 
 status_background() {
   if is_running; then
-    echo "Assistant is running (pid $(cat "$PID_FILE"))."
+    echo "Assistant ($INSTANCE_ALIAS) is running (pid $(cat "$PID_FILE"))."
   else
-    echo "Assistant is not running."
+    echo "Assistant ($INSTANCE_ALIAS) is not running."
+  fi
+}
+
+parse_alias_from_pid_file() {
+  local filename
+  filename="$(basename "$1")"
+
+  if [[ "$filename" == "assistant.pid" ]]; then
+    echo "$DEFAULT_INSTANCE_ALIAS"
+    return 0
+  fi
+
+  local alias
+  alias="${filename#assistant.}"
+  alias="${alias%.pid}"
+  echo "$alias"
+}
+
+list_background() {
+  mkdir -p "$LOG_DIR"
+
+  local filter_alias="${1:-}"
+  local pid_files=()
+  local pid_file
+  local alias
+  local pid
+  local status
+  local found=0
+
+  shopt -s nullglob
+  pid_files=("$LOG_DIR"/assistant.pid "$LOG_DIR"/assistant.*.pid)
+  shopt -u nullglob
+
+  for pid_file in "${pid_files[@]}"; do
+    [[ -f "$pid_file" ]] || continue
+
+    alias="$(parse_alias_from_pid_file "$pid_file")"
+    if [[ -n "$filter_alias" && "$alias" != "$filter_alias" ]]; then
+      continue
+    fi
+
+    pid="$(tr -d '[:space:]' <"$pid_file")"
+    status="stopped"
+    if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+      status="running"
+    fi
+
+    if [[ "$found" -eq 0 ]]; then
+      printf "%-20s %-10s %-8s %s\n" "ALIAS" "STATUS" "PID" "PID_FILE"
+    fi
+
+    printf "%-20s %-10s %-8s %s\n" "$alias" "$status" "${pid:--}" "$pid_file"
+    found=1
+  done
+
+  if [[ "$found" -eq 0 ]]; then
+    if [[ -n "$filter_alias" ]]; then
+      echo "No assistant instances found for alias: $filter_alias"
+    else
+      echo "No assistant instances found."
+    fi
   fi
 }
 
@@ -178,22 +268,88 @@ run_foreground() {
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [start|stop|restart|status|run]
+Usage: $(basename "$0") [--alias <name>] [start|stop|restart|status|list|run] [alias]
 
   start    Auto-update code then start assistant in background mode.
   stop     Stop background assistant.
   restart  Auto-update code, then restart background assistant.
   status   Show background assistant status.
+  list     List all assistant instances (or filter by alias).
   run      Run assistant in current terminal (foreground).
 
+Examples:
+  $(basename "$0") start
+  $(basename "$0") start dev
+  $(basename "$0") --alias work status
+  $(basename "$0") list
+
 Environment:
+  ASSISTANT_ALIAS=...            Default assistant alias (default: $DEFAULT_INSTANCE_ALIAS).
   ASSISTANT_AUTO_PULL=true|false  Enable auto update before start/restart (default: true).
   ASSISTANT_AUTO_PULL_REMOTE=...  Git remote used for update (default: origin).
   ASSISTANT_AUTO_PULL_BRANCH=...  Override target branch (default: current branch).
 EOF
 }
 
-cmd="${1:-start}"
+cmd="start"
+positionals=()
+alias_set_by_option=false
+alias_set_by_cli=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -a|--alias)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for $1" >&2
+        usage
+        exit 1
+      fi
+      INSTANCE_ALIAS="$2"
+      alias_set_by_option=true
+      alias_set_by_cli=true
+      shift 2
+      ;;
+    --alias=*)
+      INSTANCE_ALIAS="${1#*=}"
+      alias_set_by_option=true
+      alias_set_by_cli=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      positionals+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#positionals[@]} -ge 1 ]]; then
+  cmd="${positionals[0]}"
+fi
+
+if [[ ${#positionals[@]} -ge 2 ]]; then
+  if is_truthy "$alias_set_by_option"; then
+    echo "Alias provided twice: use --alias or positional alias, not both." >&2
+    usage
+    exit 1
+  fi
+  INSTANCE_ALIAS="${positionals[1]}"
+  alias_set_by_cli=true
+fi
+
+if [[ ${#positionals[@]} -gt 2 ]]; then
+  echo "Too many positional arguments." >&2
+  usage
+  exit 1
+fi
+
+if ! validate_alias; then
+  exit 1
+fi
+
 case "$cmd" in
   start)
     start_background
@@ -208,6 +364,13 @@ case "$cmd" in
     ;;
   status)
     status_background
+    ;;
+  list)
+    if is_truthy "$alias_set_by_cli"; then
+      list_background "$INSTANCE_ALIAS"
+    else
+      list_background
+    fi
     ;;
   run)
     run_foreground
