@@ -51,6 +51,7 @@ DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT = 2
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 DEFAULT_INTERNET_SEARCH_TOP_K = 3
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
+UNKNOWN_APP_VERSION = "unknown"
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
 PLAN_HISTORY_LOOKBACK_HOURS = 24
@@ -231,6 +232,7 @@ class AssistantAgent:
         user_profile_max_chars: int = DEFAULT_USER_PROFILE_MAX_CHARS,
         user_profile_refresh_runner: Callable[[], str] | None = None,
         final_response_rewriter: Callable[[str], str] | None = None,
+        app_version: str = UNKNOWN_APP_VERSION,
     ) -> None:
         self.db = db
         self.llm_client = llm_client
@@ -261,6 +263,7 @@ class AssistantAgent:
         self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
         self._user_profile_refresh_runner = user_profile_refresh_runner
         self._final_response_rewriter = final_response_rewriter
+        self._app_version = app_version.strip() or UNKNOWN_APP_VERSION
         self._subtask_result_callback: Callable[[str], None] | None = None
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
@@ -2302,6 +2305,12 @@ class AssistantAgent:
     def _handle_command(self, command: str) -> str:
         if command == "/help":
             return self._help_text()
+        if command == "/version":
+            if self._app_version == UNKNOWN_APP_VERSION:
+                return "当前版本：unknown"
+            return f"当前版本：v{self._app_version}"
+        if command.split(maxsplit=1)[0] == "/version":
+            return "用法: /version"
 
         if command == "/profile refresh":
             runner = self._user_profile_refresh_runner
@@ -2822,6 +2831,7 @@ class AssistantAgent:
         return (
             "可用命令:\n"
             "/help\n"
+            "/version\n"
             "/profile refresh\n"
             "/history list [--limit <>=1>]\n"
             "/history search <关键词> [--limit <>=1>]\n"

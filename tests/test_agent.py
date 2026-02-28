@@ -415,6 +415,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=None)
         result = agent.handle_input("/help")
 
+        self.assertIn("/version", result)
         self.assertIn("/todo add", result)
         self.assertIn("--priority <>=0>", result)
         self.assertIn("/todo search <关键词>", result)
@@ -431,6 +432,27 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("--duration <>=1>", result)
         self.assertIn("/schedule list [--tag <标签>]", result)
         self.assertIn("--interval <>=1>", result)
+
+    def test_version_command(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None, app_version="1.2.3")
+
+        result = agent.handle_input("/version")
+
+        self.assertEqual(result, "当前版本：v1.2.3")
+
+    def test_version_command_rejects_extra_args(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None, app_version="1.2.3")
+
+        result = agent.handle_input("/version verbose")
+
+        self.assertEqual(result, "用法: /version")
+
+    def test_version_command_returns_unknown_when_version_unavailable(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None, app_version="")
+
+        result = agent.handle_input("/version")
+
+        self.assertEqual(result, "当前版本：unknown")
 
     def test_slash_commands_without_llm(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)

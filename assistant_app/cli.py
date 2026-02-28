@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
-from assistant_app.config import load_config
+from assistant_app.config import load_config, load_startup_app_version
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import create_feishu_runner
 from assistant_app.llm import OpenAICompatibleClient
@@ -125,6 +125,10 @@ def _is_same_log_path(path_a: str, path_b: str) -> bool:
 def main() -> None:
     config = load_config()
     app_logger = _configure_app_logger(config.app_log_path, config.app_log_retention_days)
+    app_version = load_startup_app_version(
+        pyproject_path=Path(__file__).resolve().parent.parent / "pyproject.toml",
+        logger=app_logger,
+    )
     _configure_llm_trace_logger(config.llm_trace_log_path, retention_days=config.app_log_retention_days)
     db = AssistantDB(config.db_path)
     progress_color_prefix, progress_color_suffix = _resolve_progress_color(config.cli_progress_color)
@@ -164,6 +168,7 @@ def main() -> None:
         internet_search_top_k=config.internet_search_top_k,
         schedule_max_window_days=config.schedule_max_window_days,
         final_response_rewriter=persona_rewriter.rewrite_final_response,
+        app_version=app_version,
     )
     user_profile_refresh_service: UserProfileRefreshService | None = None
     if config.user_profile_refresh_enabled:

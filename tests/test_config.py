@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from assistant_app.config import load_config, load_env_file
+from assistant_app.config import UNKNOWN_APP_VERSION, load_config, load_env_file, load_startup_app_version
 
 
 class ConfigTest(unittest.TestCase):
@@ -319,6 +320,32 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(config.feishu_app_id, "file-id")
         self.assertEqual(config.feishu_app_secret, "file-secret")
+
+    def test_load_startup_app_version_reads_project_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pyproject = Path(tmp) / "pyproject.toml"
+            pyproject.write_text(
+                '[build-system]\nrequires=["setuptools"]\n\n[project]\nname="demo"\nversion = "2.3.4"\n',
+                encoding="utf-8",
+            )
+
+            version = load_startup_app_version(pyproject_path=pyproject)
+
+        self.assertEqual(version, "2.3.4")
+
+    def test_load_startup_app_version_falls_back_to_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pyproject = Path(tmp) / "pyproject.toml"
+            pyproject.write_text('[project]\nname="demo"\n', encoding="utf-8")
+
+            with self.assertLogs("test.config.version", level="WARNING") as captured:
+                version = load_startup_app_version(
+                    pyproject_path=pyproject,
+                    logger=logging.getLogger("test.config.version"),
+                )
+
+        self.assertEqual(version, UNKNOWN_APP_VERSION)
+        self.assertTrue(any("failed to load app version from pyproject" in item for item in captured.output))
 
 
 if __name__ == "__main__":

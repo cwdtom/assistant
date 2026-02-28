@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+UNKNOWN_APP_VERSION = "unknown"
+_PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$""")
 
 
 @dataclass(frozen=True)
@@ -199,3 +204,47 @@ def _read_env_list(name: str) -> tuple[str, ...]:
     values = [item.strip() for item in raw.split(",")]
     result = tuple(item for item in values if item)
     return result
+
+
+def load_startup_app_version(
+    *,
+    pyproject_path: str | Path,
+    logger: logging.Logger | None = None,
+) -> str:
+    path = Path(pyproject_path)
+    try:
+        return _read_project_version(path)
+    except (OSError, ValueError) as exc:
+        if logger is not None:
+            logger.warning(
+                "failed to load app version from pyproject",
+                extra={
+                    "event": "app_version_load_failed",
+                    "context": {"pyproject_path": str(path), "error": repr(exc)},
+                },
+            )
+        return UNKNOWN_APP_VERSION
+
+
+def _read_project_version(path: Path) -> str:
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"pyproject not found: {path}")
+
+    current_section = ""
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current_section = line[1:-1].strip()
+            continue
+        if current_section != "project":
+            continue
+        match = _PROJECT_VERSION_PATTERN.match(line)
+        if match is None:
+            continue
+        version = match.group(1).strip()
+        if version:
+            return version
+        break
+    raise ValueError(f"project.version not found in {path}")
