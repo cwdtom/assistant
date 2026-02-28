@@ -205,6 +205,7 @@ class PendingPlanTask:
     post_plan_done_count: int = 0
     successful_steps: int = 0
     failed_steps: int = 0
+    plan_goal_notified: bool = False
     last_reported_plan_signature: tuple[tuple[str, bool], ...] | None = None
     last_notified_completed_subtask_count: int = 0
 
@@ -421,6 +422,7 @@ class AssistantAgent:
         if expanded_goal:
             outer.goal = expanded_goal
             task.goal = expanded_goal
+            self._notify_plan_goal_result(task, expanded_goal)
         self._append_planner_decision_observation(task, phase="plan", decision=plan_decision)
         outer.latest_plan = [
             PlanStep(item=plan_item, completed=False)
@@ -2124,6 +2126,23 @@ class AssistantAgent:
             self._app_logger.warning(
                 "failed to notify replan continue subtask result",
                 extra={"event": "replan_continue_subtask_notify_failed"},
+                exc_info=True,
+            )
+
+    def _notify_plan_goal_result(self, task: PendingPlanTask, expanded_goal: str) -> None:
+        callback = self._subtask_result_callback
+        if callback is None or task.plan_goal_notified:
+            return
+        goal_text = expanded_goal.strip()
+        if not goal_text:
+            return
+        task.plan_goal_notified = True
+        try:
+            callback(f"任务目标：{goal_text}")
+        except Exception:
+            self._app_logger.warning(
+                "failed to notify plan expanded goal",
+                extra={"event": "plan_goal_notify_failed"},
                 exc_info=True,
             )
 

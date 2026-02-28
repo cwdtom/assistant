@@ -8,7 +8,7 @@
 - 历史会话持久化与检索
 - 本地提醒线程（待办、单次日程、重复日程）
 - 可选 Feishu 长连接接入
-- Feishu 任务执行中可异步回传子任务完成进度（默认直出，不走 persona 重写）
+- Feishu 任务执行中可异步回传进度：plan 完成后的扩展目标（`任务目标：...`）与子任务完成状态（默认直出，不走 persona 重写）
 
 ## Runtime Requirements
 - Python 3.10+
@@ -120,6 +120,7 @@ python main.py
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 使用 tool-calling 并以结构化参数直接执行本地动作（不走 `/todo` 命令串）
 - `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
+- 若启用 Feishu，plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 
 ## Project Structure

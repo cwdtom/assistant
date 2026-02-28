@@ -94,10 +94,12 @@ class _ProgressReportingTaskAwareAgent:
         self,
         *,
         progress_result: str = "执行结果",
+        progress_results: list[str] | None = None,
         response: str = "任务处理完成。",
         task_completed: bool = True,
     ) -> None:
         self.progress_result = progress_result
+        self.progress_results = list(progress_results or [])
         self.response = response
         self.task_completed = task_completed
         self.inputs: list[str] = []
@@ -110,7 +112,11 @@ class _ProgressReportingTaskAwareAgent:
         self.inputs.append(user_input)
         callback = self._subtask_result_callback
         if callable(callback):
-            callback(self.progress_result)
+            if self.progress_results:
+                for item in self.progress_results:
+                    callback(item)
+            else:
+                callback(self.progress_result)
         return self.response, self.task_completed
 
     def emit_progress_result(self, result: str) -> None:
@@ -507,6 +513,42 @@ class FeishuAdapterTest(unittest.TestCase):
         self._wait_until(
             lambda: len(reactions) == 2
             and ("oc_1", "执行结果：已添加待办 #1") in sent
+            and ("oc_1", "任务处理完成。") in sent
+        )
+
+    def test_event_processor_async_subtask_progress_sends_plan_goal_message(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        agent = _ProgressReportingTaskAwareAgent(
+            progress_results=["任务目标：先整理今天待办，再给出结论", "执行结果：已整理待办"],
+            response="任务处理完成。",
+            task_completed=True,
+        )
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.async_progress_goal"),
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_progress_goal_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"执行任务"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(
+            lambda: len(reactions) == 2
+            and ("oc_1", "任务目标：先整理今天待办，再给出结论") in sent
+            and ("oc_1", "执行结果：已整理待办") in sent
             and ("oc_1", "任务处理完成。") in sent
         )
 

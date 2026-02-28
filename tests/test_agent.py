@@ -1435,9 +1435,47 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("帮我新增待办并总结")
 
         self.assertIn("最终完成", response)
-        self.assertEqual(progress_updates, ["新增待办已完成"])
+        self.assertEqual(progress_updates, ["任务目标：扩展后的目标", "新增待办已完成"])
 
-    def test_replan_done_does_not_notify_subtask_result(self) -> None:
+    def test_plan_initialization_notifies_expanded_goal_once(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["整理待办", "总结"], goal="先整理今天的待办和日程，再给出执行建议"),
+                _planner_done("整理完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        progress_updates: list[str] = []
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        agent.set_subtask_result_callback(progress_updates.append)
+
+        response = agent.handle_input("帮我安排今天")
+
+        self.assertIn("最终完成", response)
+        self.assertEqual(progress_updates.count("任务目标：先整理今天的待办和日程，再给出执行建议"), 1)
+
+    def test_replan_does_not_emit_plan_goal_again(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["第一步", "第二步"], goal="先完成第一步，再完成第二步"),
+                _planner_done("第一步完成。"),
+                _planner_replanned(["第二步"]),
+                _planner_done("第二步完成。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        progress_updates: list[str] = []
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        agent.set_subtask_result_callback(progress_updates.append)
+
+        response = agent.handle_input("按顺序执行两步")
+
+        self.assertIn("最终完成", response)
+        goal_updates = [item for item in progress_updates if item.startswith("任务目标：")]
+        self.assertEqual(goal_updates, ["任务目标：先完成第一步，再完成第二步"])
+        self.assertIn("第一步已完成", progress_updates)
+
+    def test_replan_done_does_not_notify_subtask_completion_result(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["收尾"]),
@@ -1452,9 +1490,9 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("直接收尾")
 
         self.assertIn("任务已完成", response)
-        self.assertEqual(progress_updates, [])
+        self.assertEqual(progress_updates, ["任务目标：扩展后的目标"])
 
-    def test_replan_continue_without_completed_subtask_does_not_notify(self) -> None:
+    def test_replan_continue_without_completed_subtask_does_not_notify_subtask_completion_result(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["确认信息", "执行创建"]),
@@ -1473,7 +1511,7 @@ class AssistantAgentTest(unittest.TestCase):
         final = agent.handle_input("买牛奶")
 
         self.assertIn("最终完成", final)
-        self.assertEqual(progress_updates, [])
+        self.assertEqual(progress_updates, ["任务目标：扩展后的目标"])
 
     def test_thought_done_only_marks_subtask_and_replan_decides_final(self) -> None:
         fake_llm = FakeLLMClient(
