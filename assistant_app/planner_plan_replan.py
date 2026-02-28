@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from assistant_app.planner_common import normalize_plan_items
+from assistant_app.planner_common import normalize_tool_names
 
 PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
@@ -46,17 +46,23 @@ PLAN_ONCE_PROMPT = f"""
 {{
   "status": "planned",
   "goal": "扩展后的目标描述",
-  "plan": ["步骤1", "步骤2"]
+  "plan": [
+    {{"task": "步骤1", "completed": false, "tools": ["todo"]}},
+    {{"task": "步骤2", "completed": false, "tools": ["history_search"]}}
+  ]
 }}
 
 规则：
 - 只输出 planned，不要输出 done
 - goal 必须是对用户原始 goal 的扩展版本，语义不变但信息更完整、可执行
 - plan 至少包含 1 项，且应按执行顺序排列
+- plan 每项都必须包含 task/completed/tools
+- plan 中每项的 completed 必须为 false
+- tools 仅填写该子任务所需工具，工具名可用：todo|schedule|internet_search|history_search
 - {PLAN_INTENT_EXPANSION_RULE}
 - {PLANNER_HISTORY_RULE}
 - {PLANNER_USER_PROFILE_RULE}
-- 不要输出工具动作，只给步骤描述
+- 不要输出工具参数示例或命令字符串；tools 只填工具名列表
 """.strip()
 
 REPLAN_PROMPT = f"""
@@ -69,16 +75,17 @@ REPLAN_PROMPT = f"""
 {{
   "status": "replanned|done",
   "plan": [
-    {{"task": "步骤1", "completed": true}},
-    {{"task": "步骤2", "completed": false}}
+    {{"task": "步骤1", "completed": true, "tools": ["history_search"]}},
+    {{"task": "步骤2", "completed": false, "tools": ["todo"]}}
   ],
   "response": "string|null"
 }}
 
 规则：
 - status=replanned: 必须输出计划数组（至少 1 项）
-- status=replanned: plan 每项都必须包含 task(任务文本) 和 completed(是否已完成，布尔值)
+- status=replanned: plan 每项都必须包含 task/completed/tools
 - status=replanned: 至少要有 1 项 completed=false，表示仍有后续可执行任务
+- status=replanned: tools 仅填写该子任务可执行工具名，工具名可用：todo|schedule|internet_search|history_search
 - 若基于当前 latest_plan/completed_subtasks/clarification_history 已能直接回答 goal，
   必须输出 status=done，并在 response 给出问题答案；不要继续扩写计划
 - status=done: 必须输出最终结论 response，不要再给后续计划
@@ -93,9 +100,21 @@ REPLAN_PROMPT = f"""
 def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()
     goal = str(payload.get("goal") or "").strip()
-    plan_items = normalize_plan_items(payload)
     if status == "planned":
-        if not goal or not plan_items:
+        raw_plan = payload.get("plan")
+        if not goal or not isinstance(raw_plan, list):
+            return None
+        plan_items: list[dict[str, Any]] = []
+        for item in raw_plan:
+            if not isinstance(item, dict):
+                return None
+            task = str(item.get("task") or "").strip()
+            completed = item.get("completed")
+            tools = normalize_tool_names(item.get("tools"))
+            if not task or completed is not False or tools is None:
+                return None
+            plan_items.append({"task": task, "completed": False, "tools": tools})
+        if not plan_items:
             return None
         return {"status": "planned", "goal": goal, "plan": plan_items}
     return None
@@ -114,11 +133,12 @@ def normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                 return None
             task = str(item.get("task") or "").strip()
             completed = item.get("completed")
-            if not task or not isinstance(completed, bool):
+            tools = normalize_tool_names(item.get("tools"))
+            if not task or not isinstance(completed, bool) or tools is None:
                 return None
             if not completed:
                 has_pending = True
-            plan_items.append({"task": task, "completed": completed})
+            plan_items.append({"task": task, "completed": completed, "tools": tools})
         if not plan_items or not has_pending:
             return None
         return {"status": "replanned", "plan": plan_items}

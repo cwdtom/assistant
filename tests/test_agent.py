@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,26 @@ from assistant_app.agent import (
 from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.search import SearchResult
+
+_DEFAULT_PLAN_TOOLS = ["todo", "schedule", "internet_search", "history_search"]
+
+
+def _build_plan_objects(
+    plan: list[str] | None = None,
+    *,
+    completed: set[str] | None = None,
+    tools_by_task: dict[str, list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    completed_tasks = completed or set()
+    mapping = tools_by_task or {}
+    return [
+        {
+            "task": item,
+            "completed": item in completed_tasks,
+            "tools": list(mapping.get(item, _DEFAULT_PLAN_TOOLS)),
+        }
+        for item in (plan or ["执行下一步"])
+    ]
 
 
 def _thought_continue(tool: str, action_input: str, plan: list[str] | None = None) -> str:
@@ -49,11 +70,12 @@ def _planner_planned(
     plan: list[str] | None = None,
     *,
     goal: str = "扩展后的目标",
+    tools_by_task: dict[str, list[str]] | None = None,
 ) -> str:
     payload = {
         "status": "planned",
         "goal": goal,
-        "plan": plan or ["执行下一步"],
+        "plan": _build_plan_objects(plan, completed=set(), tools_by_task=tools_by_task),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -62,15 +84,11 @@ def _planner_replanned(
     plan: list[str] | None = None,
     *,
     completed: set[str] | None = None,
+    tools_by_task: dict[str, list[str]] | None = None,
 ) -> str:
-    completed_tasks = completed or set()
-    plan_payload = [
-        {"task": item, "completed": item in completed_tasks}
-        for item in (plan or ["执行下一步"])
-    ]
     payload = {
         "status": "replanned",
-        "plan": plan_payload,
+        "plan": _build_plan_objects(plan, completed=completed, tools_by_task=tools_by_task),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -116,6 +134,20 @@ def _extract_history_messages(messages: list[dict[str, str]]) -> list[dict[str, 
     if len(messages) <= 2:
         return []
     return messages[1:-1]
+
+
+def _extract_tool_names_from_schemas(tool_schemas: list[dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    for item in tool_schemas:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
 
 
 def _message_payloads_by_phase(messages: list[dict[str, str]], phase: str) -> list[dict[str, Any]]:
@@ -202,6 +234,7 @@ class FakeLLMClient:
     def __init__(self, responses: list[str] | None = None) -> None:
         self.responses = responses or []
         self.calls: list[list[dict[str, str]]] = []
+        self.tool_schema_calls: list[list[dict[str, Any]]] = []
         self._cursor = 0
         self.model_call_count = 0
 
@@ -246,8 +279,9 @@ class FakeToolCallingLLMClient(FakeLLMClient):
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
-        del tools, tool_choice
+        del tool_choice
         self.calls.append(messages)
+        self.tool_schema_calls.append(deepcopy(tools))
         self.model_call_count += 1
         if self._cursor < len(self.responses):
             candidate = self.responses[self._cursor]
@@ -1835,12 +1869,10 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(replan_payload.get("goal"), expanded_goal)
         latest_plan = replan_payload.get("latest_plan", [])
         self.assertEqual(
-            latest_plan,
-            [
-                {"task": "步骤一", "completed": True},
-                {"task": "步骤二", "completed": False},
-            ],
+            [(item.get("task"), item.get("completed")) for item in latest_plan],
+            [("步骤一", True), ("步骤二", False)],
         )
+        self.assertTrue(all(isinstance(item.get("tools"), list) for item in latest_plan))
         completed = replan_payload.get("completed_subtasks", [])
         self.assertTrue(completed)
         self.assertEqual(completed[0].get("item"), "步骤一")
@@ -1876,6 +1908,10 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("goal", first_thought_payload)
         self.assertNotIn("latest_plan", first_thought_payload)
         self.assertNotIn("observations", first_thought_payload)
+        first_current_subtask = first_thought_payload.get("current_subtask", {})
+        self.assertIsInstance(first_current_subtask.get("tools"), list)
+        self.assertIn("ask_user", first_current_subtask.get("tools", []))
+        self.assertIn("done", first_current_subtask.get("tools", []))
 
         second_thought_payload = _extract_payload_from_messages(thought_calls[1])
         completed = second_thought_payload.get("completed_subtasks", [])
@@ -2086,8 +2122,8 @@ class AssistantAgentTest(unittest.TestCase):
                     {
                         "status": "replanned",
                         "plan": [
-                            {"task": "B", "completed": True},
-                            {"task": "A", "completed": False},
+                            {"task": "B", "completed": True, "tools": ["history_search"]},
+                            {"task": "A", "completed": False, "tools": ["todo"]},
                         ],
                     },
                     ensure_ascii=False,
@@ -2132,6 +2168,52 @@ class AssistantAgentTest(unittest.TestCase):
             )
         )
         self.assertTrue(any(item.get("role") == "tool" for item in second_call_messages))
+
+    def test_thought_tool_calling_uses_current_subtask_tools_plus_runtime_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["检索历史", "总结"],
+                    tools_by_task={"检索历史": ["history_search"], "总结": []},
+                ),
+                _thought_continue("history_search", "/history search 牛奶"),
+                _planner_done("历史已检索。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已记录")
+
+        response = agent.handle_input("帮我查历史里的牛奶")
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        self.assertEqual(set(first_tool_names), {"history_search", "ask_user", "done"})
+        self.assertNotIn("todo", first_tool_names)
+        self.assertNotIn("schedule", first_tool_names)
+        self.assertNotIn("internet_search", first_tool_names)
+
+    def test_thought_tool_calling_does_not_duplicate_runtime_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["查看待办", "总结"],
+                    tools_by_task={"查看待办": ["todo", "ask_user", "done"], "总结": []},
+                ),
+                _thought_continue("todo", "/todo list"),
+                _planner_done("查看待办完成。"),
+                _planner_done("已完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("帮我看待办")
+        self.assertIn("已完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        self.assertEqual(first_tool_names.count("ask_user"), 1)
+        self.assertEqual(first_tool_names.count("done"), 1)
+        self.assertEqual(len(first_tool_names), len(set(first_tool_names)))
 
     def test_thought_tool_calling_rejects_thinking_mode_response(self) -> None:
         fake_llm = FakeThinkingToolCallingLLMClient(
@@ -2720,6 +2802,26 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
 
         response = agent.handle_input("把待办完成")
+        self.assertIn("计划执行服务暂时不可用", response)
+        self.assertEqual(fake_llm.model_call_count, 3)
+
+    def test_plan_contract_requires_tools_field(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                json.dumps(
+                    {
+                        "status": "planned",
+                        "goal": "扩展后的目标",
+                        "plan": [{"task": "步骤一", "completed": False}],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 plan tools 缺失")
         self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(fake_llm.model_call_count, 3)
 

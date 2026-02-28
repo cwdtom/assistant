@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from typing import Any
 
-from assistant_app.planner_common import normalize_plan_items
+from assistant_app.planner_common import (
+    THOUGHT_EXECUTION_TOOL_NAMES,
+    THOUGHT_RUNTIME_TOOL_NAMES,
+    normalize_plan_items,
+    normalize_tool_names,
+)
 
 THOUGHT_PROMPT = """
 你是 CLI 助手的 thought 模块，需要基于当前计划项做一步决策。
@@ -193,6 +199,30 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
+_THOUGHT_SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
+    str(item.get("function", {}).get("name") or "").strip().lower(): item for item in THOUGHT_TOOL_SCHEMAS
+}
+
+
+def resolve_current_subtask_tool_names(raw_tools: Any) -> list[str]:
+    base_tools = normalize_tool_names(raw_tools)
+    if base_tools is None:
+        base_tools = []
+    for name in THOUGHT_RUNTIME_TOOL_NAMES:
+        if name not in base_tools:
+            base_tools.append(name)
+    return base_tools
+
+
+def build_thought_tool_schemas(raw_tools: Any) -> list[dict[str, Any]]:
+    tool_names = resolve_current_subtask_tool_names(raw_tools)
+    schemas: list[dict[str, Any]] = []
+    for name in tool_names:
+        schema = _THOUGHT_SCHEMA_BY_NAME.get(name)
+        if schema is not None:
+            schemas.append(deepcopy(schema))
+    return schemas
+
 def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()
     current_step = str(payload.get("current_step") or "").strip()
@@ -207,7 +237,7 @@ def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None
             return None
         tool = str(next_action.get("tool") or "").strip().lower()
         input_text = str(next_action.get("input") or "").strip()
-        if tool not in {"todo", "schedule", "internet_search", "history_search"}:
+        if tool not in THOUGHT_EXECUTION_TOOL_NAMES:
             return None
         if not input_text:
             return None

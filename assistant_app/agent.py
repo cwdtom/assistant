@@ -13,6 +13,7 @@ from typing import Any
 
 from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
+from assistant_app.planner_common import normalize_tool_names
 from assistant_app.planner_plan_replan import (
     PLAN_ONCE_PROMPT,
     REPLAN_PROMPT,
@@ -21,9 +22,10 @@ from assistant_app.planner_plan_replan import (
 )
 from assistant_app.planner_thought import (
     THOUGHT_PROMPT,
-    THOUGHT_TOOL_SCHEMAS,
+    build_thought_tool_schemas,
     normalize_thought_decision,
     normalize_thought_tool_call,
+    resolve_current_subtask_tool_names,
 )
 from assistant_app.search import BingSearchProvider, SearchProvider, SearchResult
 
@@ -92,6 +94,7 @@ class ClarificationTurn:
 class PlanStep:
     item: str
     completed: bool = False
+    tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -132,7 +135,7 @@ class PendingPlanTask:
     successful_steps: int = 0
     failed_steps: int = 0
     plan_goal_notified: bool = False
-    last_reported_plan_signature: tuple[tuple[str, bool], ...] | None = None
+    last_reported_plan_signature: tuple[tuple[str, bool, tuple[str, ...]], ...] | None = None
     last_notified_completed_subtask_count: int = 0
 
 
@@ -352,10 +355,22 @@ class AssistantAgent:
             task.goal = expanded_goal
             self._notify_plan_goal_result(task, expanded_goal)
         self._append_planner_decision_observation(task, phase="plan", decision=plan_decision)
-        outer.latest_plan = [
-            PlanStep(item=plan_item, completed=False)
-            for plan_item in [str(item).strip() for item in plan_decision.get("plan", []) if str(item).strip()]
-        ]
+        raw_plan_items = plan_decision.get("plan")
+        if not isinstance(raw_plan_items, list):
+            return False
+        latest_plan: list[PlanStep] = []
+        for item in raw_plan_items:
+            if not isinstance(item, dict):
+                return False
+            step_text = str(item.get("task") or "").strip()
+            completed = item.get("completed")
+            tools = normalize_tool_names(item.get("tools"))
+            if not step_text or not isinstance(completed, bool) or tools is None:
+                return False
+            latest_plan.append(PlanStep(item=step_text, completed=completed, tools=tools))
+        if not latest_plan:
+            return False
+        outer.latest_plan = latest_plan
         task.plan_initialized = True
         outer.current_plan_index = 0
         self._emit_progress(f"规划完成：共 {len(outer.latest_plan)} 步。")
@@ -404,9 +419,10 @@ class AssistantAgent:
                 return "unavailable", None
             item = str(step.get("task") or "").strip()
             completed = step.get("completed")
-            if not item or not isinstance(completed, bool):
+            tools = normalize_tool_names(step.get("tools"))
+            if not item or not isinstance(completed, bool) or tools is None:
                 return "unavailable", None
-            updated_plan.append(PlanStep(item=item, completed=completed))
+            updated_plan.append(PlanStep(item=item, completed=completed, tools=tools))
         outer.latest_plan = updated_plan
         if not outer.latest_plan:
             return "unavailable", None
@@ -624,7 +640,7 @@ class AssistantAgent:
         context_payload["current_plan_item"] = self._current_plan_item_text(task)
         planner_messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
         request_messages = deepcopy(planner_messages)
-        payload = self._request_thought_payload_with_retry(request_messages)
+        payload = self._request_thought_payload_with_retry(task, request_messages)
         if payload is None:
             return None
         decision = payload.get("decision")
@@ -707,9 +723,16 @@ class AssistantAgent:
                 return {"decision": decision, "raw_response": raw}
         return None
 
-    def _request_thought_payload_with_retry(self, messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def _request_thought_payload_with_retry(
+        self,
+        task: PendingPlanTask,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         max_attempts = 1 + self._plan_replan_retry_count
         phase = self._llm_trace_phase(messages)
+        thought_tool_names = self._current_thought_tool_names(task)
+        thought_tool_schemas = build_thought_tool_schemas(thought_tool_names)
+        allowed_tool_names = set(thought_tool_names)
         for attempt in range(1, max_attempts + 1):
             self._raise_if_task_interrupted()
             call_id = self._next_llm_trace_call_id()
@@ -721,11 +744,15 @@ class AssistantAgent:
                     "attempt": attempt,
                     "max_attempts": max_attempts,
                     "messages": messages,
-                    "tools": THOUGHT_TOOL_SCHEMAS,
+                    "tools": thought_tool_schemas,
                 }
             )
             try:
-                response = self._llm_reply_for_thought(messages)
+                response = self._llm_reply_for_thought(
+                    messages,
+                    thought_tool_schemas=thought_tool_schemas,
+                    allowed_tool_names=allowed_tool_names,
+                )
             except ThoughtToolCallingError:
                 raise
             except Exception as exc:
@@ -903,10 +930,12 @@ class AssistantAgent:
             inner.observations[-self._plan_observation_history_limit :]
         )
         completed_subtasks = self._serialize_completed_subtasks(inner.completed_subtasks)
+        current_tools = self._current_thought_tool_names(task)
         current_subtask: dict[str, Any] = {
             "item": inner.current_subtask,
             "index": outer.current_plan_index + 1,
             "total": len(outer.latest_plan),
+            "tools": current_tools,
         }
         if not inner.current_subtask:
             current_subtask["index"] = None
@@ -950,6 +979,7 @@ class AssistantAgent:
             {
                 "task": item.item,
                 "completed": item.completed,
+                "tools": item.tools,
             }
             for item in latest_plan
         ]
@@ -1031,15 +1061,29 @@ class AssistantAgent:
 
     @staticmethod
     def _current_plan_item_text(task: PendingPlanTask) -> str:
+        step = AssistantAgent._current_plan_step(task)
+        if step is None:
+            return ""
+        return step.item
+
+    @staticmethod
+    def _current_plan_step(task: PendingPlanTask) -> PlanStep | None:
         if task.outer_context is None:
-            return ""
+            return None
         if not task.outer_context.latest_plan:
-            return ""
+            return None
         if task.outer_context.current_plan_index < 0:
-            return ""
+            return None
         if task.outer_context.current_plan_index >= len(task.outer_context.latest_plan):
-            return ""
-        return task.outer_context.latest_plan[task.outer_context.current_plan_index].item
+            return None
+        return task.outer_context.latest_plan[task.outer_context.current_plan_index]
+
+    def _current_thought_tool_names(self, task: PendingPlanTask) -> list[str]:
+        current_step = self._current_plan_step(task)
+        raw_tools: Any = []
+        if current_step is not None:
+            raw_tools = current_step.tools
+        return resolve_current_subtask_tool_names(raw_tools)
 
     @staticmethod
     def _sync_current_plan_index(outer: OuterPlanContext) -> None:
@@ -1069,7 +1113,13 @@ class AssistantAgent:
                 pass
         return self.llm_client.reply(messages)
 
-    def _llm_reply_for_thought(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def _llm_reply_for_thought(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        thought_tool_schemas: list[dict[str, Any]],
+        allowed_tool_names: set[str],
+    ) -> dict[str, Any]:
         if self.llm_client is None:
             return {}
 
@@ -1082,10 +1132,12 @@ class AssistantAgent:
             decision = normalize_thought_decision(payload)
             if decision is None:
                 return {}
+            if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
+                return {}
             return {"decision": decision}
 
         try:
-            tool_response = reply_with_tools(messages, tools=THOUGHT_TOOL_SCHEMAS, tool_choice="auto")
+            tool_response = reply_with_tools(messages, tools=thought_tool_schemas, tool_choice="auto")
         except RuntimeError as exc:
             message = str(exc)
             lowered = message.lower()
@@ -1117,6 +1169,8 @@ class AssistantAgent:
             decision = normalize_thought_tool_call(first_tool_call)
             if decision is None:
                 return {}
+            if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
+                return {}
             payload["decision"] = decision
             call_id = str(first_tool_call.get("id") or "").strip()
             if call_id:
@@ -1131,8 +1185,25 @@ class AssistantAgent:
         decision = normalize_thought_decision(parsed_content)
         if decision is None:
             return {}
+        if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
+            return {}
         payload["decision"] = decision
         return payload
+
+    @staticmethod
+    def _is_thought_decision_tool_allowed(decision: dict[str, Any], allowed_tool_names: set[str]) -> bool:
+        status = str(decision.get("status") or "").strip().lower()
+        if status == "continue":
+            next_action = decision.get("next_action")
+            if not isinstance(next_action, dict):
+                return False
+            tool = str(next_action.get("tool") or "").strip().lower()
+            return tool in allowed_tool_names
+        if status == "ask_user":
+            return "ask_user" in allowed_tool_names
+        if status == "done":
+            return "done" in allowed_tool_names
+        return False
 
     def _next_llm_trace_call_id(self) -> int:
         self._llm_trace_call_seq += 1
@@ -2121,7 +2192,7 @@ class AssistantAgent:
         outer = self._outer_context(task)
         if not outer.latest_plan:
             return
-        signature = tuple((step.item, step.completed) for step in outer.latest_plan)
+        signature = tuple((step.item, step.completed, tuple(step.tools)) for step in outer.latest_plan)
         if task.last_reported_plan_signature == signature:
             return
         task.last_reported_plan_signature = signature
