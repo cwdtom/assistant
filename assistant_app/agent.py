@@ -43,6 +43,7 @@ TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+
 HISTORY_LIMIT_OPTION_PATTERN = re.compile(r"(^|\s)--limit\s+(\d+)")
 TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
+TODO_TABLE_HEADERS = ["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"]
 DEFAULT_PLAN_REPLAN_MAX_STEPS = 20
 DEFAULT_PLAN_REPLAN_RETRY_COUNT = 2
 DEFAULT_PLAN_OBSERVATION_CHAR_LIMIT = 10000
@@ -58,82 +59,6 @@ PLAN_HISTORY_LOOKBACK_HOURS = 24
 PLAN_HISTORY_MAX_TURNS = 50
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-PLAN_TOOL_CONTRACT: dict[str, Any] = {
-    "todo": {
-        "mode": "structured_action",
-        "actions": {
-            "add": {
-                "required": ["content"],
-                "optional": ["tag", "priority", "due_at", "remind_at"],
-            },
-            "list": {"optional": ["tag", "view"]},
-            "view": {"required": ["view"], "optional": ["tag"]},
-            "get": {"required": ["id"]},
-            "update": {
-                "required": ["id", "content"],
-                "optional": ["tag", "priority", "due_at", "remind_at"],
-            },
-            "done": {"required": ["id"]},
-            "delete": {"required": ["id"]},
-            "search": {"required": ["keyword"], "optional": ["tag"]},
-        },
-    },
-    "schedule": {
-        "mode": "structured_action",
-        "actions": {
-            "add": {
-                "required": ["event_time", "title"],
-                "optional": [
-                    "tag",
-                    "duration_minutes",
-                    "remind_at",
-                    "interval_minutes",
-                    "times",
-                    "remind_start_time",
-                ],
-            },
-            "list": {"optional": ["tag"]},
-            "get": {"required": ["id"]},
-            "view": {"required": ["view"], "optional": ["anchor", "tag"]},
-            "update": {
-                "required": ["id", "event_time", "title"],
-                "optional": [
-                    "tag",
-                    "duration_minutes",
-                    "remind_at",
-                    "interval_minutes",
-                    "times",
-                    "remind_start_time",
-                ],
-            },
-            "repeat": {"required": ["id", "enabled"]},
-            "delete": {"required": ["id"]},
-        },
-    },
-    "internet_search": {
-        "mode": "structured_action",
-        "actions": {"search": {"required": ["query"]}},
-    },
-    "history_search": {
-        "mode": "structured_action",
-        "actions": {"search": {"required": ["keyword"], "optional": ["limit"]}},
-    },
-    "ask_user": {
-        "mode": "structured_action",
-        "actions": {"ask": {"required": ["question"]}},
-    },
-}
-
-PLAN_TIME_UNIT_CONTRACT: dict[str, str] = {
-    "timestamp_format": "所有绝对时间都使用本地时间格式 YYYY-MM-DD HH:MM（24 小时制）。",
-    "schedule_duration_unit": "--duration 单位是分钟；例如 3 小时必须转换为 180。",
-    "schedule_interval_unit": "--interval 单位是分钟；例如 每天=1440，每周=10080。",
-    "schedule_repeat_times_unit": "--times 单位是次数；-1 表示无限重复，>=2 表示有限重复次数。",
-    "schedule_view_anchor": "schedule view: day/week 使用 YYYY-MM-DD；month 使用 YYYY-MM。",
-    "todo_due_remind_unit": "todo 的 --due/--remind 都是本地绝对时间，不接受“3小时后”等相对表达。",
-}
-
 
 class TaskInterruptedError(RuntimeError):
     """Raised when an in-flight planner task is interrupted by a newer input."""
@@ -1407,40 +1332,11 @@ class AssistantAgent:
             todos = self.db.list_todos(tag=list_tag)
             todos = _filter_todos_by_view(todos, view_name=list_view)
             if not todos:
-                if list_tag is None and list_view == "all":
-                    result = "暂无待办。"
-                elif list_tag is None:
-                    result = f"视图 {list_view} 下暂无待办。"
-                elif list_view == "all":
-                    result = f"标签 {list_tag} 下暂无待办。"
-                else:
-                    result = f"标签 {list_tag} 的 {list_view} 视图下暂无待办。"
+                result = _todo_list_empty_text(tag=list_tag, view_name=list_view)
                 return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result=result)
 
-            header_parts: list[str] = []
-            if list_tag is not None:
-                header_parts.append(f"标签: {list_tag}")
-            if list_view != "all":
-                header_parts.append(f"视图: {list_view}")
-            header = f"待办列表({', '.join(header_parts)}):" if header_parts else "待办列表:"
-            rows = [
-                [
-                    str(item.id),
-                    "完成" if item.done else "待办",
-                    item.tag,
-                    str(item.priority),
-                    item.content,
-                    item.created_at,
-                    item.completed_at or "-",
-                    item.due_at or "-",
-                    item.remind_at or "-",
-                ]
-                for item in todos
-            ]
-            table = _render_table(
-                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
-                rows=rows,
-            )
+            header = _todo_list_header(tag=list_tag, view_name=list_view)
+            table = _render_todo_table(todos)
             return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=f"{header}\n{table}")
 
         if action == "search":
@@ -1455,41 +1351,14 @@ class AssistantAgent:
             search_tag = _normalize_todo_tag_value(payload.get("tag"))
             todos = self.db.search_todos(keyword, tag=search_tag)
             if not todos:
-                if search_tag is None:
-                    return PlannerObservation(
-                        tool="todo",
-                        input_text=raw_input,
-                        ok=False,
-                        result=f"未找到包含“{keyword}”的待办。",
-                    )
                 return PlannerObservation(
                     tool="todo",
                     input_text=raw_input,
                     ok=False,
-                    result=f"未在标签 {search_tag} 下找到包含“{keyword}”的待办。",
+                    result=_todo_search_empty_text(keyword=keyword, tag=search_tag),
                 )
-            rows = [
-                [
-                    str(item.id),
-                    "完成" if item.done else "待办",
-                    item.tag,
-                    str(item.priority),
-                    item.content,
-                    item.created_at,
-                    item.completed_at or "-",
-                    item.due_at or "-",
-                    item.remind_at or "-",
-                ]
-                for item in todos
-            ]
-            table = _render_table(
-                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
-                rows=rows,
-            )
-            if search_tag is None:
-                header = f"搜索结果(关键词: {keyword}):"
-            else:
-                header = f"搜索结果(关键词: {keyword}, 标签: {search_tag}):"
+            table = _render_todo_table(todos)
+            header = _todo_search_header(keyword=keyword, tag=search_tag)
             return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=f"{header}\n{table}")
 
         todo_id = _normalize_positive_int_value(payload.get("id"))
@@ -1500,22 +1369,7 @@ class AssistantAgent:
             todo = self.db.get_todo(todo_id)
             if todo is None:
                 return PlannerObservation(tool="todo", input_text=raw_input, ok=False, result=f"未找到待办 #{todo_id}")
-            table = _render_table(
-                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
-                rows=[
-                    [
-                        str(todo.id),
-                        "完成" if todo.done else "待办",
-                        todo.tag,
-                        str(todo.priority),
-                        todo.content,
-                        todo.created_at,
-                        todo.completed_at or "-",
-                        todo.due_at or "-",
-                        todo.remind_at or "-",
-                    ]
-                ],
-            )
+            table = _render_todo_table([todo])
             return PlannerObservation(tool="todo", input_text=raw_input, ok=True, result=f"待办详情:\n{table}")
 
         if action == "update":
@@ -1630,21 +1484,17 @@ class AssistantAgent:
                     tool="schedule",
                     input_text=raw_input,
                     ok=False,
-                    result=(
-                        f"前天起未来 {self._schedule_max_window_days} 天内"
-                        f"{f'（标签:{list_tag}）' if list_tag else ''}暂无日程。"
-                    ),
+                    result=_schedule_list_empty_text(window_days=self._schedule_max_window_days, tag=list_tag),
                 )
             table = _render_table(
                 headers=_schedule_table_headers(),
                 rows=_schedule_table_rows(items),
             )
-            title_suffix = f"，标签:{list_tag}" if list_tag else ""
             return PlannerObservation(
                 tool="schedule",
                 input_text=raw_input,
                 ok=True,
-                result=f"日程列表(前天起未来 {self._schedule_max_window_days} 天{title_suffix}):\n{table}",
+                result=f"{_schedule_list_title(window_days=self._schedule_max_window_days, tag=list_tag)}:\n{table}",
             )
 
         if action == "view":
@@ -1686,9 +1536,7 @@ class AssistantAgent:
                 headers=_schedule_table_headers(),
                 rows=_schedule_table_rows(items),
             )
-            title = f"日历视图({view_name}, {anchor})" if anchor else f"日历视图({view_name})"
-            if view_tag:
-                title = f"{title} [标签:{view_tag}]"
+            title = _schedule_view_title(view_name=view_name, anchor=anchor, tag=view_tag)
             return PlannerObservation(tool="schedule", input_text=raw_input, ok=True, result=f"{title}:\n{table}")
 
         if action == "add":
@@ -2416,41 +2264,10 @@ class AssistantAgent:
             todos = self.db.list_todos(tag=list_tag)
             todos = _filter_todos_by_view(todos, view_name=list_view)
             if not todos:
-                if list_tag is None and list_view == "all":
-                    return "暂无待办。"
-                if list_tag is None:
-                    return f"视图 {list_view} 下暂无待办。"
-                if list_view == "all":
-                    return f"标签 {list_tag} 下暂无待办。"
-                return f"标签 {list_tag} 的 {list_view} 视图下暂无待办。"
+                return _todo_list_empty_text(tag=list_tag, view_name=list_view)
 
-            header_parts: list[str] = []
-            if list_tag is not None:
-                header_parts.append(f"标签: {list_tag}")
-            if list_view != "all":
-                header_parts.append(f"视图: {list_view}")
-            if header_parts:
-                header = f"待办列表({', '.join(header_parts)}):"
-            else:
-                header = "待办列表:"
-            rows = [
-                [
-                    str(item.id),
-                    "完成" if item.done else "待办",
-                    item.tag,
-                    str(item.priority),
-                    item.content,
-                    item.created_at,
-                    item.completed_at or "-",
-                    item.due_at or "-",
-                    item.remind_at or "-",
-                ]
-                for item in todos
-            ]
-            table = _render_table(
-                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
-                rows=rows,
-            )
+            header = _todo_list_header(tag=list_tag, view_name=list_view)
+            table = _render_todo_table(todos)
             return f"{header}\n{table}"
 
         if command.startswith("/todo search "):
@@ -2460,32 +2277,10 @@ class AssistantAgent:
             keyword, search_tag = search_parsed
             todos = self.db.search_todos(keyword, tag=search_tag)
             if not todos:
-                if search_tag is None:
-                    return f"未找到包含“{keyword}”的待办。"
-                return f"未在标签 {search_tag} 下找到包含“{keyword}”的待办。"
+                return _todo_search_empty_text(keyword=keyword, tag=search_tag)
 
-            rows = [
-                [
-                    str(item.id),
-                    "完成" if item.done else "待办",
-                    item.tag,
-                    str(item.priority),
-                    item.content,
-                    item.created_at,
-                    item.completed_at or "-",
-                    item.due_at or "-",
-                    item.remind_at or "-",
-                ]
-                for item in todos
-            ]
-            table = _render_table(
-                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
-                rows=rows,
-            )
-            if search_tag is None:
-                header = f"搜索结果(关键词: {keyword}):"
-            else:
-                header = f"搜索结果(关键词: {keyword}, 标签: {search_tag}):"
+            table = _render_todo_table(todos)
+            header = _todo_search_header(keyword=keyword, tag=search_tag)
             return f"{header}\n{table}"
 
         if command.startswith("/todo get "):
@@ -2495,26 +2290,7 @@ class AssistantAgent:
             todo = self.db.get_todo(get_todo_id)
             if todo is None:
                 return f"未找到待办 #{get_todo_id}"
-            status = "x" if todo.done else " "
-            completed_at = todo.completed_at or "-"
-            due_at = todo.due_at or "-"
-            remind_at = todo.remind_at or "-"
-            table = _render_table(
-                headers=["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"],
-                rows=[
-                    [
-                        str(todo.id),
-                        "完成" if status == "x" else "待办",
-                        todo.tag,
-                        str(todo.priority),
-                        todo.content,
-                        todo.created_at,
-                        completed_at,
-                        due_at,
-                        remind_at,
-                    ]
-                ],
-            )
+            table = _render_todo_table([todo])
             return f"待办详情:\n{table}"
 
         if command.startswith("/todo update "):
@@ -2597,15 +2373,13 @@ class AssistantAgent:
                 tag=list_tag,
             )
             if not items:
-                if list_tag:
-                    return f"前天起未来 {self._schedule_max_window_days} 天内（标签:{list_tag}）暂无日程。"
-                return f"前天起未来 {self._schedule_max_window_days} 天内暂无日程。"
+                return _schedule_list_empty_text(window_days=self._schedule_max_window_days, tag=list_tag)
             table = _render_table(
                 headers=_schedule_table_headers(),
                 rows=_schedule_table_rows(items),
             )
-            title_suffix = f"，标签:{list_tag}" if list_tag else ""
-            return f"日程列表(前天起未来 {self._schedule_max_window_days} 天{title_suffix}):\n{table}"
+            title = _schedule_list_title(window_days=self._schedule_max_window_days, tag=list_tag)
+            return f"{title}:\n{table}"
 
         if command.startswith("/schedule view "):
             view_parsed = _parse_schedule_view_command_input(command.removeprefix("/schedule view ").strip())
@@ -2626,12 +2400,7 @@ class AssistantAgent:
                 headers=_schedule_table_headers(),
                 rows=_schedule_table_rows(items),
             )
-            if anchor:
-                title = f"日历视图({view_name}, {anchor})"
-            else:
-                title = f"日历视图({view_name})"
-            if view_tag:
-                title = f"{title} [标签:{view_tag}]"
+            title = _schedule_view_title(view_name=view_name, anchor=anchor, tag=view_tag)
             return f"{title}:\n{table}"
 
         if command.startswith("/schedule get "):
@@ -3676,6 +3445,78 @@ def _is_valid_datetime_text(value: str) -> bool:
 def _remove_option_span(text: str, span: tuple[int, int]) -> str:
     start, end = span
     return (text[:start] + " " + text[end:]).strip()
+
+
+def _todo_table_rows(todos: list[Any]) -> list[list[str]]:
+    return [
+        [
+            str(item.id),
+            "完成" if item.done else "待办",
+            item.tag,
+            str(item.priority),
+            item.content,
+            item.created_at,
+            item.completed_at or "-",
+            item.due_at or "-",
+            item.remind_at or "-",
+        ]
+        for item in todos
+    ]
+
+
+def _render_todo_table(todos: list[Any]) -> str:
+    return _render_table(headers=TODO_TABLE_HEADERS, rows=_todo_table_rows(todos))
+
+
+def _todo_list_empty_text(*, tag: str | None, view_name: str) -> str:
+    if tag is None and view_name == "all":
+        return "暂无待办。"
+    if tag is None:
+        return f"视图 {view_name} 下暂无待办。"
+    if view_name == "all":
+        return f"标签 {tag} 下暂无待办。"
+    return f"标签 {tag} 的 {view_name} 视图下暂无待办。"
+
+
+def _todo_list_header(*, tag: str | None, view_name: str) -> str:
+    header_parts: list[str] = []
+    if tag is not None:
+        header_parts.append(f"标签: {tag}")
+    if view_name != "all":
+        header_parts.append(f"视图: {view_name}")
+    if not header_parts:
+        return "待办列表:"
+    return f"待办列表({', '.join(header_parts)}):"
+
+
+def _todo_search_empty_text(*, keyword: str, tag: str | None) -> str:
+    if tag is None:
+        return f"未找到包含“{keyword}”的待办。"
+    return f"未在标签 {tag} 下找到包含“{keyword}”的待办。"
+
+
+def _todo_search_header(*, keyword: str, tag: str | None) -> str:
+    if tag is None:
+        return f"搜索结果(关键词: {keyword}):"
+    return f"搜索结果(关键词: {keyword}, 标签: {tag}):"
+
+
+def _schedule_list_empty_text(*, window_days: int, tag: str | None) -> str:
+    if tag:
+        return f"前天起未来 {window_days} 天内（标签:{tag}）暂无日程。"
+    return f"前天起未来 {window_days} 天内暂无日程。"
+
+
+def _schedule_list_title(*, window_days: int, tag: str | None) -> str:
+    title_suffix = f"，标签:{tag}" if tag else ""
+    return f"日程列表(前天起未来 {window_days} 天{title_suffix})"
+
+
+def _schedule_view_title(*, view_name: str, anchor: str | None, tag: str | None) -> str:
+    title = f"日历视图({view_name}, {anchor})" if anchor else f"日历视图({view_name})"
+    if tag:
+        title = f"{title} [标签:{tag}]"
+    return title
 
 
 def _format_todo_meta_inline(due_at: str | None, remind_at: str | None, *, priority: int | None = None) -> str:

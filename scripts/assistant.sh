@@ -61,6 +61,16 @@ is_truthy() {
   [[ "$value" == "1" || "$value" == "true" || "$value" == "yes" || "$value" == "on" ]]
 }
 
+read_branch_divergence() {
+  local remote_ref="$1"
+  local counts
+  counts="$(git rev-list --left-right --count "$remote_ref...HEAD")"
+
+  local remote_ahead local_ahead
+  read -r remote_ahead local_ahead <<<"$counts"
+  echo "$remote_ahead" "$local_ahead"
+}
+
 ensure_latest_code() {
   if ! is_truthy "$AUTO_PULL_FLAG"; then
     return 0
@@ -88,23 +98,24 @@ ensure_latest_code() {
     echo "Syncing latest code from $AUTO_PULL_REMOTE/$branch ..."
     git fetch "$AUTO_PULL_REMOTE"
 
+    local remote_ref
+    remote_ref="$AUTO_PULL_REMOTE/$branch"
     local remote_ahead local_ahead
-    remote_ahead="$(git rev-list --left-right --count "$AUTO_PULL_REMOTE/$branch...HEAD" | awk '{print $1}')"
-    local_ahead="$(git rev-list --left-right --count "$AUTO_PULL_REMOTE/$branch...HEAD" | awk '{print $2}')"
+    read -r remote_ahead local_ahead <<<"$(read_branch_divergence "$remote_ref")"
 
     if [[ "$remote_ahead" -gt 0 && "$local_ahead" -gt 0 ]]; then
-      echo "Auto update failed: local branch diverged from $AUTO_PULL_REMOTE/$branch." >&2
+      echo "Auto update failed: local branch diverged from $remote_ref." >&2
       echo "Please resolve with manual git pull/rebase first." >&2
       return 1
     fi
 
     if [[ "$remote_ahead" -gt 0 ]]; then
-      git merge --ff-only "$AUTO_PULL_REMOTE/$branch"
+      git merge --ff-only "$remote_ref"
       return 0
     fi
 
     if [[ "$local_ahead" -gt 0 ]]; then
-      echo "Local branch is ahead of $AUTO_PULL_REMOTE/$branch; skip fast-forward merge."
+      echo "Local branch is ahead of $remote_ref; skip fast-forward merge."
       return 0
     fi
 
@@ -293,8 +304,8 @@ EOF
 
 cmd="start"
 positionals=()
-alias_set_by_option=false
-alias_set_by_cli=false
+alias_set_by_option=0
+alias_set_by_cli=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -305,14 +316,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       INSTANCE_ALIAS="$2"
-      alias_set_by_option=true
-      alias_set_by_cli=true
+      alias_set_by_option=1
+      alias_set_by_cli=1
       shift 2
       ;;
     --alias=*)
       INSTANCE_ALIAS="${1#*=}"
-      alias_set_by_option=true
-      alias_set_by_cli=true
+      alias_set_by_option=1
+      alias_set_by_cli=1
       shift
       ;;
     -h|--help)
@@ -331,13 +342,13 @@ if [[ ${#positionals[@]} -ge 1 ]]; then
 fi
 
 if [[ ${#positionals[@]} -ge 2 ]]; then
-  if is_truthy "$alias_set_by_option"; then
+  if [[ "$alias_set_by_option" -eq 1 ]]; then
     echo "Alias provided twice: use --alias or positional alias, not both." >&2
     usage
     exit 1
   fi
   INSTANCE_ALIAS="${positionals[1]}"
-  alias_set_by_cli=true
+  alias_set_by_cli=1
 fi
 
 if [[ ${#positionals[@]} -gt 2 ]]; then
@@ -366,7 +377,7 @@ case "$cmd" in
     status_background
     ;;
   list)
-    if is_truthy "$alias_set_by_cli"; then
+    if [[ "$alias_set_by_cli" -eq 1 ]]; then
       list_background "$INSTANCE_ALIAS"
     else
       list_background

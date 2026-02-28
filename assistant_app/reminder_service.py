@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from assistant_app.db import AssistantDB, RecurringScheduleRule, ScheduleItem, TodoItem
 from assistant_app.reminder_sink import ReminderEvent, ReminderSink
 
+V1_FORCED_CATCHUP_SECONDS = 0
+
 
 @dataclass(frozen=True)
 class ReminderPollStats:
@@ -34,8 +36,9 @@ class ReminderService:
         self._sink = sink
         self._clock = clock or datetime.now
         self._lookahead_seconds = max(lookahead_seconds, 0)
-        # V1 keeps catchup disabled even if caller passes a positive number.
-        self._catchup_seconds = 0 if catchup_seconds >= 0 else 0
+        # Keep parameter for compatibility, but V1 intentionally disables catch-up delivery.
+        _ = catchup_seconds
+        self._catchup_seconds = V1_FORCED_CATCHUP_SECONDS
         self._batch_limit = max(batch_limit, 1)
         self._logger = logger or logging.getLogger("assistant_app.timer")
         if logger is None:

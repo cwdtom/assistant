@@ -103,7 +103,7 @@ python main.py
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
 - `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`）
 
-完整变量与行为开关见 `AGENTS.md` 与 `.env.example`。
+完整变量与行为开关以 `AGENTS.md` 为准；`.env.example` 提供常用配置示例。
 
 ## Command Overview
 - `/help`
@@ -136,7 +136,7 @@ python main.py
 
 ## Storage
 - 默认数据库：`assistant.db`
-- 初始化 SQL：`sql/init_assistant_db.sql`
+- 数据库表结构会在启动时由 `assistant_app.db.AssistantDB` 自动初始化
 - 默认日志（均为 JSON Lines）：
   - `logs/app.log`：统一日志文件（app/llm_trace/feishu 都写入该文件）
   - 以上路径可通过环境变量覆盖；`LLM_TRACE_LOG_PATH` / `FEISHU_LOG_PATH` 默认跟随 `APP_LOG_PATH`

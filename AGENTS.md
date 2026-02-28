@@ -28,17 +28,19 @@ Current MVP constraints:
 - `tests/`: unit tests
 - `main.py`: local entrypoint
 
-## Command Contract (MVP)
+## Command Contract (Current)
 Supported input forms in CLI:
 - `/help`
+- `/version`
 - `/profile refresh`
-- `/todo add <content> [--tag <tag>]`
-- `/todo list [--tag <tag>]`
-- `/todo done <id>`
-- `/schedule add <YYYY-MM-DD HH:MM> <title> [--tag <tag>]`
-- `/schedule list [--tag <tag>]`
-- natural language -> model intent recognition -> execute local action (e.g. `添加待办 买牛奶`, `查看日程`)
-- free text => send to LLM
+- `/history list [--limit <>=1>]`
+- `/history search <关键词> [--limit <>=1>]`
+- `/view list`
+- `/view <all|today|overdue|upcoming|inbox> [--tag <标签>]`
+- `/todo add|list|get|update|delete|done|search`
+- `/schedule add|list|get|update|delete|repeat|view`
+- non-`/` input goes through `plan -> thought -> act -> observe -> replan`
+- thought stage uses tool-calling with structured arguments (no `/todo`/`/schedule` command strings)
 
 ## Development Workflow
 ### Step 1: collect information
@@ -168,14 +170,6 @@ Optional runtime flags (all supported in `.env`):
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.
 
-## Supplement: Manual DB Initialization (moved from README)
-- SQL file: `sql/init_assistant_db.sql`
-- Example:
-```bash
-sqlite3 assistant.db < sql/init_assistant_db.sql
-sqlite3 /path/to/assistant.db < sql/init_assistant_db.sql
-```
-
 ## Supplement: Dev Commands (moved from README)
 ```bash
 # one-command bootstrap
@@ -210,24 +204,13 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-## Supplement: Doc Directory Cleanup (2026-02-26)
+## Supplement: Doc Directory Convention (2026-02-28)
 
-Purpose: reduce duplicated descriptions across `README.md` / `doc/` and keep only high-frequency, current-state docs at `doc/` root.
-
-### Cleanup Result
-
-- Active docs in `doc/` root are now:
-  - `doc/README.md`: concise doc navigation and maintenance rules.
-  - `doc/session-quickstart.md`: 5-minute onboarding for current runtime and troubleshooting.
-  - `doc/timer-design.md`: current timer/reminder behavior and boundaries.
-- Historical materials are indexed in:
-  - `doc/archive/README.md`
-- Long-form timer design has been archived to:
-  - `doc/archive/2026022611:main:timer-design-v1-full.md`
+Purpose: `doc/` is now used for one-off generated artifacts (freeze specs, phase reports, execution snapshots), not long-lived canonical docs.
 
 ### Ongoing Maintenance Rules
 
-1. Current facts must be maintained in `README.md` + `doc/session-quickstart.md`.
-2. Complete parameter/behavior details stay in `AGENTS.md`.
-3. Phase reports and design drafts go to `doc/archive/` and should be added to `doc/archive/README.md`.
-4. Avoid copying the same long explanation into multiple files; prefer short summary + reference link.
+1. Current runtime facts must be maintained in `README.md` + `AGENTS.md`.
+2. `doc/` files are disposable/generated records; do not treat fixed paths in `doc/` as stable dependencies.
+3. New generated docs should follow naming conventions already used in this repo (for example, timestamp + branch segment + command/topic).
+4. If a one-off document becomes long-term knowledge, summarize it back into `README.md` or `AGENTS.md` and keep the `doc/` file as historical snapshot.

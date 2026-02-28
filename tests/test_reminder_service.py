@@ -114,6 +114,27 @@ class ReminderServiceTest(unittest.TestCase):
         self.assertEqual(len(sink.events), 1)
         self.assertEqual(sink.events[0].content, "待办提醒 #1: 准备发布（提醒时间 2026-02-24 10:00）")
 
+    def test_poll_once_v1_keeps_catchup_disabled_even_when_configured(self) -> None:
+        self.db.add_todo(
+            "错过一分钟的提醒",
+            due_at="2026-02-24 18:00",
+            remind_at="2026-02-24 09:59",
+        )
+        sink = _FakeSink()
+        service = ReminderService(
+            db=self.db,
+            sink=sink,
+            clock=lambda: self.fixed_now,
+            lookahead_seconds=0,
+            catchup_seconds=120,
+        )
+
+        stats = service.poll_once()
+
+        self.assertEqual(stats.candidate_count, 0)
+        self.assertEqual(stats.delivered_count, 0)
+        self.assertEqual(len(sink.events), 0)
+
     def test_poll_once_skips_done_todo(self) -> None:
         todo_id = self.db.add_todo(
             "已完成事项",
