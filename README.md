@@ -2,7 +2,7 @@
 
 一个中文优先的本地 CLI 个人助手。当前代码已实现：
 - 自然语言任务执行（plan -> thought -> act -> observe -> replan）
-- thought 阶段使用 chat tool-calling（结构化参数）直接调用本地系统函数
+- thought 阶段默认使用 chat tool-calling（结构化参数）直接调用本地系统函数
 - 待办管理（CRUD、标签、优先级、视图、搜索、提醒）
 - 日程管理（CRUD、时长、重复规则、提醒、日历视图）
 - 历史会话持久化与检索
@@ -112,13 +112,12 @@ python main.py
 - `/todo add|list|get|update|delete|done|search`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
-- `/view list|<all|today|overdue|upcoming|inbox>`
 
 说明：
 - `/todo add|update` 支持 `--tag --priority --due --remind`
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
-- 非 `/` 开头输入会进入 plan/replan 流程；thought 使用 tool-calling 并以结构化参数直接执行本地动作（不走 `/todo` 命令串）
+- 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
 - `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入

@@ -7,7 +7,7 @@ from assistant_app.planner_common import normalize_plan_items
 PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
 - todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
-  - 常用动作：add/list/view/get/update/done/delete/search
+  - 常用动作：add/list/get/update/done/delete/search（其中 list 可配 view 筛选）
   - 关键字段：content（待办内容）、tag（标签）、priority（优先级，数值越小优先级越高）、
     due_at/remind_at（本地时间 YYYY-MM-DD HH:MM）、view（all|today|overdue|upcoming|inbox）、
     keyword（搜索关键词）

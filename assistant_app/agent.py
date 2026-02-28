@@ -1107,6 +1107,10 @@ class AssistantAgent:
         payload: dict[str, Any] = {"assistant_message": assistant_message}
         tool_calls = assistant_message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
+            if len(tool_calls) > 1:
+                raise ThoughtToolCallingError(
+                    f"thought 阶段每轮最多调用 1 个工具（本轮收到 {len(tool_calls)} 个），请重试。"
+                )
             first_tool_call = tool_calls[0]
             if not isinstance(first_tool_call, dict):
                 return {}
@@ -1153,7 +1157,7 @@ class AssistantAgent:
         if action_tool == "todo":
             normalized_input = action_input.strip()
             # Backward-compatible fallback for non-tool-calling thought outputs.
-            if normalized_input.startswith("/todo") or normalized_input.startswith("/view"):
+            if normalized_input.startswith("/todo"):
                 command_result = self._handle_command(normalized_input)
                 ok = _is_planner_command_success(command_result, tool="todo")
                 return PlannerObservation(tool="todo", input_text=normalized_input, ok=ok, result=command_result)
@@ -1423,8 +1427,8 @@ class AssistantAgent:
                 )
             update_kwargs: dict[str, Any] = {"content": content}
             update_tag = _normalize_todo_tag_value(payload.get("tag"))
-            if "tag" in payload and update_tag is not None:
-                update_kwargs["tag"] = update_tag
+            if "tag" in payload:
+                update_kwargs["tag"] = update_tag or "default"
             if has_priority:
                 update_kwargs["priority"] = update_priority
             if has_due:
@@ -2176,9 +2180,6 @@ class AssistantAgent:
                 )
                 return f"刷新 user_profile 失败: {exc}"
 
-        if command == "/view list":
-            return self._todo_view_list_text()
-
         if command == "/history list" or command.startswith("/history list "):
             history_limit = _parse_history_list_limit(command)
             if history_limit is None:
@@ -2217,16 +2218,6 @@ class AssistantAgent:
             ]
             table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=rows)
             return f"历史搜索(关键词: {keyword}, 命中 {len(turns)} 轮):\n{table}"
-
-        if command.startswith("/view "):
-            view_parsed = _parse_view_command_input(command.removeprefix("/view ").strip())
-            if view_parsed is None:
-                return "用法: /view <all|today|overdue|upcoming|inbox> [--tag <标签>]"
-            view_name, view_tag = view_parsed
-            list_cmd = f"/todo list --view {view_name}"
-            if view_tag is not None:
-                list_cmd += f" --tag {view_tag}"
-            return self._handle_command(list_cmd)
 
         if command.startswith("/todo add "):
             add_parsed = _parse_todo_add_input(command.removeprefix("/todo add ").strip())
@@ -2585,17 +2576,6 @@ class AssistantAgent:
         return "未知命令。输入 /help 查看可用命令。"
 
     @staticmethod
-    def _todo_view_list_text() -> str:
-        return (
-            "可用视图:\n"
-            "- all: 全部待办（含已完成）\n"
-            "- today: 今天到期且未完成\n"
-            "- overdue: 已逾期且未完成\n"
-            "- upcoming: 未来 7 天到期且未完成\n"
-            "- inbox: 未设置截止时间且未完成"
-        )
-
-    @staticmethod
     def _help_text() -> str:
         return (
             "可用命令:\n"
@@ -2604,8 +2584,6 @@ class AssistantAgent:
             "/profile refresh\n"
             "/history list [--limit <>=1>]\n"
             "/history search <关键词> [--limit <>=1>]\n"
-            "/view list\n"
-            "/view <all|today|overdue|upcoming|inbox> [--tag <标签>]\n"
             "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
             "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
             "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]\n"
@@ -2811,32 +2789,6 @@ def _parse_todo_list_options(command: str) -> tuple[str | None, str] | None:
         tag = parsed_tag
 
     return tag, view_name
-
-
-def _parse_view_command_input(raw: str) -> tuple[str, str | None] | None:
-    text = raw.strip()
-    if not text:
-        return None
-
-    parts = text.split(maxsplit=1)
-    view_name = _normalize_todo_view_value(parts[0])
-    if view_name is None:
-        return None
-
-    if len(parts) == 1:
-        return view_name, None
-
-    suffix = parts[1].strip()
-    if not suffix:
-        return view_name, None
-
-    option_match = re.match(r"^--tag\s+(\S+)$", suffix)
-    if option_match is None:
-        return None
-    tag = _sanitize_tag(option_match.group(1))
-    if tag is None:
-        return None
-    return view_name, tag
 
 
 def _parse_todo_search_input(raw: str) -> tuple[str, str | None] | None:

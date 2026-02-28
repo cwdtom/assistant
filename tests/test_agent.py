@@ -342,6 +342,47 @@ class FakeThinkingToolCallingLLMClient(FakeToolCallingLLMClient):
         return payload
 
 
+class FakeMultiToolCallingLLMClient(FakeToolCallingLLMClient):
+    def reply_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        del tools, tool_choice
+        self.calls.append(messages)
+        self.model_call_count += 1
+        phase = _extract_phase_from_messages(messages)
+        if phase != "thought":
+            return super().reply_with_tools(messages, tools=[], tool_choice="auto")
+        return {
+            "assistant_message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call_{self.model_call_count}_1",
+                        "type": "function",
+                        "function": {
+                            "name": "todo",
+                            "arguments": json.dumps({"action": "list"}, ensure_ascii=False),
+                        },
+                    },
+                    {
+                        "id": f"call_{self.model_call_count}_2",
+                        "type": "function",
+                        "function": {
+                            "name": "todo",
+                            "arguments": json.dumps({"action": "search", "keyword": "牛奶"}, ensure_ascii=False),
+                        },
+                    },
+                ],
+            },
+            "reasoning_content": None,
+        }
+
+
 def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str, Any] | None:
     parsed = _try_parse_json(action_input)
     if isinstance(parsed, dict):
@@ -419,7 +460,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("/todo add", result)
         self.assertIn("--priority <>=0>", result)
         self.assertIn("/todo search <关键词>", result)
-        self.assertIn("/view list", result)
+        self.assertNotIn("/view list", result)
         self.assertIn("/history list", result)
         self.assertIn("/history search <关键词>", result)
         self.assertIn("/profile refresh", result)
@@ -661,11 +702,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent.handle_input(f"/todo add 明天写周报 --tag work --due {tomorrow_due}")
         agent.handle_input("/todo add 收件箱任务 --tag life")
 
-        view_list = agent.handle_input("/view list")
-        self.assertIn("today", view_list)
-        self.assertIn("upcoming", view_list)
-
-        today = agent.handle_input("/view today")
+        today = agent.handle_input("/todo list --view today")
         self.assertIn("今天复盘", today)
         self.assertNotIn("明天写周报", today)
 
@@ -673,12 +710,21 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("明天写周报", upcoming)
         self.assertIn("视图: upcoming", upcoming)
 
-        inbox = agent.handle_input("/view inbox --tag life")
+        inbox = agent.handle_input("/todo list --view inbox --tag life")
         self.assertIn("收件箱任务", inbox)
         self.assertIn("标签: life", inbox)
 
         invalid = agent.handle_input("/view week")
-        self.assertIn("用法", invalid)
+        self.assertEqual(invalid, "未知命令。输入 /help 查看可用命令。")
+
+    def test_view_alias_commands_removed(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        alias_list = agent.handle_input("/view list")
+        alias_today = agent.handle_input("/view today")
+
+        self.assertEqual(alias_list, "未知命令。输入 /help 查看可用命令。")
+        self.assertEqual(alias_today, "未知命令。输入 /help 查看可用命令。")
 
     def test_slash_todo_full_crud_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -701,6 +747,29 @@ class AssistantAgentTest(unittest.TestCase):
 
         missing_resp = agent.handle_input("/todo get 1")
         self.assertIn("未找到待办 #1", missing_resp)
+
+    def test_todo_tool_update_with_null_tag_clears_to_default(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        agent.handle_input("/todo add 写周报 --tag work")
+
+        observation = agent._execute_planner_tool(
+            action_tool="todo",
+            action_input=json.dumps(
+                {
+                    "action": "update",
+                    "id": 1,
+                    "content": "写周报最终版",
+                    "tag": None,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
+        self.assertTrue(observation.ok)
+        todo = self.db.get_todo(1)
+        assert todo is not None
+        self.assertEqual(todo.tag, "default")
 
     def test_slash_todo_due_and_remind_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -2077,6 +2146,18 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertIn("暂不支持 thinking 模式", response)
 
+    def test_thought_tool_calling_rejects_multiple_tool_calls(self) -> None:
+        fake_llm = FakeMultiToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看待办", "总结"]),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("测试 multi tool call 拒绝")
+
+        self.assertIn("每轮最多调用 1 个工具", response)
+
     def test_step_limit_summary_excludes_llm_decision_records(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -2490,6 +2571,19 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(next_action.get("tool"), "todo")
         input_payload = _try_parse_json(str(next_action.get("input") or ""))
         self.assertEqual(input_payload, {"action": "list", "view": "today"})
+
+    def test_thought_tool_call_contract_rejects_todo_view_action(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_3_view",
+                "type": "function",
+                "function": {
+                    "name": "todo",
+                    "arguments": json.dumps({"action": "view", "view": "today"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNone(decision)
 
     def test_thought_tool_call_contract_maps_schedule_structured_action_with_tag(self) -> None:
         decision = normalize_thought_tool_call(

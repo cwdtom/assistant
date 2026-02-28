@@ -35,12 +35,10 @@ Supported input forms in CLI:
 - `/profile refresh`
 - `/history list [--limit <>=1>]`
 - `/history search <关键词> [--limit <>=1>]`
-- `/view list`
-- `/view <all|today|overdue|upcoming|inbox> [--tag <标签>]`
 - `/todo add|list|get|update|delete|done|search`
 - `/schedule add|list|get|update|delete|repeat|view`
 - non-`/` input goes through `plan -> thought -> act -> observe -> replan`
-- thought stage uses tool-calling with structured arguments (no `/todo`/`/schedule` command strings)
+- thought stage uses tool-calling with structured arguments by default; legacy command-string fallback remains for compatibility and is not the primary contract
 
 ## Development Workflow
 ### Step 1: collect information
@@ -141,7 +139,7 @@ Optional runtime flags (all supported in `.env`):
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
 - Thought uses chat tool-calling with tools: `todo|schedule|internet_search|history_search|ask_user|done`.
-- Thought 的所有 tool calls 都必须传结构化参数；禁止传 `/todo`、`/schedule` 等命令字符串。
+- Thought 的标准契约要求 tool calls 传结构化参数；`/todo`、`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
 - `ask_user` sends a single clarification question prefixed with `请确认：...`.

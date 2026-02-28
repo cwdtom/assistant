@@ -20,7 +20,8 @@ THOUGHT_PROMPT = """
 - 历史对话消息（messages 中的 user/assistant 轮次）/ user_profile
   可用于补全默认信息与保持输出风格一致；不得覆盖用户当前明确指令
 - 你会在 messages 中看到上一轮 assistant tool_calls 与 role=tool 的执行结果，请结合多轮上下文继续决策
-- 禁止在 tool 参数里传命令字符串；必须传结构化字段
+- 必须优先输出结构化工具参数，不要主动输出命令字符串
+- 系统仅为兼容旧模型保留命令字符串兜底路径；该路径不作为标准输出契约
 """.strip()
 
 THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -34,8 +35,8 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["add", "list", "get", "update", "delete", "done", "search", "view"],
-                        "description": "待办动作类型：add新增、list列表、get详情、update更新、delete删除、done完成、search搜索、view视图。",
+                        "enum": ["add", "list", "get", "update", "delete", "done", "search"],
+                        "description": "待办动作类型：add新增、list列表、get详情、update更新、delete删除、done完成、search搜索。",
                     },
                     "id": {"type": "integer", "description": "待办 ID，正整数；用于 get/update/delete/done。"},
                     "content": {"type": "string", "description": "待办内容文本；用于 add/update。"},
@@ -52,7 +53,7 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "view": {
                         "type": "string",
                         "enum": ["all", "today", "overdue", "upcoming", "inbox"],
-                        "description": "待办视图，仅用于 view/list：all|today|overdue|upcoming|inbox。",
+                        "description": "待办视图，仅用于 list：all|today|overdue|upcoming|inbox。",
                     },
                     "keyword": {"type": "string", "description": "搜索关键词；用于 search。"},
                 },
@@ -261,7 +262,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
 
     if name == "todo":
         action = str(arguments.get("action") or "").strip().lower()
-        if action not in {"add", "list", "get", "update", "delete", "done", "search", "view"}:
+        if action not in {"add", "list", "get", "update", "delete", "done", "search"}:
             return None
         payload = {"action": action}
         for key in ("id", "content", "tag", "priority", "due_at", "remind_at", "view", "keyword"):
