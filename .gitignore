@@ -10,6 +10,5 @@ venv/
 .env
 assistant.db
 logs
-.codex
 doc
 user_profile.md
