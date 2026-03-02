@@ -308,6 +308,7 @@ class FakeToolCallingLLMClient(FakeLLMClient):
                 action_input = str(next_action.get("input") or "").strip()
                 tool_call_name = action_tool
                 if action_tool == "internet_search":
+                    tool_call_name = "internet_search_tool"
                     arguments = {"query": action_input}
                 elif action_tool == "todo":
                     todo_arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
@@ -2324,6 +2325,27 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("schedule", first_tool_names)
         self.assertNotIn("internet_search", first_tool_names)
 
+    def test_thought_tool_calling_expands_internet_search_group_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["搜索信息", "总结"],
+                    tools_by_task={"搜索信息": ["internet_search"], "总结": []},
+                ),
+                _thought_continue("internet_search", "OpenAI Responses API"),
+                _planner_done("搜索完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("帮我搜索 Responses API")
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        self.assertEqual(set(first_tool_names), {"internet_search_tool", "ask_user", "done"})
+        self.assertNotIn("internet_search", first_tool_names)
+
     def test_thought_tool_calling_expands_schedule_group_tools(self) -> None:
         fake_llm = FakeToolCallingLLMClient(
             responses=[
@@ -2765,13 +2787,13 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
 
-    def test_thought_tool_call_contract_maps_continue_action(self) -> None:
+    def test_thought_tool_call_contract_maps_internet_search_tool(self) -> None:
         decision = normalize_thought_tool_call(
             {
                 "id": "call_1",
                 "type": "function",
                 "function": {
-                    "name": "internet_search",
+                    "name": "internet_search_tool",
                     "arguments": json.dumps({"query": "OpenAI Responses API"}, ensure_ascii=False),
                 },
             }
@@ -2786,6 +2808,19 @@ class AssistantAgentTest(unittest.TestCase):
                 "response": None,
             },
         )
+
+    def test_thought_tool_call_contract_rejects_legacy_internet_search_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_legacy_internet_search",
+                "type": "function",
+                "function": {
+                    "name": "internet_search",
+                    "arguments": json.dumps({"query": "OpenAI Responses API"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNone(decision)
 
     def test_thought_tool_call_contract_maps_done_action(self) -> None:
         decision = normalize_thought_tool_call(

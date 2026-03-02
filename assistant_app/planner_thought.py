@@ -19,7 +19,7 @@ THOUGHT_PROMPT = """
 可用工具名：
 - todo_add、todo_list、todo_view、todo_get、todo_update、todo_delete、todo_done、todo_search
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
-- internet_search、history_list、history_search、ask_user、done
+- internet_search_tool、history_list、history_search、ask_user、done
 
 规则：
 - 每轮最多调用 1 个工具
@@ -368,7 +368,7 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "internet_search",
+            "name": "internet_search_tool",
             "description": "搜索互联网信息，返回结构化搜索结果摘要。",
             "parameters": {
                 "type": "object",
@@ -684,7 +684,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             "response": None,
         }
 
-    if name == "internet_search":
+    if name == "internet_search_tool":
         query = str(arguments.get("query") or "").strip()
         if not query:
             return None

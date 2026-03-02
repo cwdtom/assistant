@@ -28,10 +28,14 @@ THOUGHT_SCHEDULE_TOOL_NAMES = (
     "schedule_delete",
     "schedule_repeat",
 )
+THOUGHT_INTERNET_SEARCH_TOOL_NAMES = (
+    "internet_search_tool",
+)
 THOUGHT_TOOL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
     "todo": THOUGHT_TODO_TOOL_NAMES,
     "history": THOUGHT_HISTORY_TOOL_NAMES,
     "schedule": THOUGHT_SCHEDULE_TOOL_NAMES,
+    "internet_search": THOUGHT_INTERNET_SEARCH_TOOL_NAMES,
 }
 
 
