@@ -3102,12 +3102,34 @@ class AssistantAgentTest(unittest.TestCase):
             internet_search_top_k=5,
         )
 
-        observation = agent._execute_planner_tool(action_tool="internet_search", action_input="OpenAI")
+        with self.assertLogs("assistant_app.app", level="INFO") as captured:
+            observation = agent._execute_planner_tool(action_tool="internet_search", action_input="OpenAI")
 
         self.assertTrue(observation.ok)
         self.assertEqual(fake_search.queries, [("OpenAI", 5)])
-        self.assertIn("互联网搜索结果（Top 5）", observation.result)
+        self.assertIn("互联网搜索结果（返回 5 条，目标 Top 5）", observation.result)
         self.assertIn("5. E", observation.result)
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_internet_search_start", merged)
+        self.assertIn("planner_tool_internet_search_done", merged)
+
+    def test_internet_search_observation_logs_failed(self) -> None:
+        fake_search = FakeSearchProvider(raises=RuntimeError("timeout"))
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=fake_search,
+            internet_search_top_k=4,
+        )
+
+        with self.assertLogs("assistant_app.app", level="INFO") as captured:
+            observation = agent._execute_planner_tool(action_tool="internet_search", action_input="OpenAI")
+
+        self.assertFalse(observation.ok)
+        self.assertIn("搜索失败", observation.result)
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_internet_search_start", merged)
+        self.assertIn("planner_tool_internet_search_failed", merged)
 
     def test_plan_replan_history_tool(self) -> None:
         fake_llm = FakeLLMClient(

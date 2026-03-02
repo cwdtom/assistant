@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -23,6 +24,8 @@ class SearchProvider(Protocol):
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 8.0
 BOCHA_ENDPOINT = "https://api.bochaai.com/v1/web-search"
 BOCHA_MAX_COUNT = 50
+BOCHA_RERANK_MODEL = "gte-rerank"
+_SEARCH_LOGGER = logging.getLogger("assistant_app.app")
 
 
 class BingSearchProvider:
@@ -62,11 +65,98 @@ class BochaSearchProvider:
         if not normalized_query or top_k <= 0:
             return []
 
-        payload = {
-            "query": normalized_query,
-            "summary": self.summary,
+        log_context = {
+            "query_preview": _text_preview(normalized_query),
+            "query_length": len(normalized_query),
+            "top_k": max(top_k, 1),
             "count": BOCHA_MAX_COUNT,
+            "summary": self.summary,
+            "rerank_model": BOCHA_RERANK_MODEL,
         }
+        _SEARCH_LOGGER.info(
+            "internet_search_rerank_start",
+            extra={"event": "internet_search_rerank_start", "context": log_context},
+        )
+        try:
+            parsed = self._request_search(
+                query=normalized_query,
+                top_k=top_k,
+                use_reranker=True,
+            )
+            if not isinstance(parsed, dict):
+                raise ValueError("bocha rerank response is not a JSON object")
+            rerank_results = _extract_bocha_results(parsed)
+            _SEARCH_LOGGER.info(
+                "internet_search_rerank_done",
+                extra={
+                    "event": "internet_search_rerank_done",
+                    "context": {**log_context, "result_count": len(rerank_results)},
+                },
+            )
+            return rerank_results
+        except Exception as rerank_exc:  # noqa: BLE001
+            _SEARCH_LOGGER.warning(
+                "internet_search_rerank_failed_fallback",
+                extra={
+                    "event": "internet_search_rerank_failed_fallback",
+                    "context": {**log_context, "error": repr(rerank_exc)},
+                },
+            )
+
+        _SEARCH_LOGGER.info(
+            "internet_search_fallback_start",
+            extra={"event": "internet_search_fallback_start", "context": log_context},
+        )
+        try:
+            parsed = self._request_search(
+                query=normalized_query,
+                top_k=top_k,
+                use_reranker=False,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001
+            _SEARCH_LOGGER.warning(
+                "internet_search_fallback_failed",
+                extra={
+                    "event": "internet_search_fallback_failed",
+                    "context": {**log_context, "error": repr(fallback_exc)},
+                },
+            )
+            raise
+
+        if not isinstance(parsed, dict):
+            _SEARCH_LOGGER.warning(
+                "internet_search_fallback_invalid_response",
+                extra={
+                    "event": "internet_search_fallback_invalid_response",
+                    "context": {**log_context, "response_type": type(parsed).__name__},
+                },
+            )
+            return []
+
+        fallback_results = _extract_bocha_results(parsed)
+        _SEARCH_LOGGER.info(
+            "internet_search_fallback_done",
+            extra={
+                "event": "internet_search_fallback_done",
+                "context": {**log_context, "result_count": len(fallback_results)},
+            },
+        )
+        return fallback_results
+
+    def _request_search(self, *, query: str, top_k: int, use_reranker: bool) -> object:
+        request_context = {
+            "query_preview": _text_preview(query),
+            "query_length": len(query),
+            "top_k": max(top_k, 1),
+            "count": BOCHA_MAX_COUNT,
+            "use_reranker": use_reranker,
+            "endpoint": self.endpoint,
+        }
+        _SEARCH_LOGGER.info(
+            "internet_search_bocha_request_start",
+            extra={"event": "internet_search_bocha_request_start", "context": request_context},
+        )
+        payload = self._build_payload(query=query, top_k=top_k, use_reranker=use_reranker)
         req = urllib_request.Request(
             self.endpoint,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -78,12 +168,46 @@ class BochaSearchProvider:
             },
             method="POST",
         )
-        with urllib_request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
-            body = resp.read().decode("utf-8", errors="ignore")
-        parsed = json.loads(body)
-        if not isinstance(parsed, dict):
-            return []
-        return _extract_bocha_results(parsed, top_k=top_k)
+        try:
+            with urllib_request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
+                status_code = int(getattr(resp, "status", 200))
+                body = resp.read().decode("utf-8", errors="ignore")
+        except Exception as exc:  # noqa: BLE001
+            _SEARCH_LOGGER.warning(
+                "internet_search_bocha_request_failed",
+                extra={
+                    "event": "internet_search_bocha_request_failed",
+                    "context": {**request_context, "error": repr(exc)},
+                },
+            )
+            raise
+        _SEARCH_LOGGER.info(
+            "internet_search_bocha_request_done",
+            extra={
+                "event": "internet_search_bocha_request_done",
+                "context": {
+                    **request_context,
+                    "status_code": status_code,
+                    "response_size": len(body),
+                },
+            },
+        )
+        return json.loads(body)
+
+    def _build_payload(self, *, query: str, top_k: int, use_reranker: bool) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "query": query,
+            "summary": self.summary,
+            "count": BOCHA_MAX_COUNT,
+        }
+        if use_reranker:
+            payload["reranker"] = {
+                "enable": True,
+                "apiKey": self.api_key,
+                "rerankTopK": max(top_k, 1),
+                "rerankModel": BOCHA_RERANK_MODEL,
+            }
+        return payload
 
 
 def create_search_provider(
@@ -150,7 +274,7 @@ def _extract_bing_results(html_text: str, top_k: int = 3) -> list[SearchResult]:
     return results
 
 
-def _extract_bocha_results(payload: dict[str, object], top_k: int = 3) -> list[SearchResult]:
+def _extract_bocha_results(payload: dict[str, object]) -> list[SearchResult]:
     data = payload.get("data")
     if not isinstance(data, dict):
         return []
@@ -175,9 +299,6 @@ def _extract_bocha_results(payload: dict[str, object], top_k: int = 3) -> list[S
         snippet = _bocha_snippet(item)
         results.append(SearchResult(title=title, snippet=snippet, url=url))
         seen_urls.add(url)
-        if len(results) >= top_k:
-            break
-
     return results
 
 
@@ -225,3 +346,10 @@ def _bocha_snippet(item: dict[str, object]) -> str:
 
 def _normalize_query(query: str) -> str:
     return " ".join(query.strip().split())
+
+
+def _text_preview(text: str, limit: int = 80) -> str:
+    normalized = text.strip()
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[:limit]}..."

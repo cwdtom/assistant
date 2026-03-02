@@ -101,7 +101,7 @@ python main.py
 - `SEARCH_PROVIDER`：搜索 provider（`bocha|bing`）
 - `BOCHA_API_KEY`：当 provider 为 `bocha` 时推荐配置
 - `BOCHA_SEARCH_SUMMARY`：是否请求 Bocha 返回 summary（默认 `true`）
-- `INTERNET_SEARCH_TOP_K`：互联网搜索结果展示条数（默认 `3`，仅影响本地输出 Top K，不影响 Bocha 上游请求条数）
+- `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
 - `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`）
 
@@ -125,7 +125,9 @@ python main.py
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`
 - thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`todo` -> `todo_add|todo_list|todo_view|todo_get|todo_update|todo_delete|todo_done|todo_search`，`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool`，`history` -> `history_list|history_search`
-- Bocha 搜索请求固定使用 `count=50`；最终展示仍按 `INTERNET_SEARCH_TOP_K` 截断
+- Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
+- 当 rerank 请求失败时，会自动降级重试为非 rerank Bocha 搜索
+- 当前搜索展示不再做本地二次截断，按 provider 返回结果输出
 - Bocha 结果摘要提取规则：优先 `summary`，缺失时回退 `snippet`
 - 若启用 Feishu，plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务

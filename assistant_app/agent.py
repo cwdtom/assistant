@@ -1270,9 +1270,25 @@ class AssistantAgent:
                     ok=False,
                     result="internet_search 缺少查询词。",
                 )
+            log_context = {
+                "query_preview": _truncate_text(query, 120),
+                "query_length": len(query),
+                "top_k": self._internet_search_top_k,
+            }
+            self._app_logger.info(
+                "planner_tool_internet_search_start",
+                extra={"event": "planner_tool_internet_search_start", "context": log_context},
+            )
             try:
                 search_results = self.search_provider.search(query, top_k=self._internet_search_top_k)
             except Exception as exc:  # noqa: BLE001
+                self._app_logger.warning(
+                    "planner_tool_internet_search_failed",
+                    extra={
+                        "event": "planner_tool_internet_search_failed",
+                        "context": {**log_context, "error": repr(exc)},
+                    },
+                )
                 return PlannerObservation(
                     tool="internet_search",
                     input_text=query,
@@ -1280,6 +1296,10 @@ class AssistantAgent:
                     result=f"搜索失败: {exc}",
                 )
             if not search_results:
+                self._app_logger.info(
+                    "planner_tool_internet_search_no_results",
+                    extra={"event": "planner_tool_internet_search_no_results", "context": log_context},
+                )
                 return PlannerObservation(
                     tool="internet_search",
                     input_text=query,
@@ -1287,6 +1307,13 @@ class AssistantAgent:
                     result=f"未搜索到与“{query}”相关的结果。",
                 )
             formatted = _format_search_results(search_results, top_k=self._internet_search_top_k)
+            self._app_logger.info(
+                "planner_tool_internet_search_done",
+                extra={
+                    "event": "planner_tool_internet_search_done",
+                    "context": {**log_context, "result_count": len(search_results)},
+                },
+            )
             return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
 
         if action_tool == "history":
@@ -3750,9 +3777,9 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
 
 
 def _format_search_results(results: list[SearchResult], *, top_k: int) -> str:
-    limit = max(top_k, 1)
-    lines = [f"互联网搜索结果（Top {limit}）:"]
-    for index, item in enumerate(results[:limit], start=1):
+    target_top_k = max(top_k, 1)
+    lines = [f"互联网搜索结果（返回 {len(results)} 条，目标 Top {target_top_k}）:"]
+    for index, item in enumerate(results, start=1):
         snippet = item.snippet or "-"
         lines.append(f"{index}. {item.title}")
         lines.append(f"   摘要: {snippet}")
