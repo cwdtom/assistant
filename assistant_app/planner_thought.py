@@ -18,7 +18,8 @@ THOUGHT_PROMPT = """
 工具与参数定义以 API 请求里的 tools schema 为准（不以 prompt 中的示例字段为准）。
 可用工具名：
 - todo_add、todo_list、todo_view、todo_get、todo_update、todo_delete、todo_done、todo_search
-- schedule、internet_search、history_list、history_search、ask_user、done
+- schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
+- internet_search、history_list、history_search、ask_user、done
 
 规则：
 - 每轮最多调用 1 个工具
@@ -203,43 +204,163 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "schedule",
-            "description": "操作日程，直接传结构化参数，不要传命令字符串。",
+            "name": "schedule_add",
+            "description": "新增日程，直接传结构化参数，不要传命令字符串。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["add", "list", "get", "view", "update", "delete", "repeat"],
-                        "description": "日程动作类型：add新增、list列表、get详情、view视图、update更新、delete删除、repeat切换重复规则。",
-                    },
-                    "id": {"type": "integer", "description": "日程 ID，正整数；用于 get/update/delete/repeat。"},
                     "event_time": {
                         "type": "string",
-                        "description": "日程开始时间，格式 YYYY-MM-DD HH:MM（本地时间）；用于 add/update。",
+                        "description": "日程开始时间，格式 YYYY-MM-DD HH:MM（本地时间）。",
                     },
-                    "title": {"type": "string", "description": "日程标题文本；用于 add/update。"},
-                    "tag": {"type": ["string", "null"], "description": "日程标签；null 表示不设置或清空。"},
+                    "title": {"type": "string", "description": "日程标题文本。"},
+                    "tag": {
+                        "type": ["string", "null"],
+                        "description": "日程标签；不传/null/空字符串时按默认标签 default 入库。",
+                    },
                     "duration_minutes": {"type": "integer", "description": "日程时长，单位分钟，>=1。"},
                     "remind_at": {
                         "type": ["string", "null"],
-                        "description": "单次提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置/清空。",
+                        "description": "单次提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置。",
                     },
                     "interval_minutes": {"type": "integer", "description": "重复间隔，单位分钟，>=1。"},
                     "times": {"type": "integer", "description": "重复次数：-1 表示无限重复，或 >=2 的有限重复次数。"},
                     "remind_start_time": {
                         "type": ["string", "null"],
-                        "description": "重复提醒起始时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置/清空。",
+                        "description": "重复提醒起始时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置。",
                     },
+                },
+                "required": ["event_time", "title"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_list",
+            "description": "列出日程（不带视图参数），直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tag": {
+                        "type": ["string", "null"],
+                        "description": "标签过滤；不传/null 表示不过滤标签。",
+                    }
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_view",
+            "description": "按日历视图列出日程，直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
                     "view": {
                         "type": "string",
                         "enum": ["day", "week", "month"],
-                        "description": "日历视图类型，仅用于 view：day|week|month。",
+                        "description": (
+                            "日历视图：day=当天（锚点 YYYY-MM-DD）；"
+                            "week=锚点所在周（周一到周日，锚点 YYYY-MM-DD）；"
+                            "month=指定月份（锚点 YYYY-MM）。"
+                        ),
                     },
-                    "anchor": {"type": ["string", "null"], "description": "视图锚点；day/week 用 YYYY-MM-DD，month 用 YYYY-MM。"},
-                    "enabled": {"type": "boolean", "description": "重复规则开关，仅用于 repeat：true=开启，false=关闭。"},
+                    "anchor": {
+                        "type": ["string", "null"],
+                        "description": "视图锚点；day/week 用 YYYY-MM-DD，month 用 YYYY-MM；不传/null 表示使用当前时间。",
+                    },
+                    "tag": {
+                        "type": ["string", "null"],
+                        "description": "标签过滤；不传/null 表示不过滤标签。",
+                    },
                 },
-                "required": ["action"],
+                "required": ["view"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_get",
+            "description": "获取日程详情，直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_update",
+            "description": "更新日程，直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
+                    "event_time": {
+                        "type": "string",
+                        "description": "更新后的开始时间，格式 YYYY-MM-DD HH:MM（本地时间）。",
+                    },
+                    "title": {"type": "string", "description": "更新后的日程标题文本。"},
+                    "tag": {
+                        "type": ["string", "null"],
+                        "description": "标签更新策略：不传时不修改；null/空字符串时清空并回落到 default；非空字符串时更新标签。",
+                    },
+                    "duration_minutes": {"type": "integer", "description": "日程时长，单位分钟，>=1。"},
+                    "remind_at": {
+                        "type": ["string", "null"],
+                        "description": "单次提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示清空。",
+                    },
+                    "interval_minutes": {"type": "integer", "description": "重复间隔，单位分钟，>=1。"},
+                    "times": {"type": "integer", "description": "重复次数：-1 表示无限重复，或 >=2 的有限重复次数。"},
+                    "remind_start_time": {
+                        "type": ["string", "null"],
+                        "description": "重复提醒起始时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示清空。",
+                    },
+                },
+                "required": ["id", "event_time", "title"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_delete",
+            "description": "删除日程，直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_repeat",
+            "description": "切换重复规则开关，直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
+                    "enabled": {"type": "boolean", "description": "重复规则开关：true=开启，false=关闭。"},
+                },
+                "required": ["id", "enabled"],
                 "additionalProperties": False,
             },
         },
@@ -373,6 +494,43 @@ _TODO_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
     "todo_done": ("id",),
     "todo_search": ("keyword", "tag"),
 }
+_SCHEDULE_TOOL_ACTION_BY_NAME: dict[str, str] = {
+    "schedule_add": "add",
+    "schedule_list": "list",
+    "schedule_view": "view",
+    "schedule_get": "get",
+    "schedule_update": "update",
+    "schedule_delete": "delete",
+    "schedule_repeat": "repeat",
+}
+_SCHEDULE_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
+    "schedule_add": (
+        "event_time",
+        "title",
+        "tag",
+        "duration_minutes",
+        "remind_at",
+        "interval_minutes",
+        "times",
+        "remind_start_time",
+    ),
+    "schedule_list": ("tag",),
+    "schedule_view": ("view", "anchor", "tag"),
+    "schedule_get": ("id",),
+    "schedule_update": (
+        "id",
+        "event_time",
+        "title",
+        "tag",
+        "duration_minutes",
+        "remind_at",
+        "interval_minutes",
+        "times",
+        "remind_start_time",
+    ),
+    "schedule_delete": ("id",),
+    "schedule_repeat": ("id", "enabled"),
+}
 _HISTORY_TOOL_ACTION_BY_NAME: dict[str, str] = {
     "history_list": "list",
     "history_search": "search",
@@ -402,6 +560,7 @@ def build_thought_tool_schemas(raw_tools: Any) -> list[dict[str, Any]]:
         if schema is not None:
             schemas.append(deepcopy(schema))
     return schemas
+
 
 def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()
@@ -487,25 +646,10 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             "response": None,
         }
 
-    if name == "schedule":
-        action = str(arguments.get("action") or "").strip().lower()
-        if action not in {"add", "list", "get", "view", "update", "delete", "repeat"}:
-            return None
-        payload = {"action": action}
-        for key in (
-            "id",
-            "event_time",
-            "title",
-            "tag",
-            "duration_minutes",
-            "remind_at",
-            "interval_minutes",
-            "times",
-            "remind_start_time",
-            "view",
-            "anchor",
-            "enabled",
-        ):
+    if name in _SCHEDULE_TOOL_ACTION_BY_NAME:
+        payload: dict[str, Any] = {"action": _SCHEDULE_TOOL_ACTION_BY_NAME[name]}
+        fields = _SCHEDULE_TOOL_FIELDS_BY_NAME.get(name, ())
+        for key in fields:
             if key in arguments:
                 payload[key] = arguments.get(key)
         return {

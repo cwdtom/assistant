@@ -19,9 +19,19 @@ THOUGHT_HISTORY_TOOL_NAMES = (
     "history_list",
     "history_search",
 )
+THOUGHT_SCHEDULE_TOOL_NAMES = (
+    "schedule_add",
+    "schedule_list",
+    "schedule_view",
+    "schedule_get",
+    "schedule_update",
+    "schedule_delete",
+    "schedule_repeat",
+)
 THOUGHT_TOOL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
     "todo": THOUGHT_TODO_TOOL_NAMES,
     "history": THOUGHT_HISTORY_TOOL_NAMES,
+    "schedule": THOUGHT_SCHEDULE_TOOL_NAMES,
 }
 
 

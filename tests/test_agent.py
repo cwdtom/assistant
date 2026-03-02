@@ -319,6 +319,11 @@ class FakeToolCallingLLMClient(FakeLLMClient):
                     if history_arguments is None:
                         history_arguments = {"action": "list"}
                     tool_call_name, arguments = _history_tool_name_and_arguments(history_arguments)
+                elif action_tool == "schedule":
+                    schedule_arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
+                    if schedule_arguments is None:
+                        schedule_arguments = {"action": "list"}
+                    tool_call_name, arguments = _schedule_tool_name_and_arguments(schedule_arguments)
                 elif action_tool == "history_search":
                     arguments = {"keyword": "牛奶", "limit": 20}
                     parsed_history = _try_parse_json(action_input)
@@ -475,6 +480,52 @@ def _history_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, di
     return tool_name, payload
 
 
+def _schedule_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    action = str(arguments.get("action") or "").strip().lower()
+    tool_name = {
+        "add": "schedule_add",
+        "list": "schedule_list",
+        "view": "schedule_view",
+        "get": "schedule_get",
+        "update": "schedule_update",
+        "delete": "schedule_delete",
+        "repeat": "schedule_repeat",
+    }.get(action, "schedule_list")
+    fields_by_tool: dict[str, tuple[str, ...]] = {
+        "schedule_add": (
+            "event_time",
+            "title",
+            "tag",
+            "duration_minutes",
+            "remind_at",
+            "interval_minutes",
+            "times",
+            "remind_start_time",
+        ),
+        "schedule_list": ("tag",),
+        "schedule_view": ("view", "anchor", "tag"),
+        "schedule_get": ("id",),
+        "schedule_update": (
+            "id",
+            "event_time",
+            "title",
+            "tag",
+            "duration_minutes",
+            "remind_at",
+            "interval_minutes",
+            "times",
+            "remind_start_time",
+        ),
+        "schedule_delete": ("id",),
+        "schedule_repeat": ("id", "enabled"),
+    }
+    payload: dict[str, Any] = {}
+    for key in fields_by_tool.get(tool_name, ()):
+        if key in arguments:
+            payload[key] = arguments.get(key)
+    return tool_name, payload
+
+
 def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str, Any] | None:
     parsed = _try_parse_json(action_input)
     if isinstance(parsed, dict):
@@ -496,6 +547,9 @@ def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str,
             return result
         return {"action": "list"}
     if tool == "schedule":
+        parsed_schedule_payload = _try_parse_json(text)
+        if isinstance(parsed_schedule_payload, dict):
+            return parsed_schedule_payload
         if text == "/schedule list":
             return {"action": "list"}
         return {"action": "list"}
@@ -2270,6 +2324,38 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("schedule", first_tool_names)
         self.assertNotIn("internet_search", first_tool_names)
 
+    def test_thought_tool_calling_expands_schedule_group_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["查看日程", "总结"],
+                    tools_by_task={"查看日程": ["schedule"], "总结": []},
+                ),
+                _thought_continue("schedule", "/schedule list"),
+                _planner_done("日程已查看。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("帮我看一下日程")
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        expected_schedule_tools = {
+            "schedule_add",
+            "schedule_list",
+            "schedule_view",
+            "schedule_get",
+            "schedule_update",
+            "schedule_delete",
+            "schedule_repeat",
+        }
+        self.assertTrue(expected_schedule_tools.issubset(set(first_tool_names)))
+        self.assertNotIn("schedule", first_tool_names)
+        self.assertEqual(first_tool_names.count("ask_user"), 1)
+        self.assertEqual(first_tool_names.count("done"), 1)
+
     def test_thought_tool_calling_does_not_duplicate_runtime_tools(self) -> None:
         fake_llm = FakeToolCallingLLMClient(
             responses=[
@@ -2829,16 +2915,15 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNone(decision)
 
-    def test_thought_tool_call_contract_maps_schedule_structured_action_with_tag(self) -> None:
+    def test_thought_tool_call_contract_maps_schedule_update_tool_with_tag(self) -> None:
         decision = normalize_thought_tool_call(
             {
                 "id": "call_4",
                 "type": "function",
                 "function": {
-                    "name": "schedule",
+                    "name": "schedule_update",
                     "arguments": json.dumps(
                         {
-                            "action": "update",
                             "id": 1,
                             "event_time": "2026-03-01 10:00",
                             "title": "站会",
@@ -2866,6 +2951,82 @@ class AssistantAgentTest(unittest.TestCase):
                 "tag": "work",
             },
         )
+
+    def test_thought_tool_call_contract_maps_schedule_view_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_schedule_view",
+                "type": "function",
+                "function": {
+                    "name": "schedule_view",
+                    "arguments": json.dumps(
+                        {"view": "week", "anchor": "2026-03-02", "tag": "work"},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "schedule")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "view", "view": "week", "anchor": "2026-03-02", "tag": "work"})
+
+    def test_thought_tool_call_contract_maps_schedule_list_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_schedule_list",
+                "type": "function",
+                "function": {
+                    "name": "schedule_list",
+                    "arguments": json.dumps({"tag": "work"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "schedule")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "list", "tag": "work"})
+
+    def test_thought_tool_call_contract_maps_schedule_repeat_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_schedule_repeat",
+                "type": "function",
+                "function": {
+                    "name": "schedule_repeat",
+                    "arguments": json.dumps({"id": 3, "enabled": False}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "schedule")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "repeat", "id": 3, "enabled": False})
+
+    def test_thought_tool_call_contract_rejects_legacy_schedule_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_legacy_schedule",
+                "type": "function",
+                "function": {
+                    "name": "schedule",
+                    "arguments": json.dumps({"action": "list"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNone(decision)
 
     def test_plan_replan_internet_search_tool(self) -> None:
         fake_llm = FakeLLMClient(
