@@ -65,7 +65,7 @@ class BochaSearchProvider:
         payload = {
             "query": normalized_query,
             "summary": self.summary,
-            "count": min(max(top_k, 1), BOCHA_MAX_COUNT),
+            "count": BOCHA_MAX_COUNT,
         }
         req = urllib_request.Request(
             self.endpoint,
@@ -197,13 +197,11 @@ def _clean_html_text(raw: str) -> str:
 
 
 def _bocha_snippet(item: dict[str, object]) -> str:
-    snippet = str(item.get("snippet") or "").strip()
-    if snippet:
-        return snippet
-
     summary = item.get("summary")
     if isinstance(summary, str):
-        return summary.strip()
+        summary_text = summary.strip()
+        if summary_text:
+            return summary_text
     if isinstance(summary, list):
         parts = []
         for part in summary:
@@ -215,7 +213,13 @@ def _bocha_snippet(item: dict[str, object]) -> str:
                 text = str(part.get("text") or "").strip()
                 if text:
                     parts.append(text)
-        return " ".join(parts).strip()
+        summary_text = " ".join(parts).strip()
+        if summary_text:
+            return summary_text
+
+    snippet = str(item.get("snippet") or "").strip()
+    if snippet:
+        return snippet
     return ""
 
 

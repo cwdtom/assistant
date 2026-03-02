@@ -79,10 +79,10 @@ Optional runtime flags (all supported in `.env`):
 - `PLAN_OBSERVATION_HISTORY_LIMIT`: observation history cap in thought context (default `100`)
 - `PLAN_CONTINUOUS_FAILURE_LIMIT`: fallback threshold for continuous failures (default `2`)
 - `TASK_CANCEL_COMMAND`: task cancel phrase (default `取消当前任务`)
-- `INTERNET_SEARCH_TOP_K`: top-k search results (default `3`)
+- `INTERNET_SEARCH_TOP_K`: local top-k output size for internet search results (default `3`; Bocha upstream request count remains fixed at `50`)
 - `SEARCH_PROVIDER`: search provider (default `bocha`, supports `bocha|bing`)
 - `BOCHA_API_KEY`: Bocha Web Search API key (fallback to Bing when empty)
-- `BOCHA_SEARCH_SUMMARY`: whether Bocha returns summary (default `true`)
+- `BOCHA_SEARCH_SUMMARY`: whether Bocha returns summary (default `true`; parsing prefers `summary` and falls back to `snippet`)
 - `SCHEDULE_MAX_WINDOW_DAYS`: max days in schedule list window (default `31`)
 - `TIMER_ENABLED`: enable local reminder thread (default `true`)
 - `TIMER_POLL_INTERVAL_SECONDS`: reminder poll interval (default `15`)
@@ -149,6 +149,8 @@ Optional runtime flags (all supported in `.env`):
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
+- Bocha internet search requests always send `count=50`; displayed output is still truncated by `INTERNET_SEARCH_TOP_K`.
+- Bocha result text extraction prefers `summary`; if unavailable, it falls back to `snippet`.
 
 ## Supplement: View Semantics (moved from README)
 - `all`: all todos (including done)
