@@ -43,6 +43,19 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+Playwright 依赖安装（`internet_search_fetch_url` 需要）：
+```bash
+# 安装 Python 包（若上一步已执行 pip install -e .，可跳过）
+pip install playwright
+
+# 安装 Chromium 浏览器内核（必需）
+python -m playwright install chromium
+```
+
+常见问题：
+- 若出现 `Executable doesn't exist ...`，通常是未执行 `playwright install chromium`。
+- 若在受限环境中运行（例如沙箱/容器），可能需要调整运行权限后再启动 Playwright。
+
 2. 配置环境变量
 ```bash
 cp .env.example .env
