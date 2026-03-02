@@ -685,6 +685,15 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("已完成", done_resp)
         self.assertIn("完成时间:", done_resp)
 
+    def test_todo_done_command_rejects_non_positive_id(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        zero_id_resp = agent.handle_input("/todo done 0")
+        negative_id_resp = agent.handle_input("/todo done -1")
+
+        self.assertEqual(zero_id_resp, "用法: /todo done <id>")
+        self.assertEqual(negative_id_resp, "用法: /todo done <id>")
+
     def test_handle_input_with_task_status_returns_false_for_slash_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
@@ -2344,7 +2353,10 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("全部完成", response)
         self.assertTrue(fake_llm.tool_schema_calls)
         first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
-        self.assertEqual(set(first_tool_names), {"internet_search_tool", "internet_search_fetch_url", "ask_user", "done"})
+        self.assertEqual(
+            set(first_tool_names),
+            {"internet_search_tool", "internet_search_fetch_url", "ask_user", "done"},
+        )
         self.assertNotIn("internet_search", first_tool_names)
 
     def test_thought_tool_calling_expands_schedule_group_tools(self) -> None:

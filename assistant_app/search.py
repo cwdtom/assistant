@@ -459,7 +459,7 @@ def _load_sync_playwright() -> Any:
 
 def _load_requests_module() -> Any:
     try:
-        import requests
+        import requests  # type: ignore[import-untyped]
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("requests 依赖缺失。请先安装 requests。") from exc
     return requests

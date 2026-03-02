@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from typing import Any
 
 from assistant_app.planner_common import (
@@ -272,7 +272,10 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "anchor": {
                         "type": ["string", "null"],
-                        "description": "视图锚点；day/week 用 YYYY-MM-DD，month 用 YYYY-MM；不传/null 表示使用当前时间。",
+                        "description": (
+                            "视图锚点；day/week 用 YYYY-MM-DD，month 用 YYYY-MM；"
+                            "不传/null 表示使用当前时间。"
+                        ),
                     },
                     "tag": {
                         "type": ["string", "null"],
@@ -315,7 +318,10 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "title": {"type": "string", "description": "更新后的日程标题文本。"},
                     "tag": {
                         "type": ["string", "null"],
-                        "description": "标签更新策略：不传时不修改；null/空字符串时清空并回落到 default；非空字符串时更新标签。",
+                        "description": (
+                            "标签更新策略：不传时不修改；"
+                            "null/空字符串时清空并回落到 default；非空字符串时更新标签。"
+                        ),
                     },
                     "duration_minutes": {"type": "integer", "description": "日程时长，单位分钟，>=1。"},
                     "remind_at": {
@@ -648,34 +654,34 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
     current_step = str(arguments.get("current_step") or "").strip()
 
     if name in _TODO_TOOL_ACTION_BY_NAME:
-        payload: dict[str, Any] = {"action": _TODO_TOOL_ACTION_BY_NAME[name]}
+        todo_payload: dict[str, Any] = {"action": _TODO_TOOL_ACTION_BY_NAME[name]}
         fields = _TODO_TOOL_FIELDS_BY_NAME.get(name, ())
         for key in fields:
             if key in arguments:
-                payload[key] = arguments.get(key)
+                todo_payload[key] = arguments.get(key)
         return {
             "status": "continue",
             "current_step": current_step,
             "next_action": {
                 "tool": "todo",
-                "input": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                "input": json.dumps(todo_payload, ensure_ascii=False, separators=(",", ":")),
             },
             "question": None,
             "response": None,
         }
 
     if name in _SCHEDULE_TOOL_ACTION_BY_NAME:
-        payload: dict[str, Any] = {"action": _SCHEDULE_TOOL_ACTION_BY_NAME[name]}
+        schedule_payload: dict[str, Any] = {"action": _SCHEDULE_TOOL_ACTION_BY_NAME[name]}
         fields = _SCHEDULE_TOOL_FIELDS_BY_NAME.get(name, ())
         for key in fields:
             if key in arguments:
-                payload[key] = arguments.get(key)
+                schedule_payload[key] = arguments.get(key)
         return {
             "status": "continue",
             "current_step": current_step,
             "next_action": {
                 "tool": "schedule",
-                "input": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                "input": json.dumps(schedule_payload, ensure_ascii=False, separators=(",", ":")),
             },
             "question": None,
             "response": None,
@@ -686,17 +692,17 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             keyword = str(arguments.get("keyword") or "").strip()
             if not keyword:
                 return None
-        payload: dict[str, Any] = {"action": _HISTORY_TOOL_ACTION_BY_NAME[name]}
+        history_payload: dict[str, Any] = {"action": _HISTORY_TOOL_ACTION_BY_NAME[name]}
         fields = _HISTORY_TOOL_FIELDS_BY_NAME.get(name, ())
         for key in fields:
             if key in arguments:
-                payload[key] = arguments.get(key)
+                history_payload[key] = arguments.get(key)
         return {
             "status": "continue",
             "current_step": current_step,
             "next_action": {
                 "tool": "history",
-                "input": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                "input": json.dumps(history_payload, ensure_ascii=False, separators=(",", ":")),
             },
             "question": None,
             "response": None,
@@ -718,13 +724,13 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
         url = str(arguments.get("url") or "").strip()
         if not url:
             return None
-        payload = {"action": "fetch_url", "url": url}
+        fetch_payload = {"action": "fetch_url", "url": url}
         return {
             "status": "continue",
             "current_step": current_step,
             "next_action": {
                 "tool": "internet_search",
-                "input": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                "input": json.dumps(fetch_payload, ensure_ascii=False, separators=(",", ":")),
             },
             "question": None,
             "response": None,

@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -71,7 +71,7 @@ class UserProfileRefreshService:
         self._max_turns = max(max_turns, 1)
         now = self._clock()
         self._last_poll_time = now
-        self._last_scheduled_run_date = None
+        self._last_scheduled_run_date: date | None = None
 
     def poll_scheduled(self) -> None:
         now = self._clock()
