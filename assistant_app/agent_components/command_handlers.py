@@ -1,0 +1,486 @@
+from __future__ import annotations
+
+from typing import Any
+
+from assistant_app.agent_components.parsing_utils import (
+    _INVALID_OPTION_VALUE,
+    _default_schedule_list_window,
+    _filter_schedules_by_calendar_view,
+    _filter_todos_by_view,
+    _now_time_text,
+    _parse_history_list_limit,
+    _parse_history_search_input,
+    _parse_positive_int,
+    _parse_schedule_add_input,
+    _parse_schedule_list_tag_input,
+    _parse_schedule_repeat_toggle_input,
+    _parse_schedule_update_input,
+    _parse_schedule_view_command_input,
+    _parse_todo_add_input,
+    _parse_todo_list_options,
+    _parse_todo_search_input,
+    _parse_todo_update_input,
+    _resolve_schedule_view_window,
+)
+from assistant_app.agent_components.render_helpers import (
+    _format_history_list_result,
+    _format_history_search_result,
+    _format_schedule_remind_meta_inline,
+    _format_todo_meta_inline,
+    _render_table,
+    _render_todo_table,
+    _schedule_list_empty_text,
+    _schedule_list_title,
+    _schedule_table_headers,
+    _schedule_table_rows,
+    _schedule_view_title,
+    _todo_list_empty_text,
+    _todo_list_header,
+    _todo_search_empty_text,
+    _todo_search_header,
+)
+
+UNKNOWN_APP_VERSION = "unknown"
+
+
+def help_text() -> str:
+    return (
+        "可用命令:\n"
+        "/help\n"
+        "/version\n"
+        "/profile refresh\n"
+        "/history list [--limit <>=1>]\n"
+        "/history search <关键词> [--limit <>=1>]\n"
+        "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
+        "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
+        "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]\n"
+        "/todo search <关键词> [--tag <标签>]\n"
+        "/todo get <id>\n"
+        "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
+        "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
+        "/todo delete <id>\n"
+        "/todo done <id>\n"
+        "/schedule add <YYYY-MM-DD HH:MM> <标题> "
+        "[--tag <标签>] "
+        "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+        "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]\n"
+        "/schedule get <id>\n"
+        "/schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]\n"
+        "/schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
+        "[--tag <标签>] "
+        "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+        "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]\n"
+        "/schedule repeat <id> <on|off>\n"
+        "/schedule delete <id>\n"
+        "/schedule list [--tag <标签>]\n"
+        "你也可以直接说自然语言（会走 plan -> thought -> act -> observe -> replan 循环）。\n"
+        "当前版本仅支持计划链路，不再走 chat 直聊分支。"
+    )
+
+
+def handle_command(agent: Any, command: str) -> str:
+    if command == "/help":
+        return help_text()
+    if command == "/version":
+        if agent._app_version == UNKNOWN_APP_VERSION:
+            return "当前版本：unknown"
+        return f"当前版本：v{agent._app_version}"
+    if command.split(maxsplit=1)[0] == "/version":
+        return "用法: /version"
+
+    if command == "/profile refresh":
+        runner = agent._user_profile_refresh_runner
+        if runner is None:
+            return (
+                "当前未启用 user_profile 刷新服务。"
+                "请检查 USER_PROFILE_REFRESH_ENABLED、USER_PROFILE_PATH 与 LLM 配置。"
+            )
+        try:
+            return runner()
+        except Exception as exc:  # noqa: BLE001
+            agent._app_logger.warning(
+                "manual user profile refresh failed",
+                extra={
+                    "event": "user_profile_manual_refresh_failed",
+                    "context": {"error": repr(exc)},
+                },
+            )
+            return f"刷新 user_profile 失败: {exc}"
+
+    if command == "/history list" or command.startswith("/history list "):
+        history_limit = _parse_history_list_limit(command)
+        if history_limit is None:
+            return "用法: /history list [--limit <>=1>]"
+        turns = agent.db.recent_turns(limit=history_limit)
+        if not turns:
+            return "暂无历史会话。"
+        return _format_history_list_result(turns)
+
+    if command.startswith("/history search "):
+        history_search = _parse_history_search_input(command.removeprefix("/history search ").strip())
+        if history_search is None:
+            return "用法: /history search <关键词> [--limit <>=1>]"
+        keyword, history_limit = history_search
+        turns = agent.db.search_turns(keyword, limit=history_limit)
+        if not turns:
+            return f"未找到包含“{keyword}”的历史会话。"
+        return _format_history_search_result(keyword=keyword, turns=turns)
+
+    if command.startswith("/todo add "):
+        add_parsed = _parse_todo_add_input(command.removeprefix("/todo add ").strip())
+        if add_parsed is None:
+            return (
+                "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
+                "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
+            )
+        content, add_tag, add_priority, add_due_at, add_remind_at = add_parsed
+        if not content:
+            return (
+                "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
+                "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
+            )
+        try:
+            added_todo_id = agent.db.add_todo(
+                content,
+                tag=add_tag,
+                priority=add_priority,
+                due_at=add_due_at,
+                remind_at=add_remind_at,
+            )
+        except ValueError:
+            return "提醒时间需要和截止时间一起设置，且优先级必须为大于等于 0 的整数。"
+        return (
+            f"已添加待办 #{added_todo_id} [标签:{add_tag}]: {content}"
+            f"{_format_todo_meta_inline(add_due_at, add_remind_at, priority=add_priority)}"
+        )
+
+    if command == "/todo list" or command.startswith("/todo list "):
+        list_parsed = _parse_todo_list_options(command)
+        if list_parsed is None:
+            return "用法: /todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]"
+        list_tag, list_view = list_parsed
+        todos = agent.db.list_todos(tag=list_tag)
+        todos = _filter_todos_by_view(todos, view_name=list_view)
+        if not todos:
+            return _todo_list_empty_text(tag=list_tag, view_name=list_view)
+
+        header = _todo_list_header(tag=list_tag, view_name=list_view)
+        table = _render_todo_table(todos)
+        return f"{header}\n{table}"
+
+    if command.startswith("/todo search "):
+        search_parsed = _parse_todo_search_input(command.removeprefix("/todo search ").strip())
+        if search_parsed is None:
+            return "用法: /todo search <关键词> [--tag <标签>]"
+        keyword, search_tag = search_parsed
+        todos = agent.db.search_todos(keyword, tag=search_tag)
+        if not todos:
+            return _todo_search_empty_text(keyword=keyword, tag=search_tag)
+
+        table = _render_todo_table(todos)
+        header = _todo_search_header(keyword=keyword, tag=search_tag)
+        return f"{header}\n{table}"
+
+    if command.startswith("/todo get "):
+        get_todo_id = _parse_positive_int(command.removeprefix("/todo get ").strip())
+        if get_todo_id is None:
+            return "用法: /todo get <id>"
+        todo = agent.db.get_todo(get_todo_id)
+        if todo is None:
+            return f"未找到待办 #{get_todo_id}"
+        table = _render_todo_table([todo])
+        return f"待办详情:\n{table}"
+
+    if command.startswith("/todo update "):
+        update_parsed = _parse_todo_update_input(command.removeprefix("/todo update ").strip())
+        if update_parsed is None:
+            return (
+                "用法: /todo update <id> <内容> [--tag <标签>] "
+                "[--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
+            )
+        (
+            update_todo_id,
+            content,
+            update_tag,
+            update_priority,
+            update_due_at,
+            update_remind_at,
+            has_priority,
+            has_due,
+            has_remind,
+        ) = update_parsed
+        current = agent.db.get_todo(update_todo_id)
+        if current is None:
+            return f"未找到待办 #{update_todo_id}"
+
+        if has_remind and update_remind_at and not ((has_due and update_due_at) or current.due_at):
+            return "提醒时间需要和截止时间一起设置。"
+
+        update_kwargs: dict[str, Any] = {"content": content}
+        if update_tag is not None:
+            update_kwargs["tag"] = update_tag
+        if has_priority:
+            update_kwargs["priority"] = update_priority
+        if has_due:
+            update_kwargs["due_at"] = update_due_at
+        if has_remind:
+            update_kwargs["remind_at"] = update_remind_at
+
+        updated = agent.db.update_todo(update_todo_id, **update_kwargs)
+        if not updated:
+            return f"未找到待办 #{update_todo_id}"
+        todo = agent.db.get_todo(update_todo_id)
+        if todo is None:
+            return f"已更新待办 #{update_todo_id}: {content}"
+        return (
+            f"已更新待办 #{update_todo_id} [标签:{todo.tag}]: {content}"
+            f"{_format_todo_meta_inline(todo.due_at, todo.remind_at, priority=todo.priority)}"
+        )
+
+    if command.startswith("/todo delete "):
+        delete_todo_id = _parse_positive_int(command.removeprefix("/todo delete ").strip())
+        if delete_todo_id is None:
+            return "用法: /todo delete <id>"
+        deleted = agent.db.delete_todo(delete_todo_id)
+        if not deleted:
+            return f"未找到待办 #{delete_todo_id}"
+        return f"待办 #{delete_todo_id} 已删除。"
+
+    if command.startswith("/todo done "):
+        done_todo_id = _parse_positive_int(command.removeprefix("/todo done ").strip())
+        if done_todo_id is None:
+            return "用法: /todo done <id>"
+        done = agent.db.mark_todo_done(done_todo_id)
+        if not done:
+            return f"未找到待办 #{done_todo_id}"
+        todo = agent.db.get_todo(done_todo_id)
+        done_completed_at = todo.completed_at if todo is not None else _now_time_text()
+        return f"待办 #{done_todo_id} 已完成。完成时间: {done_completed_at}"
+
+    if command == "/schedule list" or command.startswith("/schedule list "):
+        parsed_list_tag = _parse_schedule_list_tag_input(command.removeprefix("/schedule list").strip())
+        if parsed_list_tag is _INVALID_OPTION_VALUE:
+            return "用法: /schedule list [--tag <标签>]"
+        list_tag = parsed_list_tag if isinstance(parsed_list_tag, str) else None
+        window_start, window_end = _default_schedule_list_window(
+            window_days=agent._schedule_max_window_days
+        )
+        items = agent.db.list_schedules(
+            window_start=window_start,
+            window_end=window_end,
+            max_window_days=agent._schedule_max_window_days,
+            tag=list_tag,
+        )
+        if not items:
+            return _schedule_list_empty_text(window_days=agent._schedule_max_window_days, tag=list_tag)
+        table = _render_table(
+            headers=_schedule_table_headers(),
+            rows=_schedule_table_rows(items),
+        )
+        title = _schedule_list_title(window_days=agent._schedule_max_window_days, tag=list_tag)
+        return f"{title}:\n{table}"
+
+    if command.startswith("/schedule view "):
+        view_parsed = _parse_schedule_view_command_input(command.removeprefix("/schedule view ").strip())
+        if view_parsed is None:
+            return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"
+        view_name, anchor, view_tag = view_parsed
+        window_start, window_end = _resolve_schedule_view_window(view_name=view_name, anchor=anchor)
+        items = agent.db.list_schedules(
+            window_start=window_start,
+            window_end=window_end,
+            max_window_days=agent._schedule_max_window_days,
+            tag=view_tag,
+        )
+        items = _filter_schedules_by_calendar_view(items, view_name=view_name, anchor=anchor)
+        if not items:
+            return f"{view_name} 视图下{f'（标签:{view_tag}）' if view_tag else ''}暂无日程。"
+        table = _render_table(
+            headers=_schedule_table_headers(),
+            rows=_schedule_table_rows(items),
+        )
+        title = _schedule_view_title(view_name=view_name, anchor=anchor, tag=view_tag)
+        return f"{title}:\n{table}"
+
+    if command.startswith("/schedule get "):
+        schedule_id = _parse_positive_int(command.removeprefix("/schedule get ").strip())
+        if schedule_id is None:
+            return "用法: /schedule get <id>"
+        item = agent.db.get_schedule(schedule_id)
+        if item is None:
+            return f"未找到日程 #{schedule_id}"
+        table = _render_table(
+            headers=_schedule_table_headers(),
+            rows=_schedule_table_rows([item]),
+        )
+        return f"日程详情:\n{table}"
+
+    if command.startswith("/schedule add"):
+        add_schedule_parsed = _parse_schedule_add_input(command.removeprefix("/schedule add").strip())
+        if add_schedule_parsed is None:
+            return (
+                "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
+                "[--tag <标签>] "
+                "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+                "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
+            )
+        (
+            add_event_time,
+            add_title,
+            add_tag,
+            add_duration_minutes,
+            add_remind_at,
+            add_repeat_interval_minutes,
+            add_repeat_times,
+            add_repeat_remind_start_time,
+        ) = add_schedule_parsed
+        schedule_id = agent.db.add_schedule(
+            title=add_title,
+            event_time=add_event_time,
+            duration_minutes=add_duration_minutes,
+            remind_at=add_remind_at,
+            tag=add_tag,
+        )
+        if add_repeat_interval_minutes is not None and add_repeat_times != 1:
+            agent.db.set_schedule_recurrence(
+                schedule_id,
+                start_time=add_event_time,
+                repeat_interval_minutes=add_repeat_interval_minutes,
+                repeat_times=add_repeat_times,
+                remind_start_time=add_repeat_remind_start_time,
+            )
+        remind_meta = _format_schedule_remind_meta_inline(
+            remind_at=add_remind_at,
+            repeat_remind_start_time=add_repeat_remind_start_time,
+        )
+        if add_repeat_times == 1:
+            return (
+                f"已添加日程 #{schedule_id} [标签:{add_tag}]: {add_event_time} {add_title} "
+                f"({add_duration_minutes} 分钟){remind_meta}"
+            )
+        if add_repeat_times == -1:
+            return (
+                f"已添加无限重复日程 #{schedule_id} [标签:{add_tag}]: {add_event_time} {add_title} "
+                f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m{remind_meta})"
+            )
+        return (
+            f"已添加重复日程 {add_repeat_times} 条 [标签:{add_tag}]: {add_event_time} {add_title} "
+            f"(duration={add_duration_minutes}m, interval={add_repeat_interval_minutes}m, "
+            f"times={add_repeat_times}{remind_meta})"
+        )
+
+    if command.startswith("/schedule update "):
+        update_schedule_parsed = _parse_schedule_update_input(
+            command.removeprefix("/schedule update ").strip()
+        )
+        if update_schedule_parsed is None:
+            return (
+                "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
+                "[--tag <标签>] "
+                "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+                "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
+            )
+        (
+            schedule_id,
+            event_time,
+            title,
+            parsed_tag,
+            has_tag,
+            parsed_duration_minutes,
+            parsed_remind_at,
+            has_remind,
+            repeat_interval_minutes,
+            repeat_times,
+            repeat_remind_start_time,
+            has_repeat_remind_start_time,
+        ) = update_schedule_parsed
+        current_item = agent.db.get_schedule(schedule_id)
+        if current_item is None:
+            return f"未找到日程 #{schedule_id}"
+        if parsed_duration_minutes is not None:
+            applied_duration_minutes = parsed_duration_minutes
+        else:
+            applied_duration_minutes = current_item.duration_minutes
+        schedule_update_kwargs: dict[str, Any] = {
+            "title": title,
+            "event_time": event_time,
+            "duration_minutes": applied_duration_minutes,
+        }
+        if has_tag:
+            schedule_update_kwargs["tag"] = parsed_tag
+        if has_remind:
+            schedule_update_kwargs["remind_at"] = parsed_remind_at
+        if has_repeat_remind_start_time:
+            schedule_update_kwargs["repeat_remind_start_time"] = repeat_remind_start_time
+        updated = agent.db.update_schedule(schedule_id, **schedule_update_kwargs)
+        if not updated:
+            return f"未找到日程 #{schedule_id}"
+        if repeat_times == 1:
+            agent.db.clear_schedule_recurrence(schedule_id)
+            item = agent.db.get_schedule(schedule_id)
+            remind_meta = _format_schedule_remind_meta_inline(
+                remind_at=item.remind_at if item else None,
+                repeat_remind_start_time=item.repeat_remind_start_time if item else None,
+            )
+            if item is not None:
+                return (
+                    f"已更新日程 #{schedule_id} [标签:{item.tag}]: {event_time} {title} "
+                    f"({applied_duration_minutes} 分钟){remind_meta}"
+                )
+            return (
+                f"已更新日程 #{schedule_id} [标签:{parsed_tag if has_tag else current_item.tag}]: "
+                f"{event_time} {title} ({applied_duration_minutes} 分钟){remind_meta}"
+            )
+        if repeat_interval_minutes is not None:
+            remind_start_for_rule = (
+                repeat_remind_start_time
+                if has_repeat_remind_start_time
+                else current_item.repeat_remind_start_time
+            )
+            agent.db.set_schedule_recurrence(
+                schedule_id,
+                start_time=event_time,
+                repeat_interval_minutes=repeat_interval_minutes,
+                repeat_times=repeat_times,
+                remind_start_time=remind_start_for_rule,
+            )
+        item = agent.db.get_schedule(schedule_id)
+        remind_meta = _format_schedule_remind_meta_inline(
+            remind_at=item.remind_at if item else None,
+            repeat_remind_start_time=item.repeat_remind_start_time if item else None,
+        )
+        if repeat_times == -1:
+            return (
+                f"已更新为无限重复日程 #{schedule_id} [标签:{item.tag if item else current_item.tag}]: "
+                f"{event_time} {title} "
+                f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m{remind_meta})"
+            )
+        return (
+            f"已更新日程 #{schedule_id} [标签:{item.tag if item else current_item.tag}]: {event_time} {title} "
+            f"(duration={applied_duration_minutes}m, interval={repeat_interval_minutes}m, "
+            f"times={repeat_times}{remind_meta})"
+        )
+
+    if command.startswith("/schedule delete "):
+        schedule_id = _parse_positive_int(command.removeprefix("/schedule delete ").strip())
+        if schedule_id is None:
+            return "用法: /schedule delete <id>"
+        deleted = agent.db.delete_schedule(schedule_id)
+        if not deleted:
+            return f"未找到日程 #{schedule_id}"
+        return f"日程 #{schedule_id} 已删除。"
+
+    if command.startswith("/schedule repeat "):
+        repeat_toggle_parsed = _parse_schedule_repeat_toggle_input(
+            command.removeprefix("/schedule repeat ").strip()
+        )
+        if repeat_toggle_parsed is None:
+            return "用法: /schedule repeat <id> <on|off>"
+        schedule_id, enabled = repeat_toggle_parsed
+        changed = agent.db.set_schedule_recurrence_enabled(schedule_id, enabled)
+        if not changed:
+            return f"日程 #{schedule_id} 没有可切换的重复规则。"
+        status = "启用" if enabled else "停用"
+        return f"已{status}日程 #{schedule_id} 的重复规则。"
+
+    return "未知命令。输入 /help 查看可用命令。"

@@ -11,11 +11,11 @@ from assistant_app.search import (
     BingSearchProvider,
     BochaSearchProvider,
     WebPageFetchResult,
-    _extract_text_from_html,
     _extract_bocha_results,
+    _extract_text_from_html,
     _fetch_webpage_main_text_via_requests,
-    fetch_webpage_main_text,
     create_search_provider,
+    fetch_webpage_main_text,
 )
 
 

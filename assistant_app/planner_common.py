@@ -55,7 +55,11 @@ def normalize_plan_items(payload: dict[str, Any]) -> list[str]:
     return plan_items
 
 
-def normalize_tool_names(raw_tools: Any, *, allowed_tools: tuple[str, ...] = THOUGHT_ALL_TOOL_NAMES) -> list[str] | None:
+def normalize_tool_names(
+    raw_tools: Any,
+    *,
+    allowed_tools: tuple[str, ...] = THOUGHT_ALL_TOOL_NAMES,
+) -> list[str] | None:
     if not isinstance(raw_tools, list):
         return None
     allowed = {name.lower() for name in allowed_tools}

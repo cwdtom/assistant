@@ -8,8 +8,8 @@ from pathlib import Path
 
 from assistant_app.cli import (
     CLEAR_TERMINAL_SEQUENCE,
-    _configure_app_logger,
     _clear_terminal_history,
+    _configure_app_logger,
     _configure_feishu_logger,
     _configure_llm_trace_logger,
     _exit_cli,
