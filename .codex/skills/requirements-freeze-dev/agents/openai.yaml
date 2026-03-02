@@ -1,4 +1,4 @@
 interface:
   display_name: "需求冻结开发"
-  short_description: "把模糊需求多轮澄清并冻结为开发文档，再严格按文档开发与测试"
-  default_prompt: "Use $requirements-freeze-dev to clarify ambiguities, freeze a development spec, and implement against the frozen spec."
+  short_description: "把模糊需求澄清并冻结文档，按文档开发测试并用日志验证改动生效"
+  default_prompt: "Use $requirements-freeze-dev to clarify ambiguities, freeze a development spec, implement against the frozen spec, and verify changes with targeted logs."

@@ -32,27 +32,35 @@
 - Integration/manual checks:
 - Edge and failure scenarios:
 
-## 6. Risks and Mitigations
+## 6. Log Verification Plan
+
+- Log file/logger to use:
+- Event names and key fields to validate:
+- Trigger actions (which command/request should produce logs):
+- Expected log values and pass/fail rules:
+
+## 7. Risks and Mitigations
 
 - Risk 1:
 - Mitigation:
 
-## 7. Acceptance Criteria
+## 8. Acceptance Criteria
 
 - [ ] Criterion 1
 - [ ] Criterion 2
+- [ ] Log evidence proves the change is effective and correct.
 
-## 8. Open Questions
+## 9. Open Questions
 
 - None / list questions:
 
-## 9. Decision Log
+## 10. Decision Log
 
 - Decision:
 - Reason:
 - Impact:
 
-## 10. Change Control After Freeze
+## 11. Change Control After Freeze
 
 - Freeze version:
 - Freeze timestamp:
