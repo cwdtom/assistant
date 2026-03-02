@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import unittest
+from typing import Any
+
+from assistant_app.agent_components.models import PlannerObservation
+from assistant_app.agent_components.tools.planner_tool_routing import (
+    JsonPlannerToolRoute,
+    build_json_planner_tool_executor,
+)
+
+
+class PlannerToolRoutingTest(unittest.TestCase):
+    def test_json_route_executes_legacy_command_when_prefix_matches(self) -> None:
+        route = JsonPlannerToolRoute(
+            tool="history",
+            invalid_json_result="history 工具参数无效：需要 JSON 对象。",
+            legacy_command_prefix="/history",
+            payload_executor=lambda _payload, _raw_input: self.fail("payload executor should not run"),
+        )
+        executor = build_json_planner_tool_executor(
+            route=route,
+            command_executor=lambda _command: "历史会话(最近 1 轮):\n1. user: 你好",
+        )
+
+        observation = executor("/history list --limit 1")
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(observation.tool, "history")
+        self.assertIn("历史会话", observation.result)
+
+    def test_json_route_returns_configured_error_when_json_invalid(self) -> None:
+        route = JsonPlannerToolRoute(
+            tool="schedule",
+            invalid_json_result="schedule 工具参数无效：需要 JSON 对象。",
+            payload_executor=lambda _payload, _raw_input: self.fail("payload executor should not run"),
+        )
+        executor = build_json_planner_tool_executor(
+            route=route,
+            command_executor=lambda _command: "",
+        )
+
+        observation = executor("not-json")
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(observation.result, "schedule 工具参数无效：需要 JSON 对象。")
+
+    def test_json_route_overrides_action_with_compat_action(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def _payload_executor(payload: dict[str, Any], raw_input: str):
+            captured["payload"] = dict(payload)
+            captured["raw_input"] = raw_input
+            return PlannerObservation(tool="history_search", input_text=raw_input, ok=True, result="ok")
+
+        route = JsonPlannerToolRoute(
+            tool="history_search",
+            invalid_json_result="history_search 工具参数无效：需要 JSON 对象。",
+            compat_action="search",
+            payload_executor=_payload_executor,
+        )
+        executor = build_json_planner_tool_executor(
+            route=route,
+            command_executor=lambda _command: "",
+        )
+
+        observation = executor('{"action":"list","keyword":"牛奶","limit":5}')
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(captured["payload"]["action"], "search")
+        self.assertEqual(captured["payload"]["keyword"], "牛奶")
+        self.assertEqual(captured["raw_input"], '{"action":"list","keyword":"牛奶","limit":5}')
+
+
+if __name__ == "__main__":
+    unittest.main()

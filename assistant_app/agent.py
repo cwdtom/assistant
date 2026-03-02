@@ -47,7 +47,6 @@ from assistant_app.agent_components.planner_loop import (
     run_replan_gate as _run_replan_gate_impl,
 )
 from assistant_app.agent_components.render_helpers import (
-    _is_planner_command_success,
     _strip_think_blocks,
     _truncate_text,
     _try_parse_json,
@@ -57,6 +56,10 @@ from assistant_app.agent_components.tools.history import (
 )
 from assistant_app.agent_components.tools.internet_search import (
     execute_internet_search_planner_action as _execute_internet_search_planner_action_impl,
+)
+from assistant_app.agent_components.tools.planner_tool_routing import (
+    JsonPlannerToolRoute,
+    build_json_planner_tool_executor,
 )
 from assistant_app.agent_components.tools.schedule import (
     execute_schedule_system_action as _execute_schedule_system_action_impl,
@@ -158,6 +161,7 @@ class AssistantAgent:
         self._final_response_rewriter = final_response_rewriter
         self._app_version = app_version.strip() or UNKNOWN_APP_VERSION
         self._subtask_result_callback: Callable[[str], None] | None = None
+        self._planner_tool_routes = self._build_planner_tool_routes()
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._progress_callback = callback
@@ -870,14 +874,7 @@ class AssistantAgent:
             return
 
     def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
-        handlers: dict[str, Callable[[str], PlannerObservation]] = {
-            "todo": self._execute_todo_planner_tool,
-            "schedule": self._execute_schedule_planner_tool,
-            "internet_search": self._execute_internet_search_planner_tool,
-            "history": self._execute_history_planner_tool,
-            "history_search": self._execute_history_search_planner_tool,
-        }
-        handler = handlers.get(action_tool)
+        handler = self._planner_tool_routes.get(action_tool)
         if handler is None:
             return PlannerObservation(
                 tool=action_tool or "unknown",
@@ -887,108 +884,52 @@ class AssistantAgent:
             )
         return handler(action_input)
 
-    @staticmethod
-    def _invalid_json_payload_observation(*, tool: str, action_input: str, result: str) -> PlannerObservation:
-        return PlannerObservation(tool=tool, input_text=action_input, ok=False, result=result)
-
-    def _maybe_execute_legacy_tool_command(
-        self,
-        *,
-        normalized_input: str,
-        command_prefix: str,
-        tool: str,
-    ) -> PlannerObservation | None:
-        # Backward-compatible fallback for non-tool-calling thought outputs.
-        if not normalized_input.startswith(command_prefix):
-            return None
-        command_result = self._handle_command(normalized_input)
-        ok = _is_planner_command_success(command_result, tool=tool)
-        return PlannerObservation(tool=tool, input_text=normalized_input, ok=ok, result=command_result)
-
-    def _execute_todo_planner_tool(self, action_input: str) -> PlannerObservation:
-        normalized_input = action_input.strip()
-        legacy_observation = self._maybe_execute_legacy_tool_command(
-            normalized_input=normalized_input,
-            command_prefix="/todo",
-            tool="todo",
-        )
-        if legacy_observation is not None:
-            return legacy_observation
-        payload = _try_parse_json(normalized_input)
-        if not isinstance(payload, dict):
-            return self._invalid_json_payload_observation(
+    def _build_planner_tool_routes(self) -> dict[str, Callable[[str], PlannerObservation]]:
+        json_routes: dict[str, JsonPlannerToolRoute] = {
+            "todo": JsonPlannerToolRoute(
                 tool="todo",
-                action_input=action_input,
-                result="todo 工具参数无效：需要 JSON 对象。",
-            )
-        return self._execute_todo_system_action(payload, raw_input=normalized_input)
-
-    def _execute_schedule_planner_tool(self, action_input: str) -> PlannerObservation:
-        normalized_input = action_input.strip()
-        legacy_observation = self._maybe_execute_legacy_tool_command(
-            normalized_input=normalized_input,
-            command_prefix="/schedule",
-            tool="schedule",
-        )
-        if legacy_observation is not None:
-            return legacy_observation
-        payload = _try_parse_json(normalized_input)
-        if not isinstance(payload, dict):
-            return self._invalid_json_payload_observation(
+                invalid_json_result="todo 工具参数无效：需要 JSON 对象。",
+                legacy_command_prefix="/todo",
+                payload_executor=lambda payload, raw_input: self._execute_todo_system_action(
+                    payload, raw_input=raw_input
+                ),
+            ),
+            "schedule": JsonPlannerToolRoute(
                 tool="schedule",
-                action_input=action_input,
-                result="schedule 工具参数无效：需要 JSON 对象。",
-            )
-        return self._execute_schedule_system_action(payload, raw_input=normalized_input)
-
-    def _execute_internet_search_planner_tool(self, action_input: str) -> PlannerObservation:
-        return _execute_internet_search_planner_action_impl(
+                invalid_json_result="schedule 工具参数无效：需要 JSON 对象。",
+                legacy_command_prefix="/schedule",
+                payload_executor=lambda payload, raw_input: self._execute_schedule_system_action(
+                    payload, raw_input=raw_input
+                ),
+            ),
+            "history": JsonPlannerToolRoute(
+                tool="history",
+                invalid_json_result="history 工具参数无效：需要 JSON 对象。",
+                legacy_command_prefix="/history",
+                payload_executor=lambda payload, raw_input: self._execute_history_system_action(
+                    payload, raw_input=raw_input
+                ),
+            ),
+            "history_search": JsonPlannerToolRoute(
+                tool="history_search",
+                invalid_json_result="history_search 工具参数无效：需要 JSON 对象。",
+                legacy_command_prefix="/history search",
+                compat_action="search",
+                payload_executor=lambda payload, raw_input: self._execute_history_system_action(
+                    payload, raw_input=raw_input, observation_tool="history_search"
+                ),
+            ),
+        }
+        routes = {
+            name: build_json_planner_tool_executor(route=route, command_executor=self._handle_command)
+            for name, route in json_routes.items()
+        }
+        routes["internet_search"] = lambda action_input: _execute_internet_search_planner_action_impl(
             self,
             action_input=action_input,
             fetch_main_text=fetch_webpage_main_text,
         )
-
-    def _execute_history_planner_tool(self, action_input: str) -> PlannerObservation:
-        normalized_input = action_input.strip()
-        legacy_observation = self._maybe_execute_legacy_tool_command(
-            normalized_input=normalized_input,
-            command_prefix="/history",
-            tool="history",
-        )
-        if legacy_observation is not None:
-            return legacy_observation
-        payload = _try_parse_json(normalized_input)
-        if not isinstance(payload, dict):
-            return self._invalid_json_payload_observation(
-                tool="history",
-                action_input=action_input,
-                result="history 工具参数无效：需要 JSON 对象。",
-            )
-        return self._execute_history_system_action(payload, raw_input=normalized_input)
-
-    def _execute_history_search_planner_tool(self, action_input: str) -> PlannerObservation:
-        normalized_input = action_input.strip()
-        legacy_observation = self._maybe_execute_legacy_tool_command(
-            normalized_input=normalized_input,
-            command_prefix="/history search",
-            tool="history_search",
-        )
-        if legacy_observation is not None:
-            return legacy_observation
-        payload = _try_parse_json(normalized_input)
-        if not isinstance(payload, dict):
-            return self._invalid_json_payload_observation(
-                tool="history_search",
-                action_input=action_input,
-                result="history_search 工具参数无效：需要 JSON 对象。",
-            )
-        compat_payload = dict(payload)
-        compat_payload["action"] = "search"
-        return self._execute_history_system_action(
-            compat_payload,
-            raw_input=normalized_input,
-            observation_tool="history_search",
-        )
+        return routes
 
     def _execute_todo_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
         return _execute_todo_system_action_impl(self, payload, raw_input=raw_input)
