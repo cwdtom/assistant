@@ -73,7 +73,6 @@ class PendingPlanTask:
     last_ask_user_question: str | None = None
     last_ask_user_clarification_len: int = 0
     ask_user_repeat_count: int = 0
-    post_plan_done_count: int = 0
     successful_steps: int = 0
     failed_steps: int = 0
     plan_goal_notified: bool = False

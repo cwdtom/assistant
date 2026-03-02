@@ -27,7 +27,6 @@ from assistant_app.agent_components.models import (
     ThoughtToolCallingError,
 )
 from assistant_app.agent_components.parsing_utils import (
-    _is_direct_http_url,
     _parse_history_list_limit,
     _parse_history_search_input,
     _parse_todo_list_options,
@@ -48,7 +47,6 @@ from assistant_app.agent_components.planner_loop import (
     run_replan_gate as _run_replan_gate_impl,
 )
 from assistant_app.agent_components.render_helpers import (
-    _format_search_results,
     _is_planner_command_success,
     _strip_think_blocks,
     _truncate_text,
@@ -56,6 +54,9 @@ from assistant_app.agent_components.render_helpers import (
 )
 from assistant_app.agent_components.tools.history import (
     execute_history_system_action as _execute_history_system_action_impl,
+)
+from assistant_app.agent_components.tools.internet_search import (
+    execute_internet_search_planner_action as _execute_internet_search_planner_action_impl,
 )
 from assistant_app.agent_components.tools.schedule import (
     execute_schedule_system_action as _execute_schedule_system_action_impl,
@@ -451,16 +452,6 @@ class AssistantAgent:
         context_payload = self._build_planner_context(task)
         context_payload["phase"] = "plan"
         messages: list[dict[str, str]] = [{"role": "system", "content": PLAN_ONCE_PROMPT}]
-        messages.extend(outer_messages)
-        messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
-        return messages
-
-    def _build_thought_messages(self, task: PendingPlanTask) -> list[dict[str, Any]]:
-        outer_messages = deepcopy(self._ensure_outer_messages(task))
-        context_payload = self._build_thought_context(task)
-        context_payload["phase"] = "thought"
-        context_payload["current_plan_item"] = self._current_plan_item_text(task)
-        messages: list[dict[str, Any]] = [{"role": "system", "content": THOUGHT_PROMPT}]
         messages.extend(outer_messages)
         messages.append({"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)})
         return messages
@@ -879,255 +870,124 @@ class AssistantAgent:
             return
 
     def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
-        if action_tool == "todo":
-            normalized_input = action_input.strip()
-            # Backward-compatible fallback for non-tool-calling thought outputs.
-            if normalized_input.startswith("/todo"):
-                command_result = self._handle_command(normalized_input)
-                ok = _is_planner_command_success(command_result, tool="todo")
-                return PlannerObservation(tool="todo", input_text=normalized_input, ok=ok, result=command_result)
-
-            payload = _try_parse_json(normalized_input)
-            if not isinstance(payload, dict):
-                return PlannerObservation(
-                    tool="todo",
-                    input_text=action_input,
-                    ok=False,
-                    result="todo 工具参数无效：需要 JSON 对象。",
-                )
-            return self._execute_todo_system_action(payload, raw_input=normalized_input)
-
-        if action_tool == "schedule":
-            normalized_input = action_input.strip()
-            # Backward-compatible fallback for non-tool-calling thought outputs.
-            if normalized_input.startswith("/schedule"):
-                command_result = self._handle_command(normalized_input)
-                ok = _is_planner_command_success(command_result, tool="schedule")
-                return PlannerObservation(tool="schedule", input_text=normalized_input, ok=ok, result=command_result)
-
-            payload = _try_parse_json(normalized_input)
-            if not isinstance(payload, dict):
-                return PlannerObservation(
-                    tool="schedule",
-                    input_text=action_input,
-                    ok=False,
-                    result="schedule 工具参数无效：需要 JSON 对象。",
-                )
-            return self._execute_schedule_system_action(payload, raw_input=normalized_input)
-
-        if action_tool == "internet_search":
-            normalized_input = action_input.strip()
-            payload = _try_parse_json(normalized_input)
-            if isinstance(payload, dict):
-                action = str(payload.get("action") or "").strip().lower()
-                if action == "fetch_url":
-                    return self._execute_internet_search_fetch_url_action(payload, raw_input=normalized_input)
-                if action:
-                    return PlannerObservation(
-                        tool="internet_search",
-                        input_text=action_input,
-                        ok=False,
-                        result="internet_search.action 非法。",
-                    )
-            elif _is_direct_http_url(normalized_input):
-                return self._execute_internet_search_fetch_url_action(
-                    {"action": "fetch_url", "url": normalized_input},
-                    raw_input=normalized_input,
-                )
-
-            query = normalized_input
-            if not query:
-                return PlannerObservation(
-                    tool="internet_search",
-                    input_text=action_input,
-                    ok=False,
-                    result="internet_search 缺少查询词。",
-                )
-            log_context = {
-                "query_preview": _truncate_text(query, 120),
-                "query_length": len(query),
-                "top_k": self._internet_search_top_k,
-            }
-            self._app_logger.info(
-                "planner_tool_internet_search_start",
-                extra={"event": "planner_tool_internet_search_start", "context": log_context},
+        handlers: dict[str, Callable[[str], PlannerObservation]] = {
+            "todo": self._execute_todo_planner_tool,
+            "schedule": self._execute_schedule_planner_tool,
+            "internet_search": self._execute_internet_search_planner_tool,
+            "history": self._execute_history_planner_tool,
+            "history_search": self._execute_history_search_planner_tool,
+        }
+        handler = handlers.get(action_tool)
+        if handler is None:
+            return PlannerObservation(
+                tool=action_tool or "unknown",
+                input_text=action_input,
+                ok=False,
+                result=f"未知工具: {action_tool}",
             )
-            try:
-                search_results = self.search_provider.search(query, top_k=self._internet_search_top_k)
-            except Exception as exc:  # noqa: BLE001
-                self._app_logger.warning(
-                    "planner_tool_internet_search_failed",
-                    extra={
-                        "event": "planner_tool_internet_search_failed",
-                        "context": {**log_context, "error": repr(exc)},
-                    },
-                )
-                return PlannerObservation(
-                    tool="internet_search",
-                    input_text=query,
-                    ok=False,
-                    result=f"搜索失败: {exc}",
-                )
-            if not search_results:
-                self._app_logger.info(
-                    "planner_tool_internet_search_no_results",
-                    extra={"event": "planner_tool_internet_search_no_results", "context": log_context},
-                )
-                return PlannerObservation(
-                    tool="internet_search",
-                    input_text=query,
-                    ok=False,
-                    result=f"未搜索到与“{query}”相关的结果。",
-                )
-            formatted = _format_search_results(search_results, top_k=self._internet_search_top_k)
-            self._app_logger.info(
-                "planner_tool_internet_search_done",
-                extra={
-                    "event": "planner_tool_internet_search_done",
-                    "context": {**log_context, "result_count": len(search_results)},
-                },
-            )
-            return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
+        return handler(action_input)
 
-        if action_tool == "history":
-            normalized_input = action_input.strip()
-            # Backward-compatible fallback for non-tool-calling thought outputs.
-            if normalized_input.startswith("/history"):
-                command_result = self._handle_command(normalized_input)
-                ok = _is_planner_command_success(command_result, tool="history")
-                return PlannerObservation(
-                    tool="history",
-                    input_text=normalized_input,
-                    ok=ok,
-                    result=command_result,
-                )
+    @staticmethod
+    def _invalid_json_payload_observation(*, tool: str, action_input: str, result: str) -> PlannerObservation:
+        return PlannerObservation(tool=tool, input_text=action_input, ok=False, result=result)
 
-            payload = _try_parse_json(normalized_input)
-            if not isinstance(payload, dict):
-                return PlannerObservation(
-                    tool="history",
-                    input_text=action_input,
-                    ok=False,
-                    result="history 工具参数无效：需要 JSON 对象。",
-                )
-            return self._execute_history_system_action(payload, raw_input=normalized_input)
-
-        if action_tool == "history_search":
-            normalized_input = action_input.strip()
-            # Backward-compatible fallback for non-tool-calling thought outputs.
-            if normalized_input.startswith("/history search"):
-                command_result = self._handle_command(normalized_input)
-                ok = _is_planner_command_success(command_result, tool="history_search")
-                return PlannerObservation(
-                    tool="history_search",
-                    input_text=normalized_input,
-                    ok=ok,
-                    result=command_result,
-                )
-
-            payload = _try_parse_json(normalized_input)
-            if not isinstance(payload, dict):
-                return PlannerObservation(
-                    tool="history_search",
-                    input_text=action_input,
-                    ok=False,
-                    result="history_search 工具参数无效：需要 JSON 对象。",
-                )
-            compat_payload = dict(payload)
-            compat_payload["action"] = "search"
-            return self._execute_history_system_action(
-                compat_payload,
-                raw_input=normalized_input,
-                observation_tool="history_search",
-            )
-
-        return PlannerObservation(
-            tool=action_tool or "unknown",
-            input_text=action_input,
-            ok=False,
-            result=f"未知工具: {action_tool}",
-        )
-
-    def _execute_internet_search_fetch_url_action(
+    def _maybe_execute_legacy_tool_command(
         self,
-        payload: dict[str, Any],
         *,
-        raw_input: str,
-    ) -> PlannerObservation:
-        url = str(payload.get("url") or "").strip()
-        if not url:
-            return PlannerObservation(
-                tool="internet_search",
-                input_text=raw_input,
-                ok=False,
-                result="internet_search.fetch_url 缺少 url。",
-            )
-        if not url.lower().startswith(("http://", "https://")):
-            return PlannerObservation(
-                tool="internet_search",
-                input_text=raw_input,
-                ok=False,
-                result="internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
-            )
-        log_context = {
-            "url_preview": _truncate_text(url, 120),
-            "url_length": len(url),
-        }
-        self._app_logger.info(
-            "planner_tool_internet_search_fetch_url_start",
-            extra={"event": "planner_tool_internet_search_fetch_url_start", "context": log_context},
-        )
-        try:
-            fetch_result = fetch_webpage_main_text(url)
-        except Exception as exc:  # noqa: BLE001
-            self._app_logger.warning(
-                "planner_tool_internet_search_fetch_url_failed",
-                extra={
-                    "event": "planner_tool_internet_search_fetch_url_failed",
-                    "context": {**log_context, "error": repr(exc)},
-                },
-            )
-            return PlannerObservation(
-                tool="internet_search",
-                input_text=raw_input,
-                ok=False,
-                result=f"网页抓取失败: {exc}",
-            )
+        normalized_input: str,
+        command_prefix: str,
+        tool: str,
+    ) -> PlannerObservation | None:
+        # Backward-compatible fallback for non-tool-calling thought outputs.
+        if not normalized_input.startswith(command_prefix):
+            return None
+        command_result = self._handle_command(normalized_input)
+        ok = _is_planner_command_success(command_result, tool=tool)
+        return PlannerObservation(tool=tool, input_text=normalized_input, ok=ok, result=command_result)
 
-        if not fetch_result.main_text:
-            self._app_logger.warning(
-                "planner_tool_internet_search_fetch_url_failed",
-                extra={
-                    "event": "planner_tool_internet_search_fetch_url_failed",
-                    "context": {**log_context, "error": "empty_main_text"},
-                },
-            )
-            return PlannerObservation(
-                tool="internet_search",
-                input_text=raw_input,
-                ok=False,
-                result=f"网页抓取失败: 未提取到正文文本（{fetch_result.url}）。",
-            )
-        self._app_logger.info(
-            "planner_tool_internet_search_fetch_url_done",
-            extra={
-                "event": "planner_tool_internet_search_fetch_url_done",
-                "context": {
-                    **log_context,
-                    "main_text_length": len(fetch_result.main_text),
-                    "result_url": fetch_result.url,
-                },
-            },
+    def _execute_todo_planner_tool(self, action_input: str) -> PlannerObservation:
+        normalized_input = action_input.strip()
+        legacy_observation = self._maybe_execute_legacy_tool_command(
+            normalized_input=normalized_input,
+            command_prefix="/todo",
+            tool="todo",
         )
-        result_payload = {
-            "url": fetch_result.url,
-            "main_text": fetch_result.main_text,
-        }
-        return PlannerObservation(
-            tool="internet_search",
-            input_text=raw_input,
-            ok=True,
-            result=json.dumps(result_payload, ensure_ascii=False, separators=(",", ":")),
+        if legacy_observation is not None:
+            return legacy_observation
+        payload = _try_parse_json(normalized_input)
+        if not isinstance(payload, dict):
+            return self._invalid_json_payload_observation(
+                tool="todo",
+                action_input=action_input,
+                result="todo 工具参数无效：需要 JSON 对象。",
+            )
+        return self._execute_todo_system_action(payload, raw_input=normalized_input)
+
+    def _execute_schedule_planner_tool(self, action_input: str) -> PlannerObservation:
+        normalized_input = action_input.strip()
+        legacy_observation = self._maybe_execute_legacy_tool_command(
+            normalized_input=normalized_input,
+            command_prefix="/schedule",
+            tool="schedule",
+        )
+        if legacy_observation is not None:
+            return legacy_observation
+        payload = _try_parse_json(normalized_input)
+        if not isinstance(payload, dict):
+            return self._invalid_json_payload_observation(
+                tool="schedule",
+                action_input=action_input,
+                result="schedule 工具参数无效：需要 JSON 对象。",
+            )
+        return self._execute_schedule_system_action(payload, raw_input=normalized_input)
+
+    def _execute_internet_search_planner_tool(self, action_input: str) -> PlannerObservation:
+        return _execute_internet_search_planner_action_impl(
+            self,
+            action_input=action_input,
+            fetch_main_text=fetch_webpage_main_text,
+        )
+
+    def _execute_history_planner_tool(self, action_input: str) -> PlannerObservation:
+        normalized_input = action_input.strip()
+        legacy_observation = self._maybe_execute_legacy_tool_command(
+            normalized_input=normalized_input,
+            command_prefix="/history",
+            tool="history",
+        )
+        if legacy_observation is not None:
+            return legacy_observation
+        payload = _try_parse_json(normalized_input)
+        if not isinstance(payload, dict):
+            return self._invalid_json_payload_observation(
+                tool="history",
+                action_input=action_input,
+                result="history 工具参数无效：需要 JSON 对象。",
+            )
+        return self._execute_history_system_action(payload, raw_input=normalized_input)
+
+    def _execute_history_search_planner_tool(self, action_input: str) -> PlannerObservation:
+        normalized_input = action_input.strip()
+        legacy_observation = self._maybe_execute_legacy_tool_command(
+            normalized_input=normalized_input,
+            command_prefix="/history search",
+            tool="history_search",
+        )
+        if legacy_observation is not None:
+            return legacy_observation
+        payload = _try_parse_json(normalized_input)
+        if not isinstance(payload, dict):
+            return self._invalid_json_payload_observation(
+                tool="history_search",
+                action_input=action_input,
+                result="history_search 工具参数无效：需要 JSON 对象。",
+            )
+        compat_payload = dict(payload)
+        compat_payload["action"] = "search"
+        return self._execute_history_system_action(
+            compat_payload,
+            raw_input=normalized_input,
+            observation_tool="history_search",
         )
 
     def _execute_todo_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
@@ -1323,21 +1183,6 @@ class AssistantAgent:
     @staticmethod
     def _planner_unavailable_text() -> str:
         return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
-
-    @staticmethod
-    def _post_plan_missing_done_text(task: PendingPlanTask) -> str:
-        latest_success = next((item for item in reversed(task.observations) if item.ok), None)
-        if latest_success is not None:
-            preview = _truncate_text(latest_success.result.replace("\n", " "), 200)
-            return (
-                "计划步骤已执行完毕，但模型未返回可用的子任务结论。\n"
-                f"最近一次成功结果：{preview}\n"
-                "我会继续交给 replan 决策是否收口，你也可以直接使用 /todo、/schedule 命令查看结果。"
-            )
-        return (
-            "计划步骤已执行完毕，但模型未返回可用的子任务结论。"
-            "我会继续交给 replan 决策是否收口，你也可以直接使用 /todo、/schedule 命令查看结果。"
-        )
 
     def _emit_progress(self, message: str) -> None:
         callback = self._progress_callback

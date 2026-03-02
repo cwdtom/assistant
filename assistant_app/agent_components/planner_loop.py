@@ -248,12 +248,10 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
                     outer.latest_plan[outer.current_plan_index].completed = True
                 outer.current_plan_index = min(outer.current_plan_index + 1, len(outer.latest_plan))
                 agent._sync_current_plan_index(outer)
-            task.post_plan_done_count = 0
             task.needs_replan = True
             return "replan", None
 
         if status == "ask_user":
-            task.post_plan_done_count = 0
             question = str(thought_decision.get("question") or "").strip()
             if not question:
                 agent._append_observation(
@@ -311,7 +309,6 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
                 ),
             )
             continue
-        task.post_plan_done_count = 0
         action_tool = str(next_action.get("tool") or "").strip().lower()
         action_input = str(next_action.get("input") or "").strip()
         tool_call_id = str(thought_payload.get("tool_call_id") or "").strip() or None

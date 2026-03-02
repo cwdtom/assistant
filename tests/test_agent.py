@@ -3404,6 +3404,30 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertFalse(missing_keyword.ok)
         self.assertEqual(missing_keyword.result, "history.search keyword 不能为空。")
 
+    def test_history_search_tool_forces_search_action(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已记录买牛奶待办")
+
+        observation = agent._execute_planner_tool(
+            action_tool="history_search",
+            action_input='{"action":"list","keyword":"牛奶","limit":5}',
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("历史搜索(关键词: 牛奶", observation.result)
+
+    def test_history_search_tool_supports_legacy_search_command(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        self.db.save_turn(user_content="安排体检", assistant_content="已记录体检日程")
+
+        observation = agent._execute_planner_tool(
+            action_tool="history_search",
+            action_input="/history search 体检 --limit 5",
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("历史搜索(关键词: 体检", observation.result)
+
     def test_schedule_tool_update_with_null_tag_clears_to_default(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
         schedule_id = self.db.add_schedule("项目同步", "2026-03-01 10:00", tag="work")
