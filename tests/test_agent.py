@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from assistant_app.agent import (
     AssistantAgent,
+    _parse_history_list_limit,
     _parse_history_search_input,
     _parse_todo_list_options,
     _strip_think_blocks,
@@ -24,7 +25,7 @@ from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.search import SearchResult
 
-_DEFAULT_PLAN_TOOLS = ["todo", "schedule", "internet_search", "history_search"]
+_DEFAULT_PLAN_TOOLS = ["todo", "schedule", "internet_search", "history"]
 
 
 def _build_plan_objects(
@@ -308,16 +309,21 @@ class FakeToolCallingLLMClient(FakeLLMClient):
                 tool_call_name = action_tool
                 if action_tool == "internet_search":
                     arguments = {"query": action_input}
-                elif action_tool == "history_search":
-                    arguments = {"keyword": "牛奶", "limit": 20}
-                    parsed_history = _try_parse_json(action_input)
-                    if isinstance(parsed_history, dict):
-                        arguments = dict(parsed_history)
                 elif action_tool == "todo":
                     todo_arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
                     if todo_arguments is None:
                         todo_arguments = {"action": "list"}
                     tool_call_name, arguments = _todo_tool_name_and_arguments(todo_arguments)
+                elif action_tool == "history":
+                    history_arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
+                    if history_arguments is None:
+                        history_arguments = {"action": "list"}
+                    tool_call_name, arguments = _history_tool_name_and_arguments(history_arguments)
+                elif action_tool == "history_search":
+                    arguments = {"keyword": "牛奶", "limit": 20}
+                    parsed_history = _try_parse_json(action_input)
+                    if isinstance(parsed_history, dict):
+                        arguments = dict(parsed_history)
                 else:
                     arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
                     if arguments is None:
@@ -455,6 +461,20 @@ def _todo_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, dict[
     return tool_name, payload
 
 
+def _history_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    action = str(arguments.get("action") or "").strip().lower()
+    tool_name = {"list": "history_list", "search": "history_search"}.get(action, "history_list")
+    fields_by_tool: dict[str, tuple[str, ...]] = {
+        "history_list": ("limit",),
+        "history_search": ("keyword", "limit"),
+    }
+    payload: dict[str, Any] = {}
+    for key in fields_by_tool.get(tool_name, ()):
+        if key in arguments:
+            payload[key] = arguments.get(key)
+    return tool_name, payload
+
+
 def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str, Any] | None:
     parsed = _try_parse_json(action_input)
     if isinstance(parsed, dict):
@@ -478,6 +498,24 @@ def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str,
     if tool == "schedule":
         if text == "/schedule list":
             return {"action": "list"}
+        return {"action": "list"}
+    if tool == "history":
+        if text == "/history list":
+            return {"action": "list"}
+        if text.startswith("/history list "):
+            limit = _parse_history_list_limit(text)
+            if limit is None:
+                return None
+            return {"action": "list", "limit": limit}
+        if text.startswith("/history search "):
+            parsed_history = _parse_history_search_input(text.removeprefix("/history search ").strip())
+            if parsed_history is None:
+                return None
+            keyword, limit = parsed_history
+            return {"action": "search", "keyword": keyword, "limit": limit}
+        parsed_history_payload = _try_parse_json(text)
+        if isinstance(parsed_history_payload, dict):
+            return parsed_history_payload
         return {"action": "list"}
     if tool == "history_search":
         if text.startswith("/history search "):
@@ -1872,7 +1910,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("tag（标签）", first_messages[0]["content"])
         self.assertIn("view（all|today|overdue|upcoming|inbox）", first_messages[0]["content"])
         self.assertIn("interval_minutes/times/remind_start_time（重复规则）", first_messages[0]["content"])
-        self.assertIn("history_search", first_messages[0]["content"])
+        self.assertIn("history：历史会话检索", first_messages[0]["content"])
         self.assertIn("历史对话", first_messages[0]["content"])
         planner_user_payload = _extract_payload_from_messages(first_messages)
         self.assertNotIn("tool_contract", planner_user_payload)
@@ -2160,7 +2198,7 @@ class AssistantAgentTest(unittest.TestCase):
                     {
                         "status": "replanned",
                         "plan": [
-                            {"task": "B", "completed": True, "tools": ["history_search"]},
+                            {"task": "B", "completed": True, "tools": ["history"]},
                             {"task": "A", "completed": False, "tools": ["todo"]},
                         ],
                     },
@@ -2212,9 +2250,9 @@ class AssistantAgentTest(unittest.TestCase):
             responses=[
                 _planner_planned(
                     ["检索历史", "总结"],
-                    tools_by_task={"检索历史": ["history_search"], "总结": []},
+                    tools_by_task={"检索历史": ["history"], "总结": []},
                 ),
-                _thought_continue("history_search", "/history search 牛奶"),
+                _thought_continue("history", "/history search 牛奶"),
                 _planner_done("历史已检索。"),
                 _planner_done("全部完成。"),
             ]
@@ -2226,7 +2264,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("全部完成", response)
         self.assertTrue(fake_llm.tool_schema_calls)
         first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
-        self.assertEqual(set(first_tool_names), {"history_search", "ask_user", "done"})
+        self.assertEqual(set(first_tool_names), {"history_list", "history_search", "ask_user", "done"})
+        self.assertNotIn("history", first_tool_names)
         self.assertNotIn("todo", first_tool_names)
         self.assertNotIn("schedule", first_tool_names)
         self.assertNotIn("internet_search", first_tool_names)
@@ -2628,12 +2667,12 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNone(decision)
 
-    def test_thought_contract_accepts_continue_with_history_search_tool(self) -> None:
+    def test_thought_contract_accepts_continue_with_history_tool(self) -> None:
         decision = normalize_thought_decision(
             {
                 "status": "continue",
                 "current_step": "检索历史",
-                "next_action": {"tool": "history_search", "input": "/history search 牛奶"},
+                "next_action": {"tool": "history", "input": "/history search 牛奶"},
                 "question": None,
                 "response": None,
             }
@@ -2723,6 +2762,59 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(next_action.get("tool"), "todo")
         input_payload = _try_parse_json(str(next_action.get("input") or ""))
         self.assertEqual(input_payload, {"action": "view", "view": "today", "tag": "work"})
+
+    def test_thought_tool_call_contract_maps_history_list_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_history_list",
+                "type": "function",
+                "function": {
+                    "name": "history_list",
+                    "arguments": json.dumps({"limit": 5}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "history")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "list", "limit": 5})
+
+    def test_thought_tool_call_contract_maps_history_search_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_history_search",
+                "type": "function",
+                "function": {
+                    "name": "history_search",
+                    "arguments": json.dumps({"keyword": "牛奶", "limit": 3}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "history")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "search", "keyword": "牛奶", "limit": 3})
+
+    def test_thought_tool_call_contract_rejects_legacy_history_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_legacy_history",
+                "type": "function",
+                "function": {
+                    "name": "history",
+                    "arguments": json.dumps({"action": "search", "keyword": "牛奶"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNone(decision)
 
     def test_thought_tool_call_contract_rejects_legacy_todo_tool(self) -> None:
         decision = normalize_thought_tool_call(
@@ -2821,11 +2913,11 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("互联网搜索结果（Top 5）", observation.result)
         self.assertIn("5. E", observation.result)
 
-    def test_plan_replan_history_search_tool(self) -> None:
+    def test_plan_replan_history_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["检索历史", "总结结果"]),
-                _thought_continue("history_search", "/history search 牛奶"),
+                _thought_continue("history", "/history search 牛奶"),
                 _planner_done("我找到了 1 条相关历史。"),
             ]
         )
@@ -2921,7 +3013,7 @@ class AssistantAgentTest(unittest.TestCase):
             action_input="/schedule add 2026-03-01 10:30 冲突会议",
         )
         history_observation = agent._execute_planner_tool(
-            action_tool="history_search",
+            action_tool="history",
             action_input="/history search 不存在关键词",
         )
 
@@ -2931,6 +3023,41 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("已添加日程", schedule_observation.result)
         self.assertFalse(history_observation.ok)
         self.assertIn("未找到包含", history_observation.result)
+
+    def test_history_tool_supports_list_and_search_actions(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已记录买牛奶待办")
+
+        list_observation = agent._execute_planner_tool(
+            action_tool="history",
+            action_input='{"action":"list","limit":5}',
+        )
+        search_observation = agent._execute_planner_tool(
+            action_tool="history",
+            action_input='{"action":"search","keyword":"牛奶","limit":5}',
+        )
+
+        self.assertTrue(list_observation.ok)
+        self.assertIn("历史会话(最近 1 轮)", list_observation.result)
+        self.assertTrue(search_observation.ok)
+        self.assertIn("历史搜索(关键词: 牛奶", search_observation.result)
+
+    def test_history_tool_validation_for_limit_and_keyword(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+
+        invalid_limit = agent._execute_planner_tool(
+            action_tool="history",
+            action_input='{"action":"list","limit":0}',
+        )
+        missing_keyword = agent._execute_planner_tool(
+            action_tool="history",
+            action_input='{"action":"search","limit":3}',
+        )
+
+        self.assertFalse(invalid_limit.ok)
+        self.assertEqual(invalid_limit.result, "history.list limit 必须为正整数。")
+        self.assertFalse(missing_keyword.ok)
+        self.assertEqual(missing_keyword.result, "history.search keyword 不能为空。")
 
     def test_schedule_tool_update_with_null_tag_clears_to_default(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

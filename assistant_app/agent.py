@@ -1289,6 +1289,29 @@ class AssistantAgent:
             formatted = _format_search_results(search_results, top_k=self._internet_search_top_k)
             return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
 
+        if action_tool == "history":
+            normalized_input = action_input.strip()
+            # Backward-compatible fallback for non-tool-calling thought outputs.
+            if normalized_input.startswith("/history"):
+                command_result = self._handle_command(normalized_input)
+                ok = _is_planner_command_success(command_result, tool="history")
+                return PlannerObservation(
+                    tool="history",
+                    input_text=normalized_input,
+                    ok=ok,
+                    result=command_result,
+                )
+
+            payload = _try_parse_json(normalized_input)
+            if not isinstance(payload, dict):
+                return PlannerObservation(
+                    tool="history",
+                    input_text=action_input,
+                    ok=False,
+                    result="history 工具参数无效：需要 JSON 对象。",
+                )
+            return self._execute_history_system_action(payload, raw_input=normalized_input)
+
         if action_tool == "history_search":
             normalized_input = action_input.strip()
             # Backward-compatible fallback for non-tool-calling thought outputs.
@@ -1310,7 +1333,13 @@ class AssistantAgent:
                     ok=False,
                     result="history_search 工具参数无效：需要 JSON 对象。",
                 )
-            return self._execute_history_search_system_action(payload, raw_input=normalized_input)
+            compat_payload = dict(payload)
+            compat_payload["action"] = "search"
+            return self._execute_history_system_action(
+                compat_payload,
+                raw_input=normalized_input,
+                observation_tool="history_search",
+            )
 
         return PlannerObservation(
             tool=action_tool or "unknown",
@@ -1937,37 +1966,68 @@ class AssistantAgent:
         ok = _is_planner_command_success(result, tool="schedule")
         return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
 
-    def _execute_history_search_system_action(
+    def _execute_history_system_action(
         self,
         payload: dict[str, Any],
         *,
         raw_input: str,
+        observation_tool: str = "history",
     ) -> PlannerObservation:
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in {"list", "search"}:
+            return PlannerObservation(
+                tool=observation_tool,
+                input_text=raw_input,
+                ok=False,
+                result="history.action 非法。",
+            )
+
+        history_limit = DEFAULT_HISTORY_LIST_LIMIT
+        if "limit" in payload and payload.get("limit") is not None:
+            limit = _normalize_positive_int_value(payload.get("limit"))
+            if limit is None:
+                limit_error = "history.list limit 必须为正整数。" if action == "list" else "history.search limit 必须为正整数。"
+                return PlannerObservation(
+                    tool=observation_tool,
+                    input_text=raw_input,
+                    ok=False,
+                    result=limit_error,
+                )
+            history_limit = min(limit, MAX_HISTORY_LIST_LIMIT)
+
+        if action == "list":
+            turns = self.db.recent_turns(limit=history_limit)
+            if not turns:
+                result = "暂无历史会话。"
+                ok = _is_planner_command_success(result, tool=observation_tool)
+                return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
+            rows = [
+                [
+                    str(index),
+                    _truncate_text(item.user_content, 300) or "-",
+                    _truncate_text(item.assistant_content, 300) or "-",
+                    item.created_at,
+                ]
+                for index, item in enumerate(turns, start=1)
+            ]
+            table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=rows)
+            result = f"历史会话(最近 {len(turns)} 轮):\n{table}"
+            ok = _is_planner_command_success(result, tool=observation_tool)
+            return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
+
         keyword = str(payload.get("keyword") or "").strip()
         if not keyword:
             return PlannerObservation(
-                tool="history_search",
+                tool=observation_tool,
                 input_text=raw_input,
                 ok=False,
-                result="history_search.keyword 不能为空。",
+                result="history.search keyword 不能为空。",
             )
-        if "limit" in payload:
-            parsed_limit = _normalize_positive_int_value(payload.get("limit"))
-            if parsed_limit is None:
-                return PlannerObservation(
-                    tool="history_search",
-                    input_text=raw_input,
-                    ok=False,
-                    result="history_search.limit 必须为正整数。",
-                )
-            history_limit = min(parsed_limit, MAX_HISTORY_LIST_LIMIT)
-        else:
-            history_limit = DEFAULT_HISTORY_LIST_LIMIT
         turns = self.db.search_turns(keyword, limit=history_limit)
         if not turns:
             result = f"未找到包含“{keyword}”的历史会话。"
-            ok = _is_planner_command_success(result, tool="history_search")
-            return PlannerObservation(tool="history_search", input_text=raw_input, ok=ok, result=result)
+            ok = _is_planner_command_success(result, tool=observation_tool)
+            return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
         rows = [
             [
                 str(index),
@@ -1979,8 +2039,8 @@ class AssistantAgent:
         ]
         table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=rows)
         result = f"历史搜索(关键词: {keyword}, 命中 {len(turns)} 轮):\n{table}"
-        ok = _is_planner_command_success(result, tool="history_search")
-        return PlannerObservation(tool="history_search", input_text=raw_input, ok=ok, result=result)
+        ok = _is_planner_command_success(result, tool=observation_tool)
+        return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
 
     def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> PlannerObservation:
         truncated = _truncate_text(observation.result, self._plan_observation_char_limit)
@@ -3682,7 +3742,7 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
     elif tool == "schedule":
         if text.startswith("未找到日程 #") or "没有可切换的重复规则" in text:
             return False
-    elif tool == "history_search":
+    elif tool in {"history", "history_search"}:
         if text.startswith("未找到包含") or text.startswith("暂无历史会话"):
             return False
 

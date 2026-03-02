@@ -18,7 +18,7 @@ THOUGHT_PROMPT = """
 工具与参数定义以 API 请求里的 tools schema 为准（不以 prompt 中的示例字段为准）。
 可用工具名：
 - todo_add、todo_list、todo_view、todo_get、todo_update、todo_delete、todo_done、todo_search
-- schedule、internet_search、history_search、ask_user、done
+- schedule、internet_search、history_list、history_search、ask_user、done
 
 规则：
 - 每轮最多调用 1 个工具
@@ -265,6 +265,24 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "history_list",
+            "description": "列出最近历史会话，直接传结构化参数，不要传命令字符串。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": ["integer", "null"],
+                        "description": "返回结果上限；不传/null 使用系统默认值，传值时需为正整数。",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "history_search",
             "description": "检索历史会话中的用户输入与最终回答。",
             "parameters": {
@@ -275,9 +293,8 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "历史检索关键词文本；用于匹配历史会话。",
                     },
                     "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "返回结果上限，正整数；不填时使用系统默认值。",
+                        "type": ["integer", "null"],
+                        "description": "返回结果上限；不传/null 使用系统默认值，传值时需为正整数。",
                     },
                 },
                 "required": ["keyword"],
@@ -355,6 +372,14 @@ _TODO_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
     "todo_delete": ("id",),
     "todo_done": ("id",),
     "todo_search": ("keyword", "tag"),
+}
+_HISTORY_TOOL_ACTION_BY_NAME: dict[str, str] = {
+    "history_list": "list",
+    "history_search": "search",
+}
+_HISTORY_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
+    "history_list": ("limit",),
+    "history_search": ("keyword", "limit"),
 }
 
 
@@ -494,18 +519,21 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             "response": None,
         }
 
-    if name == "history_search":
-        keyword = str(arguments.get("keyword") or "").strip()
-        if not keyword:
-            return None
-        payload: dict[str, Any] = {"keyword": keyword}
-        if "limit" in arguments:
-            payload["limit"] = arguments.get("limit")
+    if name in _HISTORY_TOOL_ACTION_BY_NAME:
+        if name == "history_search":
+            keyword = str(arguments.get("keyword") or "").strip()
+            if not keyword:
+                return None
+        payload: dict[str, Any] = {"action": _HISTORY_TOOL_ACTION_BY_NAME[name]}
+        fields = _HISTORY_TOOL_FIELDS_BY_NAME.get(name, ())
+        for key in fields:
+            if key in arguments:
+                payload[key] = arguments.get(key)
         return {
             "status": "continue",
             "current_step": current_step,
             "next_action": {
-                "tool": "history_search",
+                "tool": "history",
                 "input": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             },
             "question": None,
