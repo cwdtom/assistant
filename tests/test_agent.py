@@ -305,6 +305,7 @@ class FakeToolCallingLLMClient(FakeLLMClient):
             if isinstance(next_action, dict):
                 action_tool = str(next_action.get("tool") or "").strip().lower()
                 action_input = str(next_action.get("input") or "").strip()
+                tool_call_name = action_tool
                 if action_tool == "internet_search":
                     arguments = {"query": action_input}
                 elif action_tool == "history_search":
@@ -312,6 +313,11 @@ class FakeToolCallingLLMClient(FakeLLMClient):
                     parsed_history = _try_parse_json(action_input)
                     if isinstance(parsed_history, dict):
                         arguments = dict(parsed_history)
+                elif action_tool == "todo":
+                    todo_arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
+                    if todo_arguments is None:
+                        todo_arguments = {"action": "list"}
+                    tool_call_name, arguments = _todo_tool_name_and_arguments(todo_arguments)
                 else:
                     arguments = _legacy_command_to_tool_arguments(action_tool, action_input)
                     if arguments is None:
@@ -319,7 +325,7 @@ class FakeToolCallingLLMClient(FakeLLMClient):
                 if current_step:
                     arguments["current_step"] = current_step
                 tool_call_payload = {
-                    "name": action_tool,
+                    "name": tool_call_name,
                     "arguments": json.dumps(arguments, ensure_ascii=False),
                 }
         elif status == "ask_user":
@@ -399,22 +405,54 @@ class FakeMultiToolCallingLLMClient(FakeToolCallingLLMClient):
                         "id": f"call_{self.model_call_count}_1",
                         "type": "function",
                         "function": {
-                            "name": "todo",
-                            "arguments": json.dumps({"action": "list"}, ensure_ascii=False),
+                            "name": "todo_list",
+                            "arguments": json.dumps({}, ensure_ascii=False),
                         },
                     },
                     {
                         "id": f"call_{self.model_call_count}_2",
                         "type": "function",
                         "function": {
-                            "name": "todo",
-                            "arguments": json.dumps({"action": "search", "keyword": "牛奶"}, ensure_ascii=False),
+                            "name": "todo_search",
+                            "arguments": json.dumps({"keyword": "牛奶"}, ensure_ascii=False),
                         },
                     },
                 ],
             },
             "reasoning_content": None,
         }
+
+
+def _todo_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    action = str(arguments.get("action") or "").strip().lower()
+    if action == "list" and "view" in arguments:
+        tool_name = "todo_view"
+    else:
+        tool_name = {
+            "add": "todo_add",
+            "list": "todo_list",
+            "view": "todo_view",
+            "get": "todo_get",
+            "update": "todo_update",
+            "delete": "todo_delete",
+            "done": "todo_done",
+            "search": "todo_search",
+        }.get(action, "todo_list")
+    fields_by_tool: dict[str, tuple[str, ...]] = {
+        "todo_add": ("content", "tag", "priority", "due_at", "remind_at"),
+        "todo_list": ("tag",),
+        "todo_view": ("view", "tag"),
+        "todo_get": ("id",),
+        "todo_update": ("id", "content", "tag", "priority", "due_at", "remind_at"),
+        "todo_delete": ("id",),
+        "todo_done": ("id",),
+        "todo_search": ("keyword", "tag"),
+    }
+    payload: dict[str, Any] = {}
+    for key in fields_by_tool.get(tool_name, ()):
+        if key in arguments:
+            payload[key] = arguments.get(key)
+    return tool_name, payload
 
 
 def _legacy_command_to_tool_arguments(tool: str, action_input: str) -> dict[str, Any] | None:
@@ -782,7 +820,7 @@ class AssistantAgentTest(unittest.TestCase):
         missing_resp = agent.handle_input("/todo get 1")
         self.assertIn("未找到待办 #1", missing_resp)
 
-    def test_todo_tool_update_with_null_tag_clears_to_default(self) -> None:
+    def test_todo_tool_update_with_null_tag_keeps_original_tag(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
         agent.handle_input("/todo add 写周报 --tag work")
 
@@ -803,7 +841,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertTrue(observation.ok)
         todo = self.db.get_todo(1)
         assert todo is not None
-        self.assertEqual(todo.tag, "default")
+        self.assertEqual(todo.tag, "work")
 
     def test_slash_todo_due_and_remind_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -2211,6 +2249,18 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("已完成", response)
         self.assertTrue(fake_llm.tool_schema_calls)
         first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        expected_todo_tools = {
+            "todo_add",
+            "todo_list",
+            "todo_view",
+            "todo_get",
+            "todo_update",
+            "todo_delete",
+            "todo_done",
+            "todo_search",
+        }
+        self.assertTrue(expected_todo_tools.issubset(set(first_tool_names)))
+        self.assertNotIn("todo", first_tool_names)
         self.assertEqual(first_tool_names.count("ask_user"), 1)
         self.assertEqual(first_tool_names.count("done"), 1)
         self.assertEqual(len(first_tool_names), len(set(first_tool_names)))
@@ -2634,14 +2684,14 @@ class AssistantAgentTest(unittest.TestCase):
             },
         )
 
-    def test_thought_tool_call_contract_maps_todo_structured_action(self) -> None:
+    def test_thought_tool_call_contract_maps_todo_list_tool(self) -> None:
         decision = normalize_thought_tool_call(
             {
                 "id": "call_3",
                 "type": "function",
                 "function": {
-                    "name": "todo",
-                    "arguments": json.dumps({"action": "list", "view": "today"}, ensure_ascii=False),
+                    "name": "todo_list",
+                    "arguments": json.dumps({"tag": "work"}, ensure_ascii=False),
                 },
             }
         )
@@ -2652,16 +2702,36 @@ class AssistantAgentTest(unittest.TestCase):
         assert isinstance(next_action, dict)
         self.assertEqual(next_action.get("tool"), "todo")
         input_payload = _try_parse_json(str(next_action.get("input") or ""))
-        self.assertEqual(input_payload, {"action": "list", "view": "today"})
+        self.assertEqual(input_payload, {"action": "list", "tag": "work"})
 
-    def test_thought_tool_call_contract_rejects_todo_view_action(self) -> None:
+    def test_thought_tool_call_contract_maps_todo_view_tool(self) -> None:
         decision = normalize_thought_tool_call(
             {
                 "id": "call_3_view",
                 "type": "function",
                 "function": {
+                    "name": "todo_view",
+                    "arguments": json.dumps({"view": "today", "tag": "work"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "todo")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "view", "view": "today", "tag": "work"})
+
+    def test_thought_tool_call_contract_rejects_legacy_todo_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_legacy_todo",
+                "type": "function",
+                "function": {
                     "name": "todo",
-                    "arguments": json.dumps({"action": "view", "view": "today"}, ensure_ascii=False),
+                    "arguments": json.dumps({"action": "list"}, ensure_ascii=False),
                 },
             }
         )

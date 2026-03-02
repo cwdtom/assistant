@@ -138,7 +138,7 @@ Optional runtime flags (all supported in `.env`):
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
-- Thought uses chat tool-calling with tools: `todo|schedule|internet_search|history_search|ask_user|done`.
+- Thought uses chat tool-calling with tools: `schedule|internet_search|history_search|ask_user|done` + `todo` group（展开为 `todo_add|todo_list|todo_view|todo_get|todo_update|todo_delete|todo_done|todo_search`）.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/todo`、`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。

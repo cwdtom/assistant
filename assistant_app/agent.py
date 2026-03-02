@@ -1497,9 +1497,10 @@ class AssistantAgent:
                     result="提醒时间需要和截止时间一起设置。",
                 )
             update_kwargs: dict[str, Any] = {"content": content}
-            update_tag = _normalize_todo_tag_value(payload.get("tag"))
             if "tag" in payload:
-                update_kwargs["tag"] = update_tag or "default"
+                update_tag = _normalize_todo_tag_value(payload.get("tag"))
+                if update_tag:
+                    update_kwargs["tag"] = update_tag
             if has_priority:
                 update_kwargs["priority"] = update_priority
             if has_due:
