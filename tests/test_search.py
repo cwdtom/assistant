@@ -10,7 +10,11 @@ from assistant_app.search import (
     BOCHA_RERANK_MODEL,
     BingSearchProvider,
     BochaSearchProvider,
+    WebPageFetchResult,
+    _extract_text_from_html,
     _extract_bocha_results,
+    _fetch_webpage_main_text_via_requests,
+    fetch_webpage_main_text,
     create_search_provider,
 )
 
@@ -27,6 +31,15 @@ class _FakeHTTPResponse:
 
     def read(self) -> bytes:
         return json.dumps(self._payload, ensure_ascii=False).encode("utf-8")
+
+
+class _FakeRequestsResponse:
+    def __init__(self, *, text: str, url: str = "https://example.com/final") -> None:
+        self.text = text
+        self.url = url
+
+    def raise_for_status(self) -> None:
+        return None
 
 
 class SearchProviderTest(unittest.TestCase):
@@ -196,6 +209,78 @@ class SearchProviderTest(unittest.TestCase):
         self.assertIn("internet_search_rerank_failed_fallback", merged)
         self.assertIn("internet_search_fallback_start", merged)
         self.assertIn("internet_search_fallback_done", merged)
+
+    def test_fetch_webpage_main_text_falls_back_to_requests_when_playwright_fails(self) -> None:
+        expected = WebPageFetchResult(url="https://example.com/final", main_text="fallback body")
+        with patch(
+            "assistant_app.search._fetch_webpage_main_text_via_playwright",
+            side_effect=RuntimeError("playwright failed"),
+        ) as mocked_playwright:
+            with patch(
+                "assistant_app.search._fetch_webpage_main_text_via_requests",
+                return_value=expected,
+            ) as mocked_requests:
+                result = fetch_webpage_main_text("https://example.com")
+
+        self.assertEqual(result, expected)
+        mocked_playwright.assert_called_once()
+        mocked_requests.assert_called_once()
+
+    def test_fetch_webpage_main_text_raises_when_playwright_and_requests_both_fail(self) -> None:
+        with patch(
+            "assistant_app.search._fetch_webpage_main_text_via_playwright",
+            side_effect=RuntimeError("pw fail"),
+        ):
+            with patch(
+                "assistant_app.search._fetch_webpage_main_text_via_requests",
+                side_effect=RuntimeError("requests fail"),
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    fetch_webpage_main_text("https://example.com")
+
+        self.assertIn("Playwright+HTTP fallback", str(ctx.exception))
+        self.assertIn("pw fail", str(ctx.exception))
+        self.assertIn("requests fail", str(ctx.exception))
+
+    def test_fetch_webpage_main_text_via_requests_extracts_main_text(self) -> None:
+        html = """
+        <html>
+          <head><title>T</title><style>.x{}</style></head>
+          <body>
+            <h1>标题</h1>
+            <p>第一段</p>
+            <script>var a = 1;</script>
+            <div>第二段<br/>第三行</div>
+          </body>
+        </html>
+        """
+        fake_requests = type(
+            "FakeRequestsModule",
+            (),
+            {"get": lambda *args, **kwargs: _FakeRequestsResponse(text=html, url="https://example.com/doc")},
+        )
+        with patch("assistant_app.search._load_requests_module", return_value=fake_requests):
+            result = _fetch_webpage_main_text_via_requests(
+                "https://example.com",
+                timeout_seconds=5.0,
+                max_chars=300,
+            )
+
+        self.assertEqual(result.url, "https://example.com/doc")
+        self.assertIn("标题", result.main_text)
+        self.assertIn("第一段", result.main_text)
+        self.assertIn("第二段", result.main_text)
+        self.assertIn("第三行", result.main_text)
+        self.assertNotIn("var a = 1", result.main_text)
+
+    def test_extract_text_from_html_removes_script_style_and_keeps_visible_text(self) -> None:
+        text = _extract_text_from_html(
+            "<html><body><style>.x{}</style><h2>H</h2><p>A</p><script>alert(1)</script><div>B</div></body></html>"
+        )
+        self.assertIn("H", text)
+        self.assertIn("A", text)
+        self.assertIn("B", text)
+        self.assertNotIn("alert(1)", text)
 
 
 if __name__ == "__main__":

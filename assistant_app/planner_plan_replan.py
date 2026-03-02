@@ -16,7 +16,7 @@ PLANNER_CAPABILITIES_TEXT = """
   - 关键字段：title（标题）、tag（标签）、event_time（开始时间，YYYY-MM-DD HH:MM）、
     duration_minutes（分钟）、remind_at（提醒时间）、interval_minutes/times/remind_start_time（重复规则）、
     view（day|week|month）与 anchor（锚点日期）
-- internet_search：互联网检索网页信息并返回摘要（query 关键词）
+- internet_search：互联网检索网页信息并返回摘要（支持 query 关键词检索与已知 URL 正文抓取）
 - history：历史会话检索（最近列表与关键词搜索）
   - 常用动作：list/search
   - 关键字段：keyword（搜索关键词，可用于 search）、limit（返回条数上限，>=1）

@@ -19,7 +19,7 @@ THOUGHT_PROMPT = """
 可用工具名：
 - todo_add、todo_list、todo_view、todo_get、todo_update、todo_delete、todo_done、todo_search
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
-- internet_search_tool、history_list、history_search、ask_user、done
+- internet_search_tool、internet_search_fetch_url、history_list、history_search、ask_user、done
 
 规则：
 - 每轮最多调用 1 个工具
@@ -386,6 +386,24 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "internet_search_fetch_url",
+            "description": "按 URL 抓取网页正文信息，返回主文本内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "目标网页 URL，需为 http:// 或 https:// 开头。",
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "history_list",
             "description": "列出最近历史会话，直接传结构化参数，不要传命令字符串。",
             "parameters": {
@@ -692,6 +710,22 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             "status": "continue",
             "current_step": current_step,
             "next_action": {"tool": "internet_search", "input": query},
+            "question": None,
+            "response": None,
+        }
+
+    if name == "internet_search_fetch_url":
+        url = str(arguments.get("url") or "").strip()
+        if not url:
+            return None
+        payload = {"action": "fetch_url", "url": url}
+        return {
+            "status": "continue",
+            "current_step": current_step,
+            "next_action": {
+                "tool": "internet_search",
+                "input": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            },
             "question": None,
             "response": None,
         }

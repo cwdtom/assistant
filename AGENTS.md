@@ -138,7 +138,7 @@ Optional runtime flags (all supported in `.env`):
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
-- Thought uses chat tool-calling with tools: `ask_user|done` + `todo` group（展开为 `todo_add|todo_list|todo_view|todo_get|todo_update|todo_delete|todo_done|todo_search`）+ `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool`）+ `history` group（展开为 `history_list|history_search`）.
+- Thought uses chat tool-calling with tools: `ask_user|done` + `todo` group（展开为 `todo_add|todo_list|todo_view|todo_get|todo_update|todo_delete|todo_done|todo_search`）+ `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/todo`、`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
@@ -151,6 +151,8 @@ Optional runtime flags (all supported in `.env`):
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).
 - If rerank request fails, search automatically retries once without reranker.
+- `internet_search` receives a plain `http/https` URL input and auto-routes to `fetch_url` execution instead of keyword search.
+- `fetch_url` uses Playwright first; if Playwright fails, it falls back to direct HTTP fetch via `requests`.
 - Search output no longer performs local second truncation; it renders provider-returned results directly.
 - Bocha result text extraction prefers `summary`; if unavailable, it falls back to `snippet`.
 

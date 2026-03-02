@@ -10,6 +10,7 @@ import unittest
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -2343,7 +2344,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("全部完成", response)
         self.assertTrue(fake_llm.tool_schema_calls)
         first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
-        self.assertEqual(set(first_tool_names), {"internet_search_tool", "ask_user", "done"})
+        self.assertEqual(set(first_tool_names), {"internet_search_tool", "internet_search_fetch_url", "ask_user", "done"})
         self.assertNotIn("internet_search", first_tool_names)
 
     def test_thought_tool_calling_expands_schedule_group_tools(self) -> None:
@@ -2809,6 +2810,35 @@ class AssistantAgentTest(unittest.TestCase):
             },
         )
 
+    def test_thought_tool_call_contract_maps_internet_search_fetch_url(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_1_fetch_url",
+                "type": "function",
+                "function": {
+                    "name": "internet_search_fetch_url",
+                    "arguments": json.dumps({"url": "https://example.com"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertEqual(
+            decision,
+            {
+                "status": "continue",
+                "current_step": "",
+                "next_action": {
+                    "tool": "internet_search",
+                    "input": json.dumps(
+                        {"action": "fetch_url", "url": "https://example.com"},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+                "question": None,
+                "response": None,
+            },
+        )
+
     def test_thought_tool_call_contract_rejects_legacy_internet_search_tool(self) -> None:
         decision = normalize_thought_tool_call(
             {
@@ -3130,6 +3160,91 @@ class AssistantAgentTest(unittest.TestCase):
         merged = "\n".join(captured.output)
         self.assertIn("planner_tool_internet_search_start", merged)
         self.assertIn("planner_tool_internet_search_failed", merged)
+
+    def test_internet_search_url_input_auto_routes_to_fetch_url(self) -> None:
+        fake_search = FakeSearchProvider(
+            results=[
+                SearchResult(title="A", snippet="S1", url="https://example.com/a"),
+            ]
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=fake_search,
+        )
+        with patch("assistant_app.agent.fetch_webpage_main_text") as mocked_fetch:
+            mocked_fetch.return_value = SimpleNamespace(url="https://example.com", main_text="网页正文")
+            observation = agent._execute_planner_tool(
+                action_tool="internet_search",
+                action_input="https://example.com",
+            )
+
+        self.assertTrue(observation.ok)
+        result_payload = _try_parse_json(observation.result)
+        self.assertEqual(result_payload, {"url": "https://example.com", "main_text": "网页正文"})
+        self.assertEqual(fake_search.queries, [])
+        mocked_fetch.assert_called_once_with("https://example.com")
+
+    def test_internet_search_fetch_url_observation_success(self) -> None:
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=FakeSearchProvider(),
+        )
+        action_input = json.dumps(
+            {"action": "fetch_url", "url": "https://example.com"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        with patch("assistant_app.agent.fetch_webpage_main_text") as mocked_fetch:
+            mocked_fetch.return_value = SimpleNamespace(url="https://example.com", main_text="网页正文")
+            with self.assertLogs("assistant_app.app", level="INFO") as captured:
+                observation = agent._execute_planner_tool(action_tool="internet_search", action_input=action_input)
+
+        self.assertTrue(observation.ok)
+        result_payload = _try_parse_json(observation.result)
+        self.assertEqual(result_payload, {"url": "https://example.com", "main_text": "网页正文"})
+        mocked_fetch.assert_called_once_with("https://example.com")
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_internet_search_fetch_url_start", merged)
+        self.assertIn("planner_tool_internet_search_fetch_url_done", merged)
+
+    def test_internet_search_fetch_url_observation_rejects_invalid_url(self) -> None:
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=FakeSearchProvider(),
+        )
+        action_input = json.dumps(
+            {"action": "fetch_url", "url": "ftp://example.com/resource"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        observation = agent._execute_planner_tool(action_tool="internet_search", action_input=action_input)
+
+        self.assertFalse(observation.ok)
+        self.assertIn("url 非法", observation.result)
+
+    def test_internet_search_fetch_url_observation_logs_failed(self) -> None:
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=FakeSearchProvider(),
+        )
+        action_input = json.dumps(
+            {"action": "fetch_url", "url": "https://example.com"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        with patch("assistant_app.agent.fetch_webpage_main_text", side_effect=RuntimeError("timeout")):
+            with self.assertLogs("assistant_app.app", level="INFO") as captured:
+                observation = agent._execute_planner_tool(action_tool="internet_search", action_input=action_input)
+
+        self.assertFalse(observation.ok)
+        self.assertIn("网页抓取失败", observation.result)
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_internet_search_fetch_url_start", merged)
+        self.assertIn("planner_tool_internet_search_fetch_url_failed", merged)
 
     def test_plan_replan_history_tool(self) -> None:
         fake_llm = FakeLLMClient(

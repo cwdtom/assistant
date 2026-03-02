@@ -30,6 +30,7 @@ THOUGHT_SCHEDULE_TOOL_NAMES = (
 )
 THOUGHT_INTERNET_SEARCH_TOOL_NAMES = (
     "internet_search_tool",
+    "internet_search_fetch_url",
 )
 THOUGHT_TOOL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
     "todo": THOUGHT_TODO_TOOL_NAMES,

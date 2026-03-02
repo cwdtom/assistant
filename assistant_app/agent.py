@@ -27,7 +27,7 @@ from assistant_app.planner_thought import (
     normalize_thought_tool_call,
     resolve_current_subtask_tool_names,
 )
-from assistant_app.search import BingSearchProvider, SearchProvider, SearchResult
+from assistant_app.search import BingSearchProvider, SearchProvider, SearchResult, fetch_webpage_main_text
 
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
 SCHEDULE_INTERVAL_OPTION_PATTERN = re.compile(r"(^|\s)--interval\s+(\d+)")
@@ -1262,7 +1262,26 @@ class AssistantAgent:
             return self._execute_schedule_system_action(payload, raw_input=normalized_input)
 
         if action_tool == "internet_search":
-            query = action_input.strip()
+            normalized_input = action_input.strip()
+            payload = _try_parse_json(normalized_input)
+            if isinstance(payload, dict):
+                action = str(payload.get("action") or "").strip().lower()
+                if action == "fetch_url":
+                    return self._execute_internet_search_fetch_url_action(payload, raw_input=normalized_input)
+                if action:
+                    return PlannerObservation(
+                        tool="internet_search",
+                        input_text=action_input,
+                        ok=False,
+                        result="internet_search.action 非法。",
+                    )
+            elif _is_direct_http_url(normalized_input):
+                return self._execute_internet_search_fetch_url_action(
+                    {"action": "fetch_url", "url": normalized_input},
+                    raw_input=normalized_input,
+                )
+
+            query = normalized_input
             if not query:
                 return PlannerObservation(
                     tool="internet_search",
@@ -1373,6 +1392,88 @@ class AssistantAgent:
             input_text=action_input,
             ok=False,
             result=f"未知工具: {action_tool}",
+        )
+
+    def _execute_internet_search_fetch_url_action(
+        self,
+        payload: dict[str, Any],
+        *,
+        raw_input: str,
+    ) -> PlannerObservation:
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            return PlannerObservation(
+                tool="internet_search",
+                input_text=raw_input,
+                ok=False,
+                result="internet_search.fetch_url 缺少 url。",
+            )
+        if not url.lower().startswith(("http://", "https://")):
+            return PlannerObservation(
+                tool="internet_search",
+                input_text=raw_input,
+                ok=False,
+                result="internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
+            )
+        log_context = {
+            "url_preview": _truncate_text(url, 120),
+            "url_length": len(url),
+        }
+        self._app_logger.info(
+            "planner_tool_internet_search_fetch_url_start",
+            extra={"event": "planner_tool_internet_search_fetch_url_start", "context": log_context},
+        )
+        try:
+            fetch_result = fetch_webpage_main_text(url)
+        except Exception as exc:  # noqa: BLE001
+            self._app_logger.warning(
+                "planner_tool_internet_search_fetch_url_failed",
+                extra={
+                    "event": "planner_tool_internet_search_fetch_url_failed",
+                    "context": {**log_context, "error": repr(exc)},
+                },
+            )
+            return PlannerObservation(
+                tool="internet_search",
+                input_text=raw_input,
+                ok=False,
+                result=f"网页抓取失败: {exc}",
+            )
+
+        if not fetch_result.main_text:
+            self._app_logger.warning(
+                "planner_tool_internet_search_fetch_url_failed",
+                extra={
+                    "event": "planner_tool_internet_search_fetch_url_failed",
+                    "context": {**log_context, "error": "empty_main_text"},
+                },
+            )
+            return PlannerObservation(
+                tool="internet_search",
+                input_text=raw_input,
+                ok=False,
+                result=f"网页抓取失败: 未提取到正文文本（{fetch_result.url}）。",
+            )
+        self._app_logger.info(
+            "planner_tool_internet_search_fetch_url_done",
+            extra={
+                "event": "planner_tool_internet_search_fetch_url_done",
+                "context": {
+                    **log_context,
+                    "main_text_length": len(fetch_result.main_text),
+                    "result_url": fetch_result.url,
+                },
+            },
+        )
+        result_payload = {
+            "url": fetch_result.url,
+            "main_text": fetch_result.main_text,
+        }
+        return PlannerObservation(
+            tool="internet_search",
+            input_text=raw_input,
+            ok=True,
+            result=json.dumps(result_payload, ensure_ascii=False, separators=(",", ":")),
         )
 
     def _execute_todo_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
@@ -3735,6 +3836,15 @@ def _truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(limit - 3, 0)] + "..."
+
+
+def _is_direct_http_url(text: str) -> bool:
+    candidate = text.strip()
+    if not candidate:
+        return False
+    if " " in candidate:
+        return False
+    return candidate.lower().startswith(("http://", "https://"))
 
 
 def _is_same_question_text(previous: str | None, current: str) -> bool:

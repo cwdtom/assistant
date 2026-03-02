@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
@@ -17,11 +17,19 @@ class SearchResult:
     url: str
 
 
+@dataclass(frozen=True)
+class WebPageFetchResult:
+    url: str
+    main_text: str
+
+
 class SearchProvider(Protocol):
     def search(self, query: str, top_k: int = 3) -> list[SearchResult]: ...
 
 
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 8.0
+DEFAULT_WEB_FETCH_TIMEOUT_SECONDS = 15.0
+DEFAULT_WEB_FETCH_MAX_TEXT_CHARS = 10000
 BOCHA_ENDPOINT = "https://api.bochaai.com/v1/web-search"
 BOCHA_MAX_COUNT = 50
 BOCHA_RERANK_MODEL = "gte-rerank"
@@ -226,6 +234,85 @@ def create_search_provider(
     return BingSearchProvider(timeout=timeout)
 
 
+def fetch_webpage_main_text(
+    url: str,
+    *,
+    timeout_seconds: float = DEFAULT_WEB_FETCH_TIMEOUT_SECONDS,
+    max_chars: int = DEFAULT_WEB_FETCH_MAX_TEXT_CHARS,
+) -> WebPageFetchResult:
+    normalized_url = _normalize_fetch_url(url)
+    if not normalized_url:
+        raise ValueError("url 非法，需为 http:// 或 https:// 开头。")
+
+    try:
+        return _fetch_webpage_main_text_via_playwright(
+            normalized_url,
+            timeout_seconds=timeout_seconds,
+            max_chars=max_chars,
+        )
+    except Exception as playwright_exc:  # noqa: BLE001
+        try:
+            return _fetch_webpage_main_text_via_requests(
+                normalized_url,
+                timeout_seconds=timeout_seconds,
+                max_chars=max_chars,
+            )
+        except Exception as requests_exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"网页抓取失败（Playwright+HTTP fallback）: playwright={playwright_exc}; requests={requests_exc}"
+            ) from requests_exc
+
+
+def _fetch_webpage_main_text_via_playwright(
+    normalized_url: str,
+    *,
+    timeout_seconds: float,
+    max_chars: int,
+) -> WebPageFetchResult:
+    sync_playwright = _load_sync_playwright()
+    timeout_ms = max(int(timeout_seconds * 1000), 1000)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(normalized_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.evaluate("() => window.scrollTo(0, document.body ? document.body.scrollHeight : 0)")
+            page.wait_for_timeout(300)
+            raw_main_text = page.evaluate(
+                "() => (document.body && document.body.innerText) ? document.body.innerText : ''"
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Playwright 抓取失败: {exc}") from exc
+        finally:
+            browser.close()
+
+    main_text = _normalize_main_text(raw_main_text, max_chars=max_chars)
+    return WebPageFetchResult(url=normalized_url, main_text=main_text)
+
+
+def _fetch_webpage_main_text_via_requests(
+    normalized_url: str,
+    *,
+    timeout_seconds: float,
+    max_chars: int,
+) -> WebPageFetchResult:
+    requests_module = _load_requests_module()
+    try:
+        response = requests_module.get(
+            normalized_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; CLI-AI-Assistant/0.1)"},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"HTTP 抓取失败: {exc}") from exc
+
+    response_url = _normalize_fetch_url(getattr(response, "url", "") or normalized_url) or normalized_url
+    raw_main_text = _extract_text_from_html(str(getattr(response, "text", "") or ""))
+    main_text = _normalize_main_text(raw_main_text, max_chars=max_chars)
+    return WebPageFetchResult(url=response_url, main_text=main_text)
+
+
 def _extract_bing_results(html_text: str, top_k: int = 3) -> list[SearchResult]:
     results: list[SearchResult] = []
     seen_urls: set[str] = set()
@@ -346,6 +433,74 @@ def _bocha_snippet(item: dict[str, object]) -> str:
 
 def _normalize_query(query: str) -> str:
     return " ".join(query.strip().split())
+
+
+def _normalize_fetch_url(url: str) -> str:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return ""
+    parsed = urllib_parse.urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if not parsed.netloc:
+        return ""
+    return candidate
+
+
+def _load_sync_playwright() -> Any:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Playwright 依赖缺失。请先安装 playwright 并执行 playwright install chromium。"
+        ) from exc
+    return sync_playwright
+
+
+def _load_requests_module() -> Any:
+    try:
+        import requests
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("requests 依赖缺失。请先安装 requests。") from exc
+    return requests
+
+
+def _extract_text_from_html(html_text: str) -> str:
+    if not html_text:
+        return ""
+    body_match = re.search(r"<body[^>]*>(.*?)</body>", html_text, flags=re.IGNORECASE | re.DOTALL)
+    body_html = body_match.group(1) if body_match else html_text
+    cleaned = re.sub(
+        r"<(script|style|noscript|svg)[^>]*>.*?</\1>",
+        " ",
+        body_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"</(p|div|li|section|article|tr|h1|h2|h3|h4|h5|h6)>",
+        "\n",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"<br\s*/?>", "\n", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned, flags=re.DOTALL)
+    return html.unescape(cleaned)
+
+
+def _normalize_main_text(raw_text: Any, *, max_chars: int) -> str:
+    if not isinstance(raw_text, str):
+        return ""
+    text = raw_text.replace("\u00a0", " ")
+    text = re.sub(r"\r\n?", "\n", text)
+    normalized_lines = [line.strip() for line in text.split("\n")]
+    normalized = "\n".join(line for line in normalized_lines if line)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized).strip()
+    if max_chars <= 0:
+        return ""
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[:max_chars]
 
 
 def _text_preview(text: str, limit: int = 80) -> str:
