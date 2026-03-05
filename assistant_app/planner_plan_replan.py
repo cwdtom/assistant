@@ -52,7 +52,10 @@ PLAN_ONCE_PROMPT = f"""
 规则：
 - 只输出 planned，不要输出 done
 - goal 必须是对用户原始 goal 的扩展版本，语义不变但信息更完整、可执行
-- plan 至少包含 1 项，且应按执行顺序排列
+- plan 默认为执行步骤数组；若判定用户输入只是对上一轮最终回答的确认/致谢（例如“谢谢”“好的”“明白了”），
+  可输出空数组 [] 表示 ack-only（无需后续执行）
+- 若用户输入里包含新的明确任务意图（例如“好的，顺便帮我查明天天气”），不得输出空数组
+- 非空 plan 应按执行顺序排列
 - plan 每项都必须包含 task/completed/tools
 - plan 中每项的 completed 必须为 false
 - tools 仅填写该子任务所需工具，工具名可用：schedule|internet_search|history
@@ -98,7 +101,9 @@ def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     status = str(payload.get("status") or "").strip().lower()
     goal = str(payload.get("goal") or "").strip()
     if status == "planned":
-        raw_plan = payload.get("plan")
+        raw_plan = payload.get("plan", [])
+        if raw_plan is None:
+            raw_plan = []
         if not goal or not isinstance(raw_plan, list):
             return None
         plan_items: list[dict[str, Any]] = []
@@ -111,8 +116,6 @@ def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             if not task or completed is not False or tools is None:
                 return None
             plan_items.append({"task": task, "completed": False, "tools": tools})
-        if not plan_items:
-            return None
         return {"status": "planned", "goal": goal, "plan": plan_items}
     return None
 

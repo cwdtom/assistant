@@ -516,6 +516,35 @@ class FeishuAdapterTest(unittest.TestCase):
         self._wait_until(lambda: len(reactions) == 2)
         self.assertEqual(reactions, [("om_custom_done", "OK"), ("om_custom_done", "CHECKMARK")])
 
+    def test_event_processor_task_completed_without_text_skips_text_send(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        agent = _TaskAwareFakeAgent(response="", task_completed=True)
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+            logger=logging.getLogger("test.feishu_adapter.done_without_text"),
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_done_empty",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"收到"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(lambda: len(reactions) == 2)
+        self.assertEqual(reactions, [("om_done_empty", "OK"), ("om_done_empty", "DONE")])
+        self.assertEqual(sent, [])
+
     def test_event_processor_async_subtask_progress_rewrites_then_sends(self) -> None:
         sent: list[tuple[str, str]] = []
         reactions: list[tuple[str, str]] = []

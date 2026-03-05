@@ -140,6 +140,7 @@ class AssistantAgent:
         self._pending_plan_task: PendingPlanTask | None = None
         self._progress_callback = progress_callback
         self._last_task_completed = False
+        self._skip_history_once = False
         self._interrupt_lock = threading.Lock()
         self._interrupt_requested = False
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
@@ -197,10 +198,20 @@ class AssistantAgent:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
         self._last_task_completed = False
+        self._skip_history_once = False
         self._clear_interrupt_request()
         response = self._handle_input_text(text)
         if not text.startswith("/"):
-            self._save_turn_history(user_text=text, assistant_text=response)
+            if self._skip_history_once:
+                self._app_logger.info(
+                    "chat history skipped",
+                    extra={
+                        "event": "chat_history_skipped",
+                        "context": {"reason": "plan_ack_only"},
+                    },
+                )
+            else:
+                self._save_turn_history(user_text=text, assistant_text=response)
         return response
 
     def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
@@ -1082,6 +1093,15 @@ class AssistantAgent:
         if self._pending_plan_task is task:
             self._pending_plan_task = None
         self._last_task_completed = True
+        if task.plan_ack_only:
+            self._skip_history_once = True
+            self._app_logger.info(
+                "plan ack-only completed",
+                extra={
+                    "event": "plan_ack_only_completed",
+                    "context": {"goal": task.goal},
+                },
+            )
         self._emit_progress("任务状态：已完成。")
         return response
 

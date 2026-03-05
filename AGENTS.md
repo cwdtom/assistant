@@ -138,6 +138,7 @@ Optional runtime flags (all supported in `.env`):
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
+- Plan phase allows empty `plan` as ack-only completion (for short confirmation/thanks messages like `谢谢/好的/明白了`); this path skips thought/replan, skips `chat_history` persistence, and does not emit `任务目标：...` progress message.
 - Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
@@ -147,6 +148,7 @@ Optional runtime flags (all supported in `.env`):
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
 - Local reminder output can also be persona-rewritten (fallback on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
+- Feishu ack-only completion (task completed with empty response) sends ACK/DONE reactions only and skips text sending.
 - Proactive reminder uses an independent ReAct runtime (not coupled with the existing task ReAct loop).
 - Proactive ReAct reuses `PLAN_REPLAN_MAX_STEPS`, disables `ask_user`, and keeps mutating tools blocked by runtime allowlist/validator.
 - Proactive ReAct allows `internet_search` as optional evidence and injects `USER_PROFILE_PATH` content into prompt when available.

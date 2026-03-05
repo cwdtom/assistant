@@ -389,32 +389,43 @@ class FeishuEventProcessor:
                                     exc_info=True,
                                 )
 
-                    payload_text = (response_text or "").strip() or "收到。"
-                    semantic_messages = split_semantic_messages(payload_text)
-                    interrupted_while_sending = False
-                    for message_index, semantic_message in enumerate(semantic_messages, start=1):
-                        chunks = split_text_chunks(semantic_message, chunk_size=self._text_chunk_size)
-                        for chunk_index, chunk in enumerate(chunks, start=1):
-                            if self._has_pending_task():
-                                interrupted_while_sending = True
-                                break
-                            self._send_with_retry(chat_id=active_task.chat_id, text=chunk)
-                            self._logger.info(
-                                "feishu response sent: message_id=%s message=%s/%s chunk=%s/%s text=%s",
-                                active_task.latest_message_id,
-                                message_index,
-                                len(semantic_messages),
-                                chunk_index,
-                                len(chunks),
-                                chunk,
-                            )
-                        if interrupted_while_sending:
-                            break
-                    if interrupted_while_sending:
+                    normalized_response = (response_text or "").strip()
+                    if task_completed and not normalized_response:
                         self._logger.info(
-                            "feishu response aborted: message_id=%s interrupted_during_send",
+                            "feishu response skipped: message_id=%s completed_without_text",
                             active_task.latest_message_id,
+                            extra={
+                                "event": "feishu_response_skipped_completed_without_text",
+                                "context": {"message_id": active_task.latest_message_id},
+                            },
                         )
+                    else:
+                        payload_text = normalized_response or "收到。"
+                        semantic_messages = split_semantic_messages(payload_text)
+                        interrupted_while_sending = False
+                        for message_index, semantic_message in enumerate(semantic_messages, start=1):
+                            chunks = split_text_chunks(semantic_message, chunk_size=self._text_chunk_size)
+                            for chunk_index, chunk in enumerate(chunks, start=1):
+                                if self._has_pending_task():
+                                    interrupted_while_sending = True
+                                    break
+                                self._send_with_retry(chat_id=active_task.chat_id, text=chunk)
+                                self._logger.info(
+                                    "feishu response sent: message_id=%s message=%s/%s chunk=%s/%s text=%s",
+                                    active_task.latest_message_id,
+                                    message_index,
+                                    len(semantic_messages),
+                                    chunk_index,
+                                    len(chunks),
+                                    chunk,
+                                )
+                            if interrupted_while_sending:
+                                break
+                        if interrupted_while_sending:
+                            self._logger.info(
+                                "feishu response aborted: message_id=%s interrupted_during_send",
+                                active_task.latest_message_id,
+                            )
 
                 with self._state_lock:
                     if self._pending_task is None:

@@ -66,6 +66,7 @@ class PendingPlanTask:
     observations: list[PlannerObservation] = field(default_factory=list)
     step_count: int = 0
     plan_initialized: bool = False
+    plan_ack_only: bool = False
     awaiting_clarification: bool = False
     # True means outer loop should run replan before next thought cycle.
     needs_replan: bool = False

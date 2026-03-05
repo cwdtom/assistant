@@ -17,6 +17,8 @@ def run_outer_plan_loop(agent: Any, task: Any) -> str:
             if not task.plan_initialized:
                 if not agent._initialize_plan_once(task):
                     return agent._finalize_planner_task(task, agent._planner_unavailable_text())
+                if task.plan_ack_only:
+                    return agent._finalize_planner_task(task, "")
 
             if task.awaiting_clarification:
                 agent._pending_plan_task = task
@@ -77,7 +79,6 @@ def initialize_plan_once(agent: Any, task: Any) -> bool:
     if expanded_goal:
         outer.goal = expanded_goal
         task.goal = expanded_goal
-        agent._notify_plan_goal_result(task, expanded_goal)
     agent._append_planner_decision_observation(task, phase="plan", decision=plan_decision)
     raw_plan_items = plan_decision.get("plan")
     if not isinstance(raw_plan_items, list):
@@ -93,7 +94,15 @@ def initialize_plan_once(agent: Any, task: Any) -> bool:
             return False
         latest_plan.append(PlanStep(item=step_text, completed=completed, tools=tools))
     if not latest_plan:
-        return False
+        task.plan_ack_only = True
+        outer.latest_plan = []
+        task.plan_initialized = True
+        outer.current_plan_index = 0
+        agent._emit_progress("规划完成：空计划，ACK 后结束。")
+        return True
+    task.plan_ack_only = False
+    if expanded_goal:
+        agent._notify_plan_goal_result(task, expanded_goal)
     outer.latest_plan = latest_plan
     task.plan_initialized = True
     outer.current_plan_index = 0

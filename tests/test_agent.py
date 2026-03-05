@@ -36,13 +36,14 @@ def _build_plan_objects(
 ) -> list[dict[str, Any]]:
     completed_tasks = completed or set()
     mapping = tools_by_task or {}
+    plan_items = ["执行下一步"] if plan is None else plan
     return [
         {
             "task": item,
             "completed": item in completed_tasks,
             "tools": list(mapping.get(item, _DEFAULT_PLAN_TOOLS)),
         }
-        for item in (plan or ["执行下一步"])
+        for item in plan_items
     ]
 
 
@@ -1259,6 +1260,79 @@ class AssistantAgentTest(unittest.TestCase):
         phases = [_extract_phase_from_messages(call) for call in fake_llm.calls]
         self.assertEqual(phases[:3], ["plan", "thought", "replan"])
 
+    def test_plan_ack_only_empty_plan_skips_followup_and_history(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned([], goal="用户仅确认收到，无需额外动作"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, task_completed = agent.handle_input_with_task_status("谢谢")
+
+        self.assertEqual(response, "")
+        self.assertTrue(task_completed)
+        self.assertEqual(fake_llm.model_call_count, 1)
+        phases = [_extract_phase_from_messages(call) for call in fake_llm.calls]
+        self.assertEqual(phases, ["plan"])
+        self.assertEqual(self.db.recent_messages(limit=2), [])
+
+    def test_plan_ack_only_empty_plan_does_not_notify_expanded_goal(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned([], goal="仅确认收到，不需要任何执行"),
+            ]
+        )
+        progress_updates: list[str] = []
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+        agent.set_subtask_result_callback(progress_updates.append)
+
+        response = agent.handle_input("谢谢")
+
+        self.assertEqual(response, "")
+        self.assertEqual(progress_updates, [])
+
+    def test_plan_ack_only_accepts_missing_plan_field(self) -> None:
+        payload = json.dumps(
+            {
+                "status": "planned",
+                "goal": "用户仅确认收到，无需额外动作",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        fake_llm = FakeLLMClient(responses=[payload])
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, task_completed = agent.handle_input_with_task_status("好的")
+
+        self.assertEqual(response, "")
+        self.assertTrue(task_completed)
+        self.assertEqual(fake_llm.model_call_count, 1)
+        self.assertEqual([_extract_phase_from_messages(call) for call in fake_llm.calls], ["plan"])
+        self.assertEqual(self.db.recent_messages(limit=2), [])
+
+    def test_plan_ack_only_accepts_null_plan_field(self) -> None:
+        payload = json.dumps(
+            {
+                "status": "planned",
+                "goal": "用户仅确认收到，无需额外动作",
+                "plan": None,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        fake_llm = FakeLLMClient(responses=[payload])
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, task_completed = agent.handle_input_with_task_status("明白了")
+
+        self.assertEqual(response, "")
+        self.assertTrue(task_completed)
+        self.assertEqual(fake_llm.model_call_count, 1)
+        self.assertEqual([_extract_phase_from_messages(call) for call in fake_llm.calls], ["plan"])
+        self.assertEqual(self.db.recent_messages(limit=2), [])
+
 
 
 
@@ -1284,6 +1358,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("查询并列出来给用户查看", first_messages[0]["content"])
         self.assertIn("历史对话 messages 与 user_profile 补全默认信息", first_messages[0]["content"])
         self.assertIn("查询用户默认城市的明天天气，并输出天气结果与衣着建议", first_messages[0]["content"])
+        self.assertIn("例如“谢谢”“好的”“明白了”", first_messages[0]["content"])
+        self.assertIn("例如“好的，顺便帮我查明天天气”", first_messages[0]["content"])
         self.assertIn("tag（标签）", first_messages[0]["content"])
         self.assertNotIn("view（all|today|overdue|upcoming|inbox）", first_messages[0]["content"])
         self.assertIn("interval_minutes/times/remind_start_time（重复规则）", first_messages[0]["content"])
