@@ -18,7 +18,9 @@ THOUGHT_PROMPT = """
 工具与参数定义以 API 请求里的 tools schema 为准（不以 prompt 中的示例字段为准）。
 可用工具名：
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
-- internet_search_tool、internet_search_fetch_url、history_list、history_search、ask_user、done
+- internet_search_tool、internet_search_fetch_url、history_list、history_search
+- thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete
+- ask_user、done
 
 规则：
 - 每轮最多调用 1 个工具
@@ -31,6 +33,7 @@ THOUGHT_PROMPT = """
 - 你会在 messages 中看到上一轮 assistant tool_calls 与 role=tool 的执行结果，请结合多轮上下文继续决策
 - 必须优先输出结构化工具参数，不要主动输出命令字符串
 - 系统仅为兼容旧模型保留命令字符串兜底路径；该路径不作为标准输出契约
+- thoughts_* 工具用于记录碎片想法；优先使用结构化参数进行新增/查询/更新/软删除
 """.strip()
 
 THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -283,6 +286,94 @@ THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "thoughts_add",
+            "description": "记录碎片想法：新增一条想法内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "想法内容文本，不能为空。",
+                    }
+                },
+                "required": ["content"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "thoughts_list",
+            "description": "记录碎片想法：按状态列出想法。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": ["string", "null"],
+                        "enum": ["未完成", "完成", "删除", None],
+                        "description": "状态过滤；不传/null 时默认只看未完成与完成。",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "thoughts_get",
+            "description": "记录碎片想法：查看单条想法详情。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "想法 ID，正整数。"},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "thoughts_update",
+            "description": "记录碎片想法：更新内容，并可选更新状态。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "想法 ID，正整数。"},
+                    "content": {"type": "string", "description": "更新后的想法内容文本，不能为空。"},
+                    "status": {
+                        "type": ["string", "null"],
+                        "enum": ["未完成", "完成", "删除", None],
+                        "description": "更新后的状态；不传/null 时保持原状态。",
+                    },
+                },
+                "required": ["id", "content"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "thoughts_delete",
+            "description": "记录碎片想法：软删除（状态置为删除）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "想法 ID，正整数。"},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "ask_user",
             "description": "向用户提一个澄清问题。",
             "parameters": {
@@ -374,6 +465,20 @@ _HISTORY_TOOL_ACTION_BY_NAME: dict[str, str] = {
 _HISTORY_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
     "history_list": ("limit",),
     "history_search": ("keyword", "limit"),
+}
+_THOUGHTS_TOOL_ACTION_BY_NAME: dict[str, str] = {
+    "thoughts_add": "add",
+    "thoughts_list": "list",
+    "thoughts_get": "get",
+    "thoughts_update": "update",
+    "thoughts_delete": "delete",
+}
+_THOUGHTS_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
+    "thoughts_add": ("content",),
+    "thoughts_list": ("status",),
+    "thoughts_get": ("id",),
+    "thoughts_update": ("id", "content", "status"),
+    "thoughts_delete": ("id",),
 }
 
 
@@ -498,6 +603,27 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
             "next_action": {
                 "tool": "history",
                 "input": json.dumps(history_payload, ensure_ascii=False, separators=(",", ":")),
+            },
+            "question": None,
+            "response": None,
+        }
+
+    if name in _THOUGHTS_TOOL_ACTION_BY_NAME:
+        if name in {"thoughts_add", "thoughts_update"}:
+            content = str(arguments.get("content") or "").strip()
+            if not content:
+                return None
+        thoughts_payload: dict[str, Any] = {"action": _THOUGHTS_TOOL_ACTION_BY_NAME[name]}
+        fields = _THOUGHTS_TOOL_FIELDS_BY_NAME.get(name, ())
+        for key in fields:
+            if key in arguments:
+                thoughts_payload[key] = arguments.get(key)
+        return {
+            "status": "continue",
+            "current_step": current_step,
+            "next_action": {
+                "tool": "thoughts",
+                "input": json.dumps(thoughts_payload, ensure_ascii=False, separators=(",", ":")),
             },
             "question": None,
             "response": None,

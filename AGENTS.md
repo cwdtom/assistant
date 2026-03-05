@@ -34,6 +34,7 @@ Supported input forms in CLI:
 - `/profile refresh`
 - `/history list [--limit <>=1>]`
 - `/history search <关键词> [--limit <>=1>]`
+- `/thoughts add|list|get|update|delete`
 - `/schedule add|list|get|update|delete|repeat|view`
 - non-`/` input goes through `plan -> thought -> act -> observe -> replan`
 - thought stage uses tool-calling with structured arguments by default; legacy command-string fallback remains for compatibility and is not the primary contract
@@ -119,6 +120,8 @@ Optional runtime flags (all supported in `.env`):
 ## Supplement: Detailed Behavior Notes (moved from README)
 - Every non-`/` input persists into `chat_history` with final assistant reply.
 - `/history search` supports fuzzy keyword search on user input and assistant output.
+- Thoughts supports minimal fields: `content` + `status` (`未完成|完成|删除`).
+- Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
 - Schedule includes `duration_minutes` (default `60` on create).
 - `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
 - Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
@@ -139,7 +142,7 @@ Optional runtime flags (all supported in `.env`):
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
 - Plan phase allows empty `plan` as ack-only completion (for short confirmation/thanks messages like `谢谢/好的/明白了`); this path skips thought/replan, skips `chat_history` persistence, and does not emit `任务目标：...` progress message.
-- Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）.
+- Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）+ `thoughts` group（展开为 `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`，用于记录碎片想法）.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
@@ -172,6 +175,7 @@ Optional runtime flags (all supported in `.env`):
 - `schedules`: title, tag, start datetime, duration, reminder datetime, created time.
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.
+- `thoughts`: stores `content`, `status`, `created_at`, and `updated_at`.
 
 ## Supplement: Dev Commands (moved from README)
 ```bash

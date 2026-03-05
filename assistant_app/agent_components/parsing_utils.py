@@ -14,7 +14,9 @@ SCHEDULE_REMIND_START_OPTION_PATTERN = re.compile(
 )
 TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
 HISTORY_LIMIT_OPTION_PATTERN = re.compile(r"(^|\s)--limit\s+(\d+)")
+THOUGHTS_STATUS_OPTION_PATTERN = re.compile(r"(^|\s)--status\s+(\S+)")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
+THOUGHT_STATUS_VALUES = ("未完成", "完成", "删除")
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
@@ -327,6 +329,49 @@ def _parse_schedule_repeat_toggle_input(raw: str) -> tuple[int, bool] | None:
     return None
 
 
+def _parse_thoughts_list_status_input(raw: str) -> str | None | object:
+    text = raw.strip()
+    if not text:
+        return None
+    option_match = re.fullmatch(r"--status\s+(\S+)", text)
+    if option_match is None:
+        return _INVALID_OPTION_VALUE
+    status = _normalize_thought_status_value(option_match.group(1))
+    if status is None:
+        return _INVALID_OPTION_VALUE
+    return status
+
+
+def _parse_thoughts_update_input(raw: str) -> tuple[int, str, str | None, bool] | None:
+    parts = raw.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return None
+    thought_id = _parse_positive_int(parts[0])
+    if thought_id is None:
+        return None
+
+    working = parts[1].strip()
+    if not working:
+        return None
+
+    has_status = False
+    status: str | None = None
+    status_match = THOUGHTS_STATUS_OPTION_PATTERN.search(working)
+    if status_match:
+        has_status = True
+        status = _normalize_thought_status_value(status_match.group(2))
+        if status is None:
+            return None
+        working = _remove_option_span(working, status_match.span())
+    if re.search(r"(^|\s)--status\b", working):
+        return None
+
+    content = re.sub(r"\s+", " ", working).strip()
+    if not content:
+        return None
+    return thought_id, content, status, has_status
+
+
 def _sanitize_tag(tag: str | None) -> str | None:
     if tag is None:
         return None
@@ -453,6 +498,15 @@ def _normalize_schedule_duration_minutes_value(value: Any) -> int | None:
     if parsed < 1:
         return None
     return parsed
+
+
+def _normalize_thought_status_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text in THOUGHT_STATUS_VALUES:
+        return text
+    return None
 
 
 def _normalize_schedule_view_anchor(*, view_name: str, value: str) -> str | None:

@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from assistant_app.db import ChatTurn
+from assistant_app.db import ChatTurn, ThoughtItem
 from assistant_app.search import SearchResult
 
 def _history_table_rows(turns: list[ChatTurn]) -> list[list[str]]:
@@ -27,6 +27,34 @@ def _format_history_list_result(turns: list[ChatTurn]) -> str:
 def _format_history_search_result(*, keyword: str, turns: list[ChatTurn]) -> str:
     table = _render_table(headers=["#", "用户输入", "最终回答", "时间"], rows=_history_table_rows(turns))
     return f"历史搜索(关键词: {keyword}, 命中 {len(turns)} 轮):\n{table}"
+
+
+def _thoughts_table_headers() -> list[str]:
+    return ["ID", "内容", "状态", "创建时间", "更新时间"]
+
+
+def _thoughts_table_rows(items: list[ThoughtItem]) -> list[list[str]]:
+    return [
+        [
+            str(item.id),
+            _truncate_text(item.content, 300) or "-",
+            item.status,
+            item.created_at,
+            item.updated_at,
+        ]
+        for item in items
+    ]
+
+
+def _format_thoughts_list_result(*, items: list[ThoughtItem], status: str | None) -> str:
+    title = f"想法列表(状态: {status})" if status else "想法列表(状态: 未完成|完成)"
+    table = _render_table(headers=_thoughts_table_headers(), rows=_thoughts_table_rows(items))
+    return f"{title}:\n{table}"
+
+
+def _format_thought_detail_result(item: ThoughtItem) -> str:
+    table = _render_table(headers=_thoughts_table_headers(), rows=_thoughts_table_rows([item]))
+    return f"想法详情:\n{table}"
 
 
 def _schedule_list_empty_text(*, window_days: int, tag: str | None) -> str:
@@ -154,6 +182,9 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
             return False
     if tool in {"history", "history_search"}:
         if text.startswith("未找到包含") or text.startswith("暂无历史会话"):
+            return False
+    if tool == "thoughts":
+        if text.startswith("thoughts.") or text.startswith("未找到想法 #") or text.startswith("暂无想法"):
             return False
 
     return True

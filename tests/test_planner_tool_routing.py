@@ -71,6 +71,24 @@ class PlannerToolRoutingTest(unittest.TestCase):
         self.assertEqual(captured["payload"]["keyword"], "牛奶")
         self.assertEqual(captured["raw_input"], '{"action":"list","keyword":"牛奶","limit":5}')
 
+    def test_json_route_thoughts_supports_legacy_command_prefix(self) -> None:
+        route = JsonPlannerToolRoute(
+            tool="thoughts",
+            invalid_json_result="thoughts 工具参数无效：需要 JSON 对象。",
+            legacy_command_prefix="/thoughts",
+            payload_executor=lambda _payload, _raw_input: self.fail("payload executor should not run"),
+        )
+        executor = build_json_planner_tool_executor(
+            route=route,
+            command_executor=lambda _command: "想法列表(状态: 未完成|完成):\n| ID | 内容 |",
+        )
+
+        observation = executor("/thoughts list")
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(observation.tool, "thoughts")
+        self.assertIn("想法列表", observation.result)
+
 
 if __name__ == "__main__":
     unittest.main()

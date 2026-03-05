@@ -63,6 +63,9 @@ from assistant_app.agent_components.tools.planner_tool_routing import (
 from assistant_app.agent_components.tools.schedule import (
     execute_schedule_system_action as _execute_schedule_system_action_impl,
 )
+from assistant_app.agent_components.tools.thoughts import (
+    execute_thoughts_system_action as _execute_thoughts_system_action_impl,
+)
 from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
 from assistant_app.planner_plan_replan import (
@@ -917,6 +920,14 @@ class AssistantAgent:
                     payload, raw_input=raw_input, observation_tool="history_search"
                 ),
             ),
+            "thoughts": JsonPlannerToolRoute(
+                tool="thoughts",
+                invalid_json_result="thoughts 工具参数无效：需要 JSON 对象。",
+                legacy_command_prefix="/thoughts",
+                payload_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
+                    payload, raw_input=raw_input
+                ),
+            ),
         }
         routes = {
             name: build_json_planner_tool_executor(route=route, command_executor=self._handle_command)
@@ -944,6 +955,18 @@ class AssistantAgent:
             payload,
             raw_input=raw_input,
             observation_tool=observation_tool,
+        )
+
+    def _execute_thoughts_system_action(
+        self,
+        payload: dict[str, Any],
+        *,
+        raw_input: str,
+    ) -> PlannerObservation:
+        return _execute_thoughts_system_action_impl(
+            self,
+            payload,
+            raw_input=raw_input,
         )
 
     def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> PlannerObservation:
@@ -1068,6 +1091,8 @@ class AssistantAgent:
             "日程列表",
             "日历视图(",
             "日程详情",
+            "想法列表",
+            "想法详情",
             "互联网搜索结果",
         )
         return result.startswith(prefixes)
@@ -1086,7 +1111,7 @@ class AssistantAgent:
             f"- {failed_reason}\n"
             "下一步建议:\n"
             "- 你可以补充更具体的时间、编号或关键词；\n"
-            "- 或直接使用 /schedule 命令完成关键操作。"
+            "- 或直接使用 /schedule 或 /thoughts 命令完成关键操作。"
         )
 
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
@@ -1125,7 +1150,7 @@ class AssistantAgent:
 
     @staticmethod
     def _planner_unavailable_text() -> str:
-        return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /schedule 命令继续操作。"
+        return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /schedule 或 /thoughts 命令继续操作。"
 
     def _emit_progress(self, message: str) -> None:
         callback = self._progress_callback

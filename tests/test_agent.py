@@ -679,6 +679,70 @@ class AssistantAgentTest(unittest.TestCase):
         invalid = agent.handle_input("/history search --limit 2")
         self.assertIn("用法: /history search <关键词> [--limit <>=1>]", invalid)
 
+    def test_thoughts_crud_commands(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        empty = agent.handle_input("/thoughts list")
+        self.assertEqual(empty, "暂无想法记录。")
+
+        added = agent.handle_input("/thoughts add 记得买牛奶")
+        self.assertIn("已记录想法 #1", added)
+        self.assertIn("记得买牛奶", added)
+
+        listed = agent.handle_input("/thoughts list")
+        self.assertIn("想法列表(状态: 未完成|完成)", listed)
+        self.assertIn("记得买牛奶", listed)
+        self.assertIn("| 未完成 |", listed)
+
+        detail = agent.handle_input("/thoughts get 1")
+        self.assertIn("想法详情:", detail)
+        self.assertIn("| 1 | 记得买牛奶 | 未完成 |", detail)
+
+        updated = agent.handle_input("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
+        self.assertIn("已更新想法 #1: 记得买牛奶和鸡蛋 [状态:完成]", updated)
+
+        filtered_done = agent.handle_input("/thoughts list --status 完成")
+        self.assertIn("想法列表(状态: 完成)", filtered_done)
+        self.assertIn("记得买牛奶和鸡蛋", filtered_done)
+
+        deleted = agent.handle_input("/thoughts delete 1")
+        self.assertEqual(deleted, "想法 #1 已删除。")
+
+        listed_after_delete = agent.handle_input("/thoughts list")
+        self.assertEqual(listed_after_delete, "暂无想法记录。")
+
+        deleted_only = agent.handle_input("/thoughts list --status 删除")
+        self.assertIn("想法列表(状态: 删除)", deleted_only)
+        self.assertIn("记得买牛奶和鸡蛋", deleted_only)
+
+    def test_thoughts_commands_validate_usage(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        invalid_add = agent.handle_input("/thoughts add")
+        self.assertEqual(invalid_add, "用法: /thoughts add <内容>")
+
+        invalid_list = agent.handle_input("/thoughts list --status 进行中")
+        self.assertEqual(invalid_list, "用法: /thoughts list [--status <未完成|完成|删除>]")
+
+        invalid_get = agent.handle_input("/thoughts get abc")
+        self.assertEqual(invalid_get, "用法: /thoughts get <id>")
+
+        invalid_update = agent.handle_input("/thoughts update 1 --status 完成")
+        self.assertEqual(invalid_update, "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]")
+
+        invalid_delete = agent.handle_input("/thoughts delete nope")
+        self.assertEqual(invalid_delete, "用法: /thoughts delete <id>")
+
+    def test_thoughts_commands_emit_logs(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        with self.assertLogs("assistant_app.app", level="INFO") as captured:
+            result = agent.handle_input("/thoughts add 记录日志")
+
+        self.assertIn("已记录想法 #1", result)
+        merged = "\n".join(captured.output)
+        self.assertIn("thoughts_command_start", merged)
+        self.assertIn("thoughts_command_done", merged)
+
 
 
 
@@ -1659,6 +1723,35 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(first_tool_names.count("ask_user"), 1)
         self.assertEqual(first_tool_names.count("done"), 1)
 
+    def test_thought_tool_calling_expands_thoughts_group_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["记录想法", "总结"],
+                    tools_by_task={"记录想法": ["thoughts"], "总结": []},
+                ),
+                _planner_done("想法记录完成。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("帮我记一条碎片想法")
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        expected_thoughts_tools = {
+            "thoughts_add",
+            "thoughts_list",
+            "thoughts_get",
+            "thoughts_update",
+            "thoughts_delete",
+            "ask_user",
+            "done",
+        }
+        self.assertEqual(set(first_tool_names), expected_thoughts_tools)
+        self.assertNotIn("thoughts", first_tool_names)
+
 
 
     def test_thought_tool_calling_rejects_multiple_tool_calls(self) -> None:
@@ -1943,6 +2036,65 @@ class AssistantAgentTest(unittest.TestCase):
                 "function": {
                     "name": "history",
                     "arguments": json.dumps({"action": "search", "keyword": "牛奶"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNone(decision)
+
+    def test_thought_tool_call_contract_maps_thoughts_add_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_thoughts_add",
+                "type": "function",
+                "function": {
+                    "name": "thoughts_add",
+                    "arguments": json.dumps({"content": "记得补充周报"}, ensure_ascii=False),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "thoughts")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(input_payload, {"action": "add", "content": "记得补充周报"})
+
+    def test_thought_tool_call_contract_maps_thoughts_update_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_thoughts_update",
+                "type": "function",
+                "function": {
+                    "name": "thoughts_update",
+                    "arguments": json.dumps(
+                        {"id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        next_action = decision.get("next_action")
+        self.assertIsInstance(next_action, dict)
+        assert isinstance(next_action, dict)
+        self.assertEqual(next_action.get("tool"), "thoughts")
+        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        self.assertEqual(
+            input_payload,
+            {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
+        )
+
+    def test_thought_tool_call_contract_rejects_legacy_thoughts_tool(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                "id": "call_legacy_thoughts",
+                "type": "function",
+                "function": {
+                    "name": "thoughts",
+                    "arguments": json.dumps({"action": "list"}, ensure_ascii=False),
                 },
             }
         )
@@ -2326,6 +2478,78 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertTrue(observation.ok)
         self.assertIn("历史搜索(关键词: 体检", observation.result)
+
+    def test_thoughts_tool_supports_crud_actions(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+
+        add_observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"add","content":"记得买牛奶"}',
+        )
+        self.assertTrue(add_observation.ok)
+        self.assertIn("已记录想法 #1", add_observation.result)
+
+        list_observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"list"}',
+        )
+        self.assertTrue(list_observation.ok)
+        self.assertIn("想法列表(状态: 未完成|完成)", list_observation.result)
+
+        get_observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"get","id":1}',
+        )
+        self.assertTrue(get_observation.ok)
+        self.assertIn("想法详情:", get_observation.result)
+
+        update_observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"update","id":1,"content":"记得买牛奶和鸡蛋","status":"完成"}',
+        )
+        self.assertTrue(update_observation.ok)
+        self.assertIn("[状态:完成]", update_observation.result)
+
+        delete_observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"delete","id":1}',
+        )
+        self.assertTrue(delete_observation.ok)
+        self.assertIn("想法 #1 已删除", delete_observation.result)
+
+        deleted_list = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"list","status":"删除"}',
+        )
+        self.assertTrue(deleted_list.ok)
+        self.assertIn("想法列表(状态: 删除)", deleted_list.result)
+        self.assertIn("记得买牛奶和鸡蛋", deleted_list.result)
+
+    def test_thoughts_tool_logs_done_and_failed_events(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+
+        with self.assertLogs("assistant_app.app", level="INFO") as captured_done:
+            invalid_status = agent._execute_planner_tool(
+                action_tool="thoughts",
+                action_input='{"action":"list","status":"进行中"}',
+            )
+        self.assertFalse(invalid_status.ok)
+        self.assertIn("status 必须为 未完成|完成|删除", invalid_status.result)
+        merged_done = "\n".join(captured_done.output)
+        self.assertIn("planner_tool_thoughts_start", merged_done)
+        self.assertIn("planner_tool_thoughts_done", merged_done)
+
+        with patch.object(agent.db, "add_thought", side_effect=RuntimeError("boom")):
+            with self.assertLogs("assistant_app.app", level="INFO") as captured_failed:
+                failed = agent._execute_planner_tool(
+                    action_tool="thoughts",
+                    action_input='{"action":"add","content":"x"}',
+                )
+        self.assertFalse(failed.ok)
+        self.assertIn("thoughts 工具执行失败", failed.result)
+        merged_failed = "\n".join(captured_failed.output)
+        self.assertIn("planner_tool_thoughts_start", merged_failed)
+        self.assertIn("planner_tool_thoughts_failed", merged_failed)
 
     def test_schedule_tool_update_with_null_tag_clears_to_default(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

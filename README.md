@@ -4,6 +4,7 @@
 - 自然语言任务执行（plan -> thought -> act -> observe -> replan）
 - thought 阶段默认使用 chat tool-calling（结构化参数）直接调用本地系统函数
 - 日程管理（CRUD、时长、重复规则、提醒、日历视图）
+- 碎片想法管理（CRUD，最小字段：content + status）
 - 历史会话持久化与检索
 - 本地提醒线程（单次日程、重复日程）
 - 可选 Feishu 长连接接入
@@ -130,17 +131,20 @@ python main.py
 - `/profile refresh`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
+- `/thoughts add|list|get|update|delete`
 
 说明：
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
+- `/thoughts list` 支持 `--status <未完成|完成|删除>`；默认仅展示 `未完成|完成`
+- `/thoughts delete` 为软删除（状态置为 `删除`）
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
 - `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
-- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`
+- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法）
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
 - 当 rerank 请求失败时，会自动降级重试为非 rerank Bocha 搜索
 - `internet_search` 在收到裸 `http/https` URL 输入时会自动按 `fetch_url` 路径执行（不再按关键词搜索）

@@ -379,6 +379,61 @@ class AssistantDBTest(unittest.TestCase):
             )
         )
 
+    def test_thought_crud_and_soft_delete(self) -> None:
+        thought_id = self.db.add_thought("记得买咖啡豆")
+        item = self.db.get_thought(thought_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.content, "记得买咖啡豆")
+        self.assertEqual(item.status, "未完成")
+
+        updated = self.db.update_thought(thought_id, content="记得买咖啡豆和滤纸", status="完成")
+        self.assertTrue(updated)
+        changed = self.db.get_thought(thought_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.content, "记得买咖啡豆和滤纸")
+        self.assertEqual(changed.status, "完成")
+
+        deleted = self.db.soft_delete_thought(thought_id)
+        self.assertTrue(deleted)
+        removed = self.db.get_thought(thought_id)
+        self.assertIsNotNone(removed)
+        assert removed is not None
+        self.assertEqual(removed.status, "删除")
+
+    def test_list_thoughts_default_excludes_deleted(self) -> None:
+        a = self.db.add_thought("碎片想法A")
+        b = self.db.add_thought("碎片想法B", status="完成")
+        c = self.db.add_thought("碎片想法C")
+        self.assertEqual([a, b, c], [1, 2, 3])
+        self.assertTrue(self.db.soft_delete_thought(c))
+
+        default_items = self.db.list_thoughts()
+        self.assertEqual([item.content for item in default_items], ["碎片想法A", "碎片想法B"])
+        self.assertTrue(all(item.status in {"未完成", "完成"} for item in default_items))
+
+        deleted_only = self.db.list_thoughts(status="删除")
+        self.assertEqual(len(deleted_only), 1)
+        self.assertEqual(deleted_only[0].content, "碎片想法C")
+
+    def test_thought_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            self.db.add_thought("  ")
+        with self.assertRaises(ValueError):
+            self.db.add_thought("合法内容", status="进行中")
+        with self.assertRaises(ValueError):
+            self.db.list_thoughts(status="进行中")
+
+        thought_id = self.db.add_thought("只改内容")
+        with self.assertRaises(ValueError):
+            self.db.update_thought(thought_id, content="")
+        with self.assertRaises(ValueError):
+            self.db.update_thought(thought_id, content="更新", status="进行中")
+
+        self.assertFalse(self.db.update_thought(999, content="不存在"))
+        self.assertFalse(self.db.soft_delete_thought(999))
+
     def test_recent_messages_in_chronological_order(self) -> None:
         self.db.save_message("user", "hello")
         self.db.save_message("assistant", "world")

@@ -6,6 +6,7 @@ from assistant_app.agent_components.parsing_utils import (
     _INVALID_OPTION_VALUE,
     _default_schedule_list_window,
     _filter_schedules_by_calendar_view,
+    _normalize_thought_status_value,
     _parse_history_list_limit,
     _parse_history_search_input,
     _parse_positive_int,
@@ -14,12 +15,17 @@ from assistant_app.agent_components.parsing_utils import (
     _parse_schedule_repeat_toggle_input,
     _parse_schedule_update_input,
     _parse_schedule_view_command_input,
+    _parse_thoughts_list_status_input,
+    _parse_thoughts_update_input,
     _resolve_schedule_view_window,
 )
 from assistant_app.agent_components.render_helpers import (
     _format_history_list_result,
     _format_history_search_result,
+    _format_thought_detail_result,
+    _format_thoughts_list_result,
     _format_schedule_remind_meta_inline,
+    _is_planner_command_success,
     _render_table,
     _schedule_list_empty_text,
     _schedule_list_title,
@@ -39,6 +45,11 @@ def help_text() -> str:
         "/profile refresh\n"
         "/history list [--limit <>=1>]\n"
         "/history search <关键词> [--limit <>=1>]\n"
+        "/thoughts add <内容>\n"
+        "/thoughts list [--status <未完成|完成|删除>]\n"
+        "/thoughts get <id>\n"
+        "/thoughts update <id> <内容> [--status <未完成|完成|删除>]\n"
+        "/thoughts delete <id>\n"
         "/schedule add <YYYY-MM-DD HH:MM> <标题> "
         "[--tag <标签>] "
         "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
@@ -104,6 +115,158 @@ def handle_command(agent: Any, command: str) -> str:
         if not turns:
             return f"未找到包含“{keyword}”的历史会话。"
         return _format_history_search_result(keyword=keyword, turns=turns)
+
+    if command == "/thoughts add" or command.startswith("/thoughts add "):
+        action = "add"
+        _log_thoughts_command_start(agent, action=action)
+        try:
+            content = command.removeprefix("/thoughts add").strip()
+            if not content:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result="用法: /thoughts add <内容>",
+                )
+            thought_id = agent.db.add_thought(content=content)
+            return _finalize_thoughts_command(
+                agent,
+                action=action,
+                result=f"已记录想法 #{thought_id}: {content}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _fail_thoughts_command(agent, action=action, exc=exc)
+
+    if command == "/thoughts list" or command.startswith("/thoughts list "):
+        action = "list"
+        _log_thoughts_command_start(agent, action=action)
+        try:
+            parsed_status = _parse_thoughts_list_status_input(command.removeprefix("/thoughts list").strip())
+            if parsed_status is _INVALID_OPTION_VALUE:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result="用法: /thoughts list [--status <未完成|完成|删除>]",
+                )
+            list_status = parsed_status if isinstance(parsed_status, str) else None
+            items = agent.db.list_thoughts(status=list_status)
+            if not items:
+                if list_status:
+                    return _finalize_thoughts_command(
+                        agent,
+                        action=action,
+                        result=f"暂无状态为“{list_status}”的想法。",
+                    )
+                return _finalize_thoughts_command(agent, action=action, result="暂无想法记录。")
+            return _finalize_thoughts_command(
+                agent,
+                action=action,
+                result=_format_thoughts_list_result(items=items, status=list_status),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _fail_thoughts_command(agent, action=action, exc=exc)
+
+    if command.startswith("/thoughts get "):
+        action = "get"
+        _log_thoughts_command_start(agent, action=action)
+        try:
+            thought_id = _parse_positive_int(command.removeprefix("/thoughts get ").strip())
+            if thought_id is None:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result="用法: /thoughts get <id>",
+                )
+            item = agent.db.get_thought(thought_id)
+            if item is None:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result=f"未找到想法 #{thought_id}",
+                )
+            return _finalize_thoughts_command(
+                agent,
+                action=action,
+                result=_format_thought_detail_result(item),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _fail_thoughts_command(agent, action=action, exc=exc)
+
+    if command.startswith("/thoughts update "):
+        action = "update"
+        _log_thoughts_command_start(agent, action=action)
+        try:
+            parsed_update = _parse_thoughts_update_input(command.removeprefix("/thoughts update ").strip())
+            if parsed_update is None:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result="用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]",
+                )
+            thought_id, content, status, has_status = parsed_update
+            if has_status:
+                normalized_status = _normalize_thought_status_value(status)
+                if normalized_status is None:
+                    return _finalize_thoughts_command(
+                        agent,
+                        action=action,
+                        result="用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]",
+                    )
+                updated = agent.db.update_thought(
+                    thought_id,
+                    content=content,
+                    status=normalized_status,
+                )
+            else:
+                updated = agent.db.update_thought(
+                    thought_id,
+                    content=content,
+                )
+            if not updated:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result=f"未找到想法 #{thought_id}",
+                )
+            item = agent.db.get_thought(thought_id)
+            if item is None:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result=f"未找到想法 #{thought_id}",
+                )
+            return _finalize_thoughts_command(
+                agent,
+                action=action,
+                result=f"已更新想法 #{thought_id}: {item.content} [状态:{item.status}]",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _fail_thoughts_command(agent, action=action, exc=exc)
+
+    if command.startswith("/thoughts delete "):
+        action = "delete"
+        _log_thoughts_command_start(agent, action=action)
+        try:
+            thought_id = _parse_positive_int(command.removeprefix("/thoughts delete ").strip())
+            if thought_id is None:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result="用法: /thoughts delete <id>",
+                )
+            deleted = agent.db.soft_delete_thought(thought_id)
+            if not deleted:
+                return _finalize_thoughts_command(
+                    agent,
+                    action=action,
+                    result=f"未找到想法 #{thought_id}",
+                )
+            return _finalize_thoughts_command(
+                agent,
+                action=action,
+                result=f"想法 #{thought_id} 已删除。",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _fail_thoughts_command(agent, action=action, exc=exc)
 
     if command == "/schedule list" or command.startswith("/schedule list "):
         parsed_list_tag = _parse_schedule_list_tag_input(command.removeprefix("/schedule list").strip())
@@ -332,3 +495,32 @@ def handle_command(agent: Any, command: str) -> str:
         return f"已{status}日程 #{schedule_id} 的重复规则。"
 
     return "未知命令。输入 /help 查看可用命令。"
+
+
+def _log_thoughts_command_start(agent: Any, *, action: str) -> None:
+    agent._app_logger.info(
+        "thoughts_command_start",
+        extra={"event": "thoughts_command_start", "context": {"action": action}},
+    )
+
+
+def _finalize_thoughts_command(agent: Any, *, action: str, result: str) -> str:
+    agent._app_logger.info(
+        "thoughts_command_done",
+        extra={
+            "event": "thoughts_command_done",
+            "context": {"action": action, "ok": _is_planner_command_success(result, tool="thoughts")},
+        },
+    )
+    return result
+
+
+def _fail_thoughts_command(agent: Any, *, action: str, exc: Exception) -> str:
+    agent._app_logger.warning(
+        "thoughts_command_failed",
+        extra={
+            "event": "thoughts_command_failed",
+            "context": {"action": action, "error": repr(exc)},
+        },
+    )
+    return f"thoughts 命令执行失败: {exc}"

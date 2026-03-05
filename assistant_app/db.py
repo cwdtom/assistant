@@ -8,6 +8,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 _UNSET = object()
+THOUGHT_STATUS_TODO = "未完成"
+THOUGHT_STATUS_DONE = "完成"
+THOUGHT_STATUS_DELETED = "删除"
+THOUGHT_STATUS_VALUES = (
+    THOUGHT_STATUS_TODO,
+    THOUGHT_STATUS_DONE,
+    THOUGHT_STATUS_DELETED,
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +56,15 @@ class ChatTurn:
     user_content: str
     assistant_content: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class ThoughtItem:
+    id: int
+    content: str
+    status: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -131,6 +148,17 @@ class AssistantDB:
                 """
             )
             self._ensure_chat_history_turn_schema(conn)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS thoughts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('未完成', '完成', '删除')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reminder_deliveries (
@@ -640,6 +668,91 @@ class AssistantDB:
             cur = conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
             return cur.rowcount > 0
 
+    def add_thought(self, content: str, status: str = THOUGHT_STATUS_TODO) -> int:
+        timestamp = _now_iso()
+        normalized_content = _normalize_thought_content(content)
+        normalized_status = _normalize_thought_status(status)
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO thoughts (content, status, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (normalized_content, normalized_status, timestamp, timestamp),
+            )
+            if cur.lastrowid is None:
+                raise RuntimeError("failed to insert thought")
+            return int(cur.lastrowid)
+
+    def list_thoughts(self, *, status: str | None = None) -> list[ThoughtItem]:
+        query = (
+            "SELECT id, content, status, created_at, updated_at "
+            "FROM thoughts WHERE status IN (?, ?) ORDER BY id ASC"
+        )
+        params: tuple[object, ...] = (THOUGHT_STATUS_TODO, THOUGHT_STATUS_DONE)
+        if status is not None:
+            normalized_status = _normalize_thought_status(status)
+            query = "SELECT id, content, status, created_at, updated_at FROM thoughts WHERE status = ? ORDER BY id ASC"
+            params = (normalized_status,)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            ThoughtItem(
+                id=int(row["id"]),
+                content=str(row["content"] or ""),
+                status=str(row["status"] or THOUGHT_STATUS_TODO),
+                created_at=str(row["created_at"] or ""),
+                updated_at=str(row["updated_at"] or ""),
+            )
+            for row in rows
+        ]
+
+    def get_thought(self, thought_id: int) -> ThoughtItem | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, content, status, created_at, updated_at FROM thoughts WHERE id = ?",
+                (thought_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ThoughtItem(
+            id=int(row["id"]),
+            content=str(row["content"] or ""),
+            status=str(row["status"] or THOUGHT_STATUS_TODO),
+            created_at=str(row["created_at"] or ""),
+            updated_at=str(row["updated_at"] or ""),
+        )
+
+    def update_thought(
+        self,
+        thought_id: int,
+        *,
+        content: str,
+        status: str | object = _UNSET,
+    ) -> bool:
+        fields = ["content = ?"]
+        normalized_content = _normalize_thought_content(content)
+        values: list[object] = [normalized_content]
+        if status is not _UNSET:
+            normalized_status = _normalize_thought_status(str(status) if status is not None else "")
+            fields.append("status = ?")
+            values.append(normalized_status)
+        fields.append("updated_at = ?")
+        values.append(_now_iso())
+        values.append(thought_id)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"UPDATE thoughts SET {', '.join(fields)} WHERE id = ?",
+                values,
+            )
+            return cur.rowcount > 0
+
+    def soft_delete_thought(self, thought_id: int) -> bool:
+        timestamp = _now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE thoughts SET status = ?, updated_at = ? WHERE id = ?",
+                (THOUGHT_STATUS_DELETED, timestamp, thought_id),
+            )
+            return cur.rowcount > 0
+
     def _list_base_schedules(self, conn: sqlite3.Connection) -> list[ScheduleItem]:
         rows = conn.execute(
             "SELECT id, title, tag, event_time, duration_minutes, remind_at, created_at "
@@ -925,6 +1038,20 @@ def _normalize_duration_minutes(duration_minutes: int) -> int:
     if duration_minutes < 1:
         raise ValueError("duration_minutes must be >= 1")
     return duration_minutes
+
+
+def _normalize_thought_content(content: str) -> str:
+    normalized = content.strip()
+    if not normalized:
+        raise ValueError("thought content cannot be empty")
+    return normalized
+
+
+def _normalize_thought_status(status: str) -> str:
+    normalized = status.strip()
+    if normalized not in THOUGHT_STATUS_VALUES:
+        raise ValueError("thought status must be one of 未完成|完成|删除")
+    return normalized
 
 
 def _normalize_schedule_window(
