@@ -521,7 +521,7 @@ class FeishuAdapterTest(unittest.TestCase):
         reactions: list[tuple[str, str]] = []
         rewrite_calls: list[str] = []
         agent = _ProgressReportingTaskAwareAgent(
-            progress_result="执行结果：已添加待办 #1",
+            progress_result="执行结果：已添加日程 #1",
             response="任务处理完成。",
             task_completed=True,
         )
@@ -549,16 +549,16 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(
             lambda: len(reactions) == 2
-            and ("oc_1", "润色后：执行结果：已添加待办 #1") in sent
+            and ("oc_1", "润色后：执行结果：已添加日程 #1") in sent
             and ("oc_1", "任务处理完成。") in sent
         )
-        self.assertEqual(rewrite_calls, ["执行结果：已添加待办 #1"])
+        self.assertEqual(rewrite_calls, ["执行结果：已添加日程 #1"])
 
     def test_event_processor_async_subtask_progress_without_rewriter_sends_raw_text(self) -> None:
         sent: list[tuple[str, str]] = []
         reactions: list[tuple[str, str]] = []
         agent = _ProgressReportingTaskAwareAgent(
-            progress_result="执行结果：已添加待办 #1",
+            progress_result="执行结果：已添加日程 #1",
             response="任务处理完成。",
             task_completed=True,
         )
@@ -585,7 +585,7 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(
             lambda: len(reactions) == 2
-            and ("oc_1", "执行结果：已添加待办 #1") in sent
+            and ("oc_1", "执行结果：已添加日程 #1") in sent
             and ("oc_1", "任务处理完成。") in sent
         )
 
@@ -593,7 +593,7 @@ class FeishuAdapterTest(unittest.TestCase):
         sent: list[tuple[str, str]] = []
         reactions: list[tuple[str, str]] = []
         agent = _ProgressReportingTaskAwareAgent(
-            progress_results=["任务目标：先整理今天待办，再给出结论", "执行结果：已整理待办"],
+            progress_results=["任务目标：先整理今日日程，再给出结论", "执行结果：已整理日程"],
             response="任务处理完成。",
             task_completed=True,
         )
@@ -620,8 +620,8 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(
             lambda: len(reactions) == 2
-            and ("oc_1", "任务目标：先整理今天待办，再给出结论") in sent
-            and ("oc_1", "执行结果：已整理待办") in sent
+            and ("oc_1", "任务目标：先整理今日日程，再给出结论") in sent
+            and ("oc_1", "执行结果：已整理日程") in sent
             and ("oc_1", "任务处理完成。") in sent
         )
 
@@ -630,13 +630,13 @@ class FeishuAdapterTest(unittest.TestCase):
         reactions: list[tuple[str, str]] = []
         progress_attempts = {"count": 0}
         agent = _ProgressReportingTaskAwareAgent(
-            progress_result="执行结果：已添加待办 #1",
+            progress_result="执行结果：已添加日程 #1",
             response="最终消息",
             task_completed=True,
         )
 
         def send_text(chat_id: str, text: str) -> None:
-            if text == "润色后：执行结果：已添加待办 #1":
+            if text == "润色后：执行结果：已添加日程 #1":
                 progress_attempts["count"] += 1
                 raise RuntimeError("progress send failed")
             sent.append((chat_id, text))
@@ -680,7 +680,7 @@ class FeishuAdapterTest(unittest.TestCase):
             progress_content_rewriter=lambda text: f"润色后：{text}",
         )
 
-        agent.emit_progress_result("执行结果：已添加待办 #1")
+        agent.emit_progress_result("执行结果：已添加日程 #1")
         time.sleep(0.05)
 
         self.assertEqual(sent, [])

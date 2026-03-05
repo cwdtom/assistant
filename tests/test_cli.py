@@ -29,7 +29,7 @@ class _FakeAgent:
     def handle_input(self, user_input: str) -> str:
         if self.progress_callback is not None and not user_input.startswith("/"):
             self.progress_callback("步骤进度：开始规划")
-            self.progress_callback("计划列表：\n1. [待办] 添加待办\n2. [待办] 确认结果")
+            self.progress_callback("计划列表：\n1. [日程] 添加日程\n2. [日程] 确认结果")
             self.progress_callback("完成情况：成功 0 步，失败 0 步，已执行 0/20 步。")
         return f"echo:{user_input}"
 
@@ -50,8 +50,8 @@ class CLIFeedbackTest(unittest.TestCase):
 
     def test_should_show_waiting_for_natural_language_with_llm(self) -> None:
         agent = _FakeAgent(llm_enabled=True)
-        self.assertTrue(_should_show_waiting(agent, "看一下全部待办"))
-        self.assertFalse(_should_show_waiting(agent, "/todo list"))
+        self.assertTrue(_should_show_waiting(agent, "看一下全部日程"))
+        self.assertFalse(_should_show_waiting(agent, "/schedule list"))
         self.assertFalse(_should_show_waiting(agent, ""))
 
     def test_should_not_show_waiting_without_llm(self) -> None:
@@ -62,9 +62,9 @@ class CLIFeedbackTest(unittest.TestCase):
         agent = _FakeAgent(llm_enabled=True)
         stream = io.StringIO()
 
-        result = _handle_input_with_feedback(agent, "看一下全部待办", stream=stream)
+        result = _handle_input_with_feedback(agent, "看一下全部日程", stream=stream)
 
-        self.assertEqual(result, "echo:看一下全部待办")
+        self.assertEqual(result, "echo:看一下全部日程")
         self.assertIn("进度> 步骤进度：开始规划", stream.getvalue())
         self.assertIn("进度> 计划列表：", stream.getvalue())
         self.assertIn("进度> 完成情况：成功 0 步，失败 0 步，已执行 0/20 步。", stream.getvalue())
@@ -73,9 +73,9 @@ class CLIFeedbackTest(unittest.TestCase):
         agent = _FakeAgent(llm_enabled=True)
         stream = io.StringIO()
 
-        result = _handle_input_with_feedback(agent, "/todo list", stream=stream)
+        result = _handle_input_with_feedback(agent, "/schedule list", stream=stream)
 
-        self.assertEqual(result, "echo:/todo list")
+        self.assertEqual(result, "echo:/schedule list")
         self.assertEqual(stream.getvalue(), "")
 
     def test_resolve_progress_color_off(self) -> None:
@@ -254,15 +254,15 @@ class CLIFeedbackTest(unittest.TestCase):
         sink = StdoutReminderSink(stream=stream)
         sink.emit(
             ReminderEvent(
-                reminder_key="todo:1:2026-02-24 10:00",
-                source_type="todo",
+                reminder_key="schedule:1:2026-02-24 10:00",
+                source_type="schedule",
                 source_id=1,
                 remind_time="2026-02-24 10:00",
-                content="待办提醒 #1: 准备发布",
+                content="日程提醒 #1: 准备发布",
             )
         )
 
-        self.assertEqual(stream.getvalue(), "\n提醒> 待办提醒 #1: 准备发布\n你> ")
+        self.assertEqual(stream.getvalue(), "\n提醒> 日程提醒 #1: 准备发布\n你> ")
 
 
 if __name__ == "__main__":

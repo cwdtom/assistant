@@ -3,8 +3,7 @@
 ## Project Goal
 Build a local-first CLI personal assistant that supports:
 1. AI chat (Chinese-first)
-2. Todo/task management
-3. Local schedule management
+2. Local schedule/task management
 
 Current MVP constraints:
 - Single user, no login
@@ -35,7 +34,6 @@ Supported input forms in CLI:
 - `/profile refresh`
 - `/history list [--limit <>=1>]`
 - `/history search <关键词> [--limit <>=1>]`
-- `/todo add|list|get|update|delete|done|search`
 - `/schedule add|list|get|update|delete|repeat|view`
 - non-`/` input goes through `plan -> thought -> act -> observe -> replan`
 - thought stage uses tool-calling with structured arguments by default; legacy command-string fallback remains for compatibility and is not the primary contract
@@ -59,7 +57,7 @@ Supported input forms in CLI:
 
 ## Definition of Done (MVP)
 1. CLI starts and accepts commands.
-2. Todo/schedule data persists in SQLite.
+2. Schedule/chat history data persists in SQLite.
 3. Free-text chat can call configured LLM endpoint.
 4. Unit tests pass locally.
 
@@ -119,7 +117,6 @@ Optional runtime flags (all supported in `.env`):
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`: soft quiet-time hint in proactive prompt (default `23:00-08:00`)
 
 ## Supplement: Detailed Behavior Notes (moved from README)
-- Todo/Schedule both support full CRUD.
 - Every non-`/` input persists into `chat_history` with final assistant reply.
 - `/history search` supports fuzzy keyword search on user input and assistant output.
 - Schedule includes `duration_minutes` (default `60` on create).
@@ -130,21 +127,19 @@ Optional runtime flags (all supported in `.env`):
 - Schedule supports reminder timestamps (`--remind`).
 - Recurring schedule supports reminder start (`--remind-start`).
 - CLI starts a local reminder thread by default (`TIMER_ENABLED=off` to disable).
-- V1 reminders include todo reminders, single schedule reminders, and recurring occurrence reminders.
+- V1 reminders include single schedule reminders and recurring occurrence reminders.
 - If `--interval` is provided without `--times`, default `times=-1` (infinite repeat).
 - Repeat rules support enable/disable via `/schedule repeat <id> <on|off>`.
 - `/schedule list` default window is from two days before now to +31 days.
 - `/schedule view` computes by explicit day/week/month anchor window.
 - CLI outputs repeat metadata for schedule list/detail.
 - Schedule add/update allows overlapping time ranges; no conflict pre-check is performed.
-- Todo supports search and `all|today|overdue|upcoming|inbox` views.
-- Todo priority is integer with smaller value = higher priority (minimum `0`).
-- Todo/schedule query outputs use table-style formatting in CLI.
+- Schedule query outputs use table-style formatting in CLI.
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
-- Thought uses chat tool-calling with tools: `ask_user|done` + `todo` group（展开为 `todo_add|todo_list|todo_view|todo_get|todo_update|todo_delete|todo_done|todo_search`）+ `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）.
-- Thought 的标准契约要求 tool calls 传结构化参数；`/todo`、`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
+- Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）.
+- Thought 的标准契约要求 tool calls 传结构化参数；`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
 - `ask_user` sends a single clarification question prefixed with `请确认：...`.
@@ -155,7 +150,7 @@ Optional runtime flags (all supported in `.env`):
 - Proactive reminder uses an independent ReAct runtime (not coupled with the existing task ReAct loop).
 - Proactive ReAct reuses `PLAN_REPLAN_MAX_STEPS`, disables `ask_user`, and keeps mutating tools blocked by runtime allowlist/validator.
 - Proactive ReAct allows `internet_search` as optional evidence and injects `USER_PROFILE_PATH` content into prompt when available.
-- Proactive reminder default context window: todo/schedule in next 24h + chat_history in last 24h.
+- Proactive reminder default context window: schedule in next 24h + chat_history in last 24h.
 - Proactive reminder runs on timer periodic tasks and sends to fixed `PROACTIVE_REMINDER_TARGET_OPEN_ID` via Feishu when `done.notify=true`.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
@@ -166,20 +161,12 @@ Optional runtime flags (all supported in `.env`):
 - Search output no longer performs local second truncation; it renders provider-returned results directly.
 - Bocha result text extraction prefers `summary`; if unavailable, it falls back to `snippet`.
 
-## Supplement: View Semantics (moved from README)
-- `all`: all todos (including done)
-- `today`: due today and not done
-- `overdue`: overdue and not done
-- `upcoming`: due in next 7 days and not done
-- `inbox`: no due date and not done
-
 ## Supplement: Calendar View Semantics (moved from README)
 - `day`: `YYYY-MM-DD`
 - `week`: week range by Monday-Sunday, anchor format `YYYY-MM-DD`
 - `month`: `YYYY-MM`
 
 ## Supplement: Data Model (moved from README)
-- `todos`: content, tag, priority, done status, created/done time, due/remind time.
 - `schedules`: title, tag, start datetime, duration, reminder datetime, created time.
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.

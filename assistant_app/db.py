@@ -11,19 +11,6 @@ _UNSET = object()
 
 
 @dataclass(frozen=True)
-class TodoItem:
-    id: int
-    content: str
-    tag: str
-    priority: int
-    done: bool
-    created_at: str
-    completed_at: str | None
-    due_at: str | None
-    remind_at: str | None
-
-
-@dataclass(frozen=True)
 class ScheduleItem:
     id: int
     title: str
@@ -100,24 +87,6 @@ class AssistantDB:
         with self._connect() as conn:
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS todos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    content TEXT NOT NULL,
-                    tag TEXT NOT NULL DEFAULT 'default',
-                    priority INTEGER NOT NULL DEFAULT 0 CHECK (priority >= 0),
-                    done INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    due_at TEXT,
-                    remind_at TEXT
-                )
-                """
-            )
-            self._ensure_todo_tag_column(conn)
-            self._ensure_todo_extra_columns(conn)
-            self._ensure_todo_priority_column(conn)
-            conn.execute(
-                """
                 CREATE TABLE IF NOT EXISTS schedules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
@@ -176,29 +145,6 @@ class AssistantDB:
                 )
                 """
             )
-
-    def _ensure_todo_tag_column(self, conn: sqlite3.Connection) -> None:
-        columns = conn.execute("PRAGMA table_info(todos)").fetchall()
-        has_tag = any(row["name"] == "tag" for row in columns)
-        if not has_tag:
-            conn.execute("ALTER TABLE todos ADD COLUMN tag TEXT NOT NULL DEFAULT 'default'")
-
-    def _ensure_todo_extra_columns(self, conn: sqlite3.Connection) -> None:
-        columns = conn.execute("PRAGMA table_info(todos)").fetchall()
-        names = {row["name"] for row in columns}
-        if "completed_at" not in names:
-            conn.execute("ALTER TABLE todos ADD COLUMN completed_at TEXT")
-        if "due_at" not in names:
-            conn.execute("ALTER TABLE todos ADD COLUMN due_at TEXT")
-        if "remind_at" not in names:
-            conn.execute("ALTER TABLE todos ADD COLUMN remind_at TEXT")
-
-    def _ensure_todo_priority_column(self, conn: sqlite3.Connection) -> None:
-        columns = conn.execute("PRAGMA table_info(todos)").fetchall()
-        names = {row["name"] for row in columns}
-        if "priority" not in names:
-            conn.execute("ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
-        conn.execute("UPDATE todos SET priority = 0 WHERE priority IS NULL OR priority < 0")
 
     def _ensure_schedule_duration_column(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
@@ -410,209 +356,6 @@ class AssistantDB:
             conn.execute("DROP TABLE chat_history_old")
             return
         raise RuntimeError("chat_history schema is not supported")
-
-    def add_todo(
-        self,
-        content: str,
-        tag: str = "default",
-        priority: int = 0,
-        due_at: str | None = None,
-        remind_at: str | None = None,
-    ) -> int:
-        if remind_at and not due_at:
-            raise ValueError("remind_at requires due_at")
-        timestamp = _now_iso()
-        normalized_tag = _normalize_tag(tag)
-        normalized_priority = _normalize_priority(priority)
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO todos (content, tag, priority, done, created_at, completed_at, due_at, remind_at)
-                VALUES (?, ?, ?, 0, ?, NULL, ?, ?)
-                """,
-                (content, normalized_tag, normalized_priority, timestamp, due_at, remind_at),
-            )
-            if cur.lastrowid is None:
-                raise RuntimeError("failed to insert todo")
-            return int(cur.lastrowid)
-
-    def list_todos(self, tag: str | None = None) -> list[TodoItem]:
-        normalized_tag = _normalize_tag(tag) if tag is not None else None
-        with self._connect() as conn:
-            if normalized_tag is None:
-                rows = conn.execute(
-                    """
-                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
-                    FROM todos
-                    ORDER BY priority ASC, id ASC
-                    """
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
-                    FROM todos
-                    WHERE tag = ?
-                    ORDER BY priority ASC, id ASC
-                    """,
-                    (normalized_tag,),
-                ).fetchall()
-        return [
-            TodoItem(
-                id=row["id"],
-                content=row["content"],
-                tag=row["tag"] or "default",
-                priority=_normalize_priority(row["priority"] if row["priority"] is not None else 0),
-                done=bool(row["done"]),
-                created_at=row["created_at"],
-                completed_at=row["completed_at"],
-                due_at=row["due_at"],
-                remind_at=row["remind_at"],
-            )
-            for row in rows
-        ]
-
-    def search_todos(self, keyword: str, *, tag: str | None = None) -> list[TodoItem]:
-        text = keyword.strip()
-        if not text:
-            return []
-
-        normalized_tag = _normalize_tag(tag) if tag is not None else None
-        like_pattern = f"%{text}%"
-        with self._connect() as conn:
-            if normalized_tag is None:
-                rows = conn.execute(
-                    """
-                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
-                    FROM todos
-                    WHERE content LIKE ?
-                    ORDER BY priority ASC, id ASC
-                    """,
-                    (like_pattern,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
-                    FROM todos
-                    WHERE content LIKE ? AND tag = ?
-                    ORDER BY priority ASC, id ASC
-                    """,
-                    (like_pattern, normalized_tag),
-                ).fetchall()
-        return [
-            TodoItem(
-                id=row["id"],
-                content=row["content"],
-                tag=row["tag"] or "default",
-                priority=_normalize_priority(row["priority"] if row["priority"] is not None else 0),
-                done=bool(row["done"]),
-                created_at=row["created_at"],
-                completed_at=row["completed_at"],
-                due_at=row["due_at"],
-                remind_at=row["remind_at"],
-            )
-            for row in rows
-        ]
-
-    def get_todo(self, todo_id: int) -> TodoItem | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, content, tag, priority, done, created_at, completed_at, due_at, remind_at
-                FROM todos
-                WHERE id = ?
-                """,
-                (todo_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return TodoItem(
-            id=row["id"],
-            content=row["content"],
-            tag=row["tag"] or "default",
-            priority=_normalize_priority(row["priority"] if row["priority"] is not None else 0),
-            done=bool(row["done"]),
-            created_at=row["created_at"],
-            completed_at=row["completed_at"],
-            due_at=row["due_at"],
-            remind_at=row["remind_at"],
-        )
-
-    def update_todo(
-        self,
-        todo_id: int,
-        *,
-        content: str | None = None,
-        tag: str | None = None,
-        priority: int | object = _UNSET,
-        done: bool | None = None,
-        due_at: str | None | object = _UNSET,
-        remind_at: str | None | object = _UNSET,
-    ) -> bool:
-        current = self.get_todo(todo_id)
-        if current is None:
-            return False
-
-        fields: list[str] = []
-        values: list[object] = []
-
-        if content is not None:
-            fields.append("content = ?")
-            values.append(content)
-        if tag is not None:
-            fields.append("tag = ?")
-            values.append(_normalize_tag(tag))
-        if priority is not _UNSET:
-            if not isinstance(priority, int) or isinstance(priority, bool):
-                return False
-            if priority < 0:
-                return False
-            fields.append("priority = ?")
-            values.append(_normalize_priority(priority))
-        if done is not None:
-            fields.append("done = ?")
-            values.append(1 if done else 0)
-            fields.append("completed_at = ?")
-            if done:
-                values.append(current.completed_at or _now_iso())
-            else:
-                values.append(None)
-        if due_at is not _UNSET:
-            fields.append("due_at = ?")
-            values.append(due_at)
-        if remind_at is not _UNSET:
-            fields.append("remind_at = ?")
-            values.append(remind_at)
-
-        effective_due = current.due_at if due_at is _UNSET else due_at
-        effective_remind = current.remind_at if remind_at is _UNSET else remind_at
-        if effective_remind and not effective_due:
-            return False
-
-        if not fields:
-            return False
-
-        values.append(todo_id)
-        with self._connect() as conn:
-            cur = conn.execute(
-                f"UPDATE todos SET {', '.join(fields)} WHERE id = ?",
-                values,
-            )
-            return cur.rowcount > 0
-
-    def delete_todo(self, todo_id: int) -> bool:
-        with self._connect() as conn:
-            cur = conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
-            return cur.rowcount > 0
-
-    def mark_todo_done(self, todo_id: int) -> bool:
-        with self._connect() as conn:
-            cur = conn.execute(
-                "UPDATE todos SET done = 1, completed_at = COALESCE(completed_at, ?) WHERE id = ?",
-                (_now_iso(), todo_id),
-            )
-            return cur.rowcount > 0
 
     def add_schedule(
         self,
@@ -1174,14 +917,6 @@ def _normalize_tag(tag: str | None) -> str:
     if not normalized:
         return "default"
     return normalized
-
-
-def _normalize_priority(priority: int) -> int:
-    if not isinstance(priority, int) or isinstance(priority, bool):
-        raise ValueError("priority must be an integer >= 0")
-    if priority < 0:
-        raise ValueError("priority must be >= 0")
-    return priority
 
 
 def _normalize_duration_minutes(duration_minutes: int) -> int:

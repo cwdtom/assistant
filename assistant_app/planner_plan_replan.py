@@ -6,11 +6,6 @@ from assistant_app.planner_common import normalize_tool_names
 
 PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
-- todo：待办管理（新增、查询、更新、完成、删除、视图筛选）
-  - 常用动作：add/list/get/update/done/delete/search（其中 list 可配 view 筛选）
-  - 关键字段：content（待办内容）、tag（标签）、priority（优先级，数值越小优先级越高）、
-    due_at/remind_at（本地时间 YYYY-MM-DD HH:MM）、view（all|today|overdue|upcoming|inbox）、
-    keyword（搜索关键词）
 - schedule：日程管理（新增、查询、更新、删除、日历视图、重复规则）
   - 常用动作：add/list/get/view/update/repeat/delete
   - 关键字段：title（标题）、tag（标签）、event_time（开始时间，YYYY-MM-DD HH:MM）、
@@ -49,7 +44,7 @@ PLAN_ONCE_PROMPT = f"""
   "status": "planned",
   "goal": "扩展后的目标描述",
   "plan": [
-    {{"task": "步骤1", "completed": false, "tools": ["todo"]}},
+    {{"task": "步骤1", "completed": false, "tools": ["schedule"]}},
     {{"task": "步骤2", "completed": false, "tools": ["history"]}}
   ]
 }}
@@ -60,7 +55,7 @@ PLAN_ONCE_PROMPT = f"""
 - plan 至少包含 1 项，且应按执行顺序排列
 - plan 每项都必须包含 task/completed/tools
 - plan 中每项的 completed 必须为 false
-- tools 仅填写该子任务所需工具，工具名可用：todo|schedule|internet_search|history
+- tools 仅填写该子任务所需工具，工具名可用：schedule|internet_search|history
 - {PLAN_INTENT_EXPANSION_RULE}
 - {PLANNER_HISTORY_RULE}
 - {PLANNER_USER_PROFILE_RULE}
@@ -78,7 +73,7 @@ REPLAN_PROMPT = f"""
   "status": "replanned|done",
   "plan": [
     {{"task": "步骤1", "completed": true, "tools": ["history"]}},
-    {{"task": "步骤2", "completed": false, "tools": ["todo"]}}
+    {{"task": "步骤2", "completed": false, "tools": ["schedule"]}}
   ],
   "response": "string|null"
 }}
@@ -87,7 +82,7 @@ REPLAN_PROMPT = f"""
 - status=replanned: 必须输出计划数组（至少 1 项）
 - status=replanned: plan 每项都必须包含 task/completed/tools
 - status=replanned: 至少要有 1 项 completed=false，表示仍有后续可执行任务
-- status=replanned: tools 仅填写该子任务可执行工具名，工具名可用：todo|schedule|internet_search|history
+- status=replanned: tools 仅填写该子任务可执行工具名，工具名可用：schedule|internet_search|history
 - 若基于当前 latest_plan/completed_subtasks/clarification_history 已能直接回答 goal，
   必须输出 status=done，并在 response 给出问题答案；不要继续扩写计划
 - status=done: 必须输出最终结论 response，不要再给后续计划

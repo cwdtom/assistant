@@ -4,50 +4,12 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem, TodoItem
+from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem
 from assistant_app.search import SearchProvider
 
 
 def build_proactive_tool_schemas() -> list[dict[str, Any]]:
     return [
-        _function_tool(
-            name="todo_list",
-            description="List todos in upcoming window. Optional tag/view filters.",
-            properties={
-                "tag": {"type": "string"},
-                "view": {
-                    "type": "string",
-                    "enum": ["all", "today", "overdue", "upcoming", "inbox"],
-                },
-            },
-        ),
-        _function_tool(
-            name="todo_view",
-            description="Alias of todo_list with required view.",
-            properties={
-                "view": {
-                    "type": "string",
-                    "enum": ["all", "today", "overdue", "upcoming", "inbox"],
-                },
-                "tag": {"type": "string"},
-            },
-            required=["view"],
-        ),
-        _function_tool(
-            name="todo_get",
-            description="Get a todo by id.",
-            properties={"id": {"type": "integer", "minimum": 1}},
-            required=["id"],
-        ),
-        _function_tool(
-            name="todo_search",
-            description="Search todos by keyword.",
-            properties={
-                "keyword": {"type": "string"},
-                "tag": {"type": "string"},
-            },
-            required=["keyword"],
-        ),
         _function_tool(
             name="schedule_list",
             description="List schedules in upcoming window.",
@@ -144,14 +106,6 @@ class ProactiveToolExecutor:
         self._internet_search_top_k = max(internet_search_top_k, 1)
 
     def execute(self, *, tool_name: str, arguments: dict[str, Any]) -> str:
-        if tool_name == "todo_list":
-            return self._todo_list(arguments)
-        if tool_name == "todo_view":
-            return self._todo_view(arguments)
-        if tool_name == "todo_get":
-            return self._todo_get(arguments)
-        if tool_name == "todo_search":
-            return self._todo_search(arguments)
         if tool_name == "schedule_list":
             return self._schedule_list(arguments)
         if tool_name == "schedule_view":
@@ -165,37 +119,6 @@ class ProactiveToolExecutor:
         if tool_name == "internet_search":
             return self._internet_search(arguments)
         raise ValueError(f"unsupported tool: {tool_name}")
-
-    def _todo_list(self, arguments: dict[str, Any]) -> str:
-        tag = _as_nonempty_text(arguments.get("tag"))
-        view = _as_nonempty_text(arguments.get("view")) or "all"
-        todos = self._db.list_todos(tag=tag)
-        filtered = [_todo_to_payload(item) for item in self._filter_todos_by_view(todos, view_name=view)]
-        return _json_dumps({"view": view, "count": len(filtered), "items": filtered[:50]})
-
-    def _todo_view(self, arguments: dict[str, Any]) -> str:
-        args = dict(arguments)
-        if "view" not in args:
-            raise ValueError("todo_view requires view")
-        return self._todo_list(args)
-
-    def _todo_get(self, arguments: dict[str, Any]) -> str:
-        todo_id = _as_positive_int(arguments.get("id"))
-        if todo_id is None:
-            raise ValueError("todo_get.id must be positive int")
-        todo = self._db.get_todo(todo_id)
-        if todo is None:
-            return _json_dumps({"found": False, "id": todo_id})
-        return _json_dumps({"found": True, "item": _todo_to_payload(todo)})
-
-    def _todo_search(self, arguments: dict[str, Any]) -> str:
-        keyword = _as_nonempty_text(arguments.get("keyword"))
-        if not keyword:
-            raise ValueError("todo_search.keyword is required")
-        tag = _as_nonempty_text(arguments.get("tag"))
-        items = self._db.search_todos(keyword, tag=tag)
-        payload = [_todo_to_payload(item) for item in items[:50]]
-        return _json_dumps({"keyword": keyword, "count": len(payload), "items": payload})
 
     def _schedule_list(self, arguments: dict[str, Any]) -> str:
         tag = _as_nonempty_text(arguments.get("tag"))
@@ -263,45 +186,6 @@ class ProactiveToolExecutor:
         ]
         return _json_dumps({"query": query, "count": len(payload), "items": payload})
 
-    def _filter_todos_by_view(self, todos: list[TodoItem], *, view_name: str) -> list[TodoItem]:
-        normalized = view_name.lower().strip()
-        if normalized not in {"all", "today", "overdue", "upcoming", "inbox"}:
-            normalized = "all"
-        now = self._now
-        today = now.date()
-        upcoming_end = now + timedelta(days=7)
-
-        def _parse_due(item: TodoItem) -> datetime | None:
-            if not item.due_at:
-                return None
-            try:
-                return datetime.strptime(item.due_at, "%Y-%m-%d %H:%M")
-            except ValueError:
-                return None
-
-        filtered: list[TodoItem] = []
-        for item in todos:
-            due = _parse_due(item)
-            if normalized == "all":
-                filtered.append(item)
-                continue
-            if normalized == "today":
-                if not item.done and due is not None and due.date() == today:
-                    filtered.append(item)
-                continue
-            if normalized == "overdue":
-                if not item.done and due is not None and due < now:
-                    filtered.append(item)
-                continue
-            if normalized == "upcoming":
-                if not item.done and due is not None and now <= due <= upcoming_end:
-                    filtered.append(item)
-                continue
-            if normalized == "inbox":
-                if not item.done and due is None:
-                    filtered.append(item)
-        return filtered
-
 
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -322,18 +206,6 @@ def _as_positive_int(value: Any) -> int | None:
     if value < 1:
         return None
     return value
-
-
-def _todo_to_payload(item: TodoItem) -> dict[str, object]:
-    return {
-        "id": item.id,
-        "content": item.content,
-        "tag": item.tag,
-        "priority": item.priority,
-        "done": item.done,
-        "due_at": item.due_at,
-        "remind_at": item.remind_at,
-    }
 
 
 def _schedule_to_payload(item: ScheduleItem) -> dict[str, object]:

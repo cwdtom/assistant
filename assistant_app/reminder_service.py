@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
-from assistant_app.db import AssistantDB, RecurringScheduleRule, ScheduleItem, TodoItem
+from assistant_app.db import AssistantDB, RecurringScheduleRule, ScheduleItem
 from assistant_app.reminder_sink import ReminderEvent, ReminderSink
 
 V1_FORCED_CATCHUP_SECONDS = 0
@@ -123,10 +123,6 @@ class ReminderService:
 
     def _collect_candidates(self, *, scan_start: datetime, scan_end: datetime) -> list[ReminderEvent]:
         candidates: list[ReminderEvent] = []
-        for todo in self._db.list_todos():
-            event = _build_todo_reminder_event(todo, scan_start=scan_start, scan_end=scan_end)
-            if event is not None:
-                candidates.append(event)
         base_schedules = self._db.list_base_schedules()
         recurring_rules = self._db.list_recurring_rules()
         rule_by_schedule_id = {rule.schedule_id: rule for rule in recurring_rules}
@@ -147,30 +143,6 @@ class ReminderService:
             )
         candidates.sort(key=lambda item: (item.remind_time, item.reminder_key))
         return candidates[: self._batch_limit]
-
-
-def _build_todo_reminder_event(
-    todo: TodoItem,
-    *,
-    scan_start: datetime,
-    scan_end: datetime,
-) -> ReminderEvent | None:
-    if todo.done or not todo.remind_at:
-        return None
-    remind_time = _parse_datetime(todo.remind_at)
-    if remind_time is None:
-        return None
-    if remind_time < scan_start or remind_time > scan_end:
-        return None
-    reminder_key = f"todo:{todo.id}:{todo.remind_at}"
-    content = f"待办提醒 #{todo.id}: {todo.content}（提醒时间 {todo.remind_at}）"
-    return ReminderEvent(
-        reminder_key=reminder_key,
-        source_type="todo",
-        source_id=todo.id,
-        remind_time=todo.remind_at,
-        content=content,
-    )
 
 
 def _build_schedule_reminder_event(

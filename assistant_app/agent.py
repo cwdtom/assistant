@@ -29,7 +29,6 @@ from assistant_app.agent_components.models import (
 from assistant_app.agent_components.parsing_utils import (
     _parse_history_list_limit,
     _parse_history_search_input,
-    _parse_todo_list_options,
 )
 from assistant_app.agent_components.planner_loop import (
     emit_decision_progress as _emit_decision_progress_impl,
@@ -64,9 +63,6 @@ from assistant_app.agent_components.tools.planner_tool_routing import (
 from assistant_app.agent_components.tools.schedule import (
     execute_schedule_system_action as _execute_schedule_system_action_impl,
 )
-from assistant_app.agent_components.tools.todo import (
-    execute_todo_system_action as _execute_todo_system_action_impl,
-)
 from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
 from assistant_app.planner_plan_replan import (
@@ -88,7 +84,6 @@ __all__ = [
     "AssistantAgent",
     "_parse_history_list_limit",
     "_parse_history_search_input",
-    "_parse_todo_list_options",
     "_strip_think_blocks",
     "_try_parse_json",
 ]
@@ -886,14 +881,6 @@ class AssistantAgent:
 
     def _build_planner_tool_routes(self) -> dict[str, Callable[[str], PlannerObservation]]:
         json_routes: dict[str, JsonPlannerToolRoute] = {
-            "todo": JsonPlannerToolRoute(
-                tool="todo",
-                invalid_json_result="todo 工具参数无效：需要 JSON 对象。",
-                legacy_command_prefix="/todo",
-                payload_executor=lambda payload, raw_input: self._execute_todo_system_action(
-                    payload, raw_input=raw_input
-                ),
-            ),
             "schedule": JsonPlannerToolRoute(
                 tool="schedule",
                 invalid_json_result="schedule 工具参数无效：需要 JSON 对象。",
@@ -930,9 +917,6 @@ class AssistantAgent:
             fetch_main_text=fetch_webpage_main_text,
         )
         return routes
-
-    def _execute_todo_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
-        return _execute_todo_system_action_impl(self, payload, raw_input=raw_input)
 
     def _execute_schedule_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
         return _execute_schedule_system_action_impl(self, payload, raw_input=raw_input)
@@ -1069,8 +1053,6 @@ class AssistantAgent:
         if "\n|" in result:
             return True
         prefixes = (
-            "待办列表",
-            "待办详情",
             "搜索结果",
             "日程列表",
             "日历视图(",
@@ -1093,7 +1075,7 @@ class AssistantAgent:
             f"- {failed_reason}\n"
             "下一步建议:\n"
             "- 你可以补充更具体的时间、编号或关键词；\n"
-            "- 或直接使用 /todo、/schedule 命令完成关键操作。"
+            "- 或直接使用 /schedule 命令完成关键操作。"
         )
 
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
@@ -1123,7 +1105,7 @@ class AssistantAgent:
 
     @staticmethod
     def _planner_unavailable_text() -> str:
-        return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /todo、/schedule 命令继续操作。"
+        return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /schedule 命令继续操作。"
 
     def _emit_progress(self, message: str) -> None:
         callback = self._progress_callback
@@ -1153,7 +1135,7 @@ class AssistantAgent:
         task.last_reported_plan_signature = signature
         lines = ["计划列表："]
         for idx, step in enumerate(outer.latest_plan, start=1):
-            status = "完成" if step.completed else "待办"
+            status = "完成" if step.completed else "未完成"
             lines.append(f"{idx}. [{status}] {step.item}")
         self._emit_progress("\n".join(lines))
 

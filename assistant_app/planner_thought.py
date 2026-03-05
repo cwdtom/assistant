@@ -17,7 +17,6 @@ THOUGHT_PROMPT = """
 你在 thought 阶段必须优先使用 tool calling。
 工具与参数定义以 API 请求里的 tools schema 为准（不以 prompt 中的示例字段为准）。
 可用工具名：
-- todo_add、todo_list、todo_view、todo_get、todo_update、todo_delete、todo_done、todo_search
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
 - internet_search_tool、internet_search_fetch_url、history_list、history_search、ask_user、done
 
@@ -35,172 +34,6 @@ THOUGHT_PROMPT = """
 """.strip()
 
 THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_add",
-            "description": "新增待办，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "待办内容文本。"},
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "待办标签；不传/null/空字符串时按默认标签 default 入库。",
-                    },
-                    "priority": {"type": "integer", "description": "优先级整数，>=0，数值越小优先级越高。"},
-                    "due_at": {
-                        "type": ["string", "null"],
-                        "description": "截止时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置。",
-                    },
-                    "remind_at": {
-                        "type": ["string", "null"],
-                        "description": "提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置。",
-                    },
-                },
-                "required": ["content"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_list",
-            "description": "列出待办（不带视图参数），直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "标签过滤；不传/null 表示不过滤标签。",
-                    }
-                },
-                "required": [],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_view",
-            "description": "按视图列出待办，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "view": {
-                        "type": "string",
-                        "enum": ["all", "today", "overdue", "upcoming", "inbox"],
-                        "description": (
-                            "待办视图：all=全部待办（含已完成）；today=今天到期且未完成；"
-                            "overdue=已逾期且未完成；upcoming=未来7天到期且未完成；"
-                            "inbox=无截止时间且未完成。"
-                        ),
-                    },
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "标签过滤；不传/null 表示不过滤标签。",
-                    },
-                },
-                "required": ["view"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_get",
-            "description": "获取待办详情，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "待办 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_update",
-            "description": "更新待办，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "待办 ID，正整数。"},
-                    "content": {"type": "string", "description": "更新后的待办内容。"},
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "标签更新策略：不传或null均不修改标签；仅传非空字符串时更新标签。",
-                    },
-                    "priority": {"type": "integer", "description": "优先级整数，>=0，数值越小优先级越高。"},
-                    "due_at": {
-                        "type": ["string", "null"],
-                        "description": "截止时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示清空。",
-                    },
-                    "remind_at": {
-                        "type": ["string", "null"],
-                        "description": "提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示清空。",
-                    },
-                },
-                "required": ["id", "content"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_delete",
-            "description": "删除待办，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "待办 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_done",
-            "description": "标记待办为完成，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "待办 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo_search",
-            "description": "按关键词搜索待办，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keyword": {"type": "string", "description": "搜索关键词文本。"},
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "标签过滤；不传/null 表示不过滤标签。",
-                    },
-                },
-                "required": ["keyword"],
-                "additionalProperties": False,
-            },
-        },
-    },
     {
         "type": "function",
         "function": {
@@ -497,27 +330,6 @@ _THOUGHT_SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
     str(item.get("function", {}).get("name") or "").strip().lower(): item for item in THOUGHT_TOOL_SCHEMAS
 }
 
-_TODO_TOOL_ACTION_BY_NAME: dict[str, str] = {
-    "todo_add": "add",
-    "todo_list": "list",
-    "todo_view": "view",
-    "todo_get": "get",
-    "todo_update": "update",
-    "todo_delete": "delete",
-    "todo_done": "done",
-    "todo_search": "search",
-}
-
-_TODO_TOOL_FIELDS_BY_NAME: dict[str, tuple[str, ...]] = {
-    "todo_add": ("content", "tag", "priority", "due_at", "remind_at"),
-    "todo_list": ("tag",),
-    "todo_view": ("view", "tag"),
-    "todo_get": ("id",),
-    "todo_update": ("id", "content", "tag", "priority", "due_at", "remind_at"),
-    "todo_delete": ("id",),
-    "todo_done": ("id",),
-    "todo_search": ("keyword", "tag"),
-}
 _SCHEDULE_TOOL_ACTION_BY_NAME: dict[str, str] = {
     "schedule_add": "add",
     "schedule_list": "list",
@@ -652,23 +464,6 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
     name = str(function.get("name") or "").strip().lower()
     arguments = _parse_tool_arguments(function.get("arguments"))
     current_step = str(arguments.get("current_step") or "").strip()
-
-    if name in _TODO_TOOL_ACTION_BY_NAME:
-        todo_payload: dict[str, Any] = {"action": _TODO_TOOL_ACTION_BY_NAME[name]}
-        fields = _TODO_TOOL_FIELDS_BY_NAME.get(name, ())
-        for key in fields:
-            if key in arguments:
-                todo_payload[key] = arguments.get(key)
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {
-                "tool": "todo",
-                "input": json.dumps(todo_payload, ensure_ascii=False, separators=(",", ":")),
-            },
-            "question": None,
-            "response": None,
-        }
 
     if name in _SCHEDULE_TOOL_ACTION_BY_NAME:
         schedule_payload: dict[str, Any] = {"action": _SCHEDULE_TOOL_ACTION_BY_NAME[name]}

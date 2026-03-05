@@ -48,13 +48,12 @@ class ProactiveReactRunnerTest(unittest.TestCase):
     def test_system_prompt_does_not_include_disallowed_tool_names(self) -> None:
         lowered = PROACTIVE_REACT_SYSTEM_PROMPT.lower()
         self.assertNotIn("ask_user", lowered)
-        self.assertNotIn("todo_add", lowered)
         self.assertNotIn("schedule_add", lowered)
 
     def test_run_once_executes_tool_then_done(self) -> None:
         llm = _FakeLLM(
             [
-                _tool_payload("todo_list", {"view": "upcoming"}, call_id="call_1"),
+                _tool_payload("schedule_list", {}, call_id="call_1"),
                 _tool_payload(
                     "done",
                     {
@@ -78,7 +77,7 @@ class ProactiveReactRunnerTest(unittest.TestCase):
         decision = runner.run_once(
             context_payload={
                 "user_profile": {"content": "用户偏好：晨会前提醒"},
-                "internal_context": {"todos": [], "schedules": [], "recent_chat_turns": []},
+                "internal_context": {"schedules": [], "recent_chat_turns": []},
             }
         )
 
@@ -87,7 +86,7 @@ class ProactiveReactRunnerTest(unittest.TestCase):
         self.assertTrue(decision.notify)
         self.assertEqual(decision.reason, "存在未来24小时关键日程。")
         self.assertAlmostEqual(decision.confidence or 0.0, 0.81)
-        self.assertEqual(tools.calls, [("todo_list", {"view": "upcoming"})])
+        self.assertEqual(tools.calls, [("schedule_list", {})])
         self.assertGreaterEqual(len(llm.calls), 1)
         first_messages = llm.calls[0]["messages"]
         self.assertIsInstance(first_messages, list)
@@ -115,7 +114,7 @@ class ProactiveReactRunnerTest(unittest.TestCase):
         self.assertEqual(decision.reason, "当前无需提醒")
 
     def test_run_once_returns_none_when_max_steps_reached(self) -> None:
-        llm = _FakeLLM([_tool_payload("todo_list", {"view": "all"}, call_id="call_1")])
+        llm = _FakeLLM([_tool_payload("schedule_list", {}, call_id="call_1")])
         runner = ProactiveReactRunner(
             llm_client=llm,
             tool_executor=_FakeToolExecutor(),

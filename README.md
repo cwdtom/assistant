@@ -3,10 +3,9 @@
 一个中文优先的本地 CLI 个人助手。当前代码已实现：
 - 自然语言任务执行（plan -> thought -> act -> observe -> replan）
 - thought 阶段默认使用 chat tool-calling（结构化参数）直接调用本地系统函数
-- 待办管理（CRUD、标签、优先级、视图、搜索、提醒）
 - 日程管理（CRUD、时长、重复规则、提醒、日历视图）
 - 历史会话持久化与检索
-- 本地提醒线程（待办、单次日程、重复日程）
+- 本地提醒线程（单次日程、重复日程）
 - 可选 Feishu 长连接接入
 - Feishu 任务执行中可异步回传进度：plan 完成后的扩展目标（`任务目标：...`）与子任务完成状态（默认直出，不走 persona 重写）
 
@@ -129,12 +128,10 @@ python main.py
 - `/help`
 - `/version`
 - `/profile refresh`
-- `/todo add|list|get|update|delete|done|search`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
 
 说明：
-- `/todo add|update` 支持 `--tag --priority --due --remind`
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
@@ -142,7 +139,7 @@ python main.py
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`
-- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`todo` -> `todo_add|todo_list|todo_view|todo_get|todo_update|todo_delete|todo_done|todo_search`，`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`
+- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
 - 当 rerank 请求失败时，会自动降级重试为非 rerank Bocha 搜索
 - `internet_search` 在收到裸 `http/https` URL 输入时会自动按 `fetch_url` 路径执行（不再按关键词搜索）
@@ -152,7 +149,7 @@ python main.py
 - 若启用 Feishu，plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 - 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估，并在 `notify=true` 时向固定 `open_id` 主动发送 Feishu 文本
-- Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 todo/schedule + 过去 24 小时 chat_history 进行决策
+- Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
 
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环

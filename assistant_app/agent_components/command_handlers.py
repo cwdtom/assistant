@@ -6,8 +6,6 @@ from assistant_app.agent_components.parsing_utils import (
     _INVALID_OPTION_VALUE,
     _default_schedule_list_window,
     _filter_schedules_by_calendar_view,
-    _filter_todos_by_view,
-    _now_time_text,
     _parse_history_list_limit,
     _parse_history_search_input,
     _parse_positive_int,
@@ -16,28 +14,18 @@ from assistant_app.agent_components.parsing_utils import (
     _parse_schedule_repeat_toggle_input,
     _parse_schedule_update_input,
     _parse_schedule_view_command_input,
-    _parse_todo_add_input,
-    _parse_todo_list_options,
-    _parse_todo_search_input,
-    _parse_todo_update_input,
     _resolve_schedule_view_window,
 )
 from assistant_app.agent_components.render_helpers import (
     _format_history_list_result,
     _format_history_search_result,
     _format_schedule_remind_meta_inline,
-    _format_todo_meta_inline,
     _render_table,
-    _render_todo_table,
     _schedule_list_empty_text,
     _schedule_list_title,
     _schedule_table_headers,
     _schedule_table_rows,
     _schedule_view_title,
-    _todo_list_empty_text,
-    _todo_list_header,
-    _todo_search_empty_text,
-    _todo_search_header,
 )
 
 UNKNOWN_APP_VERSION = "unknown"
@@ -51,15 +39,6 @@ def help_text() -> str:
         "/profile refresh\n"
         "/history list [--limit <>=1>]\n"
         "/history search <关键词> [--limit <>=1>]\n"
-        "/todo add <内容> [--tag <标签>] [--priority <>=0>] "
-        "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
-        "/todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]\n"
-        "/todo search <关键词> [--tag <标签>]\n"
-        "/todo get <id>\n"
-        "/todo update <id> <内容> [--tag <标签>] [--priority <>=0>] "
-        "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]\n"
-        "/todo delete <id>\n"
-        "/todo done <id>\n"
         "/schedule add <YYYY-MM-DD HH:MM> <标题> "
         "[--tag <标签>] "
         "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
@@ -125,137 +104,6 @@ def handle_command(agent: Any, command: str) -> str:
         if not turns:
             return f"未找到包含“{keyword}”的历史会话。"
         return _format_history_search_result(keyword=keyword, turns=turns)
-
-    if command.startswith("/todo add "):
-        add_parsed = _parse_todo_add_input(command.removeprefix("/todo add ").strip())
-        if add_parsed is None:
-            return (
-                "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
-                "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
-            )
-        content, add_tag, add_priority, add_due_at, add_remind_at = add_parsed
-        if not content:
-            return (
-                "用法: /todo add <内容> [--tag <标签>] [--priority <>=0>] "
-                "[--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
-            )
-        try:
-            added_todo_id = agent.db.add_todo(
-                content,
-                tag=add_tag,
-                priority=add_priority,
-                due_at=add_due_at,
-                remind_at=add_remind_at,
-            )
-        except ValueError:
-            return "提醒时间需要和截止时间一起设置，且优先级必须为大于等于 0 的整数。"
-        return (
-            f"已添加待办 #{added_todo_id} [标签:{add_tag}]: {content}"
-            f"{_format_todo_meta_inline(add_due_at, add_remind_at, priority=add_priority)}"
-        )
-
-    if command == "/todo list" or command.startswith("/todo list "):
-        list_parsed = _parse_todo_list_options(command)
-        if list_parsed is None:
-            return "用法: /todo list [--tag <标签>] [--view <all|today|overdue|upcoming|inbox>]"
-        list_tag, list_view = list_parsed
-        todos = agent.db.list_todos(tag=list_tag)
-        todos = _filter_todos_by_view(todos, view_name=list_view)
-        if not todos:
-            return _todo_list_empty_text(tag=list_tag, view_name=list_view)
-
-        header = _todo_list_header(tag=list_tag, view_name=list_view)
-        table = _render_todo_table(todos)
-        return f"{header}\n{table}"
-
-    if command.startswith("/todo search "):
-        search_parsed = _parse_todo_search_input(command.removeprefix("/todo search ").strip())
-        if search_parsed is None:
-            return "用法: /todo search <关键词> [--tag <标签>]"
-        keyword, search_tag = search_parsed
-        todos = agent.db.search_todos(keyword, tag=search_tag)
-        if not todos:
-            return _todo_search_empty_text(keyword=keyword, tag=search_tag)
-
-        table = _render_todo_table(todos)
-        header = _todo_search_header(keyword=keyword, tag=search_tag)
-        return f"{header}\n{table}"
-
-    if command.startswith("/todo get "):
-        get_todo_id = _parse_positive_int(command.removeprefix("/todo get ").strip())
-        if get_todo_id is None:
-            return "用法: /todo get <id>"
-        todo = agent.db.get_todo(get_todo_id)
-        if todo is None:
-            return f"未找到待办 #{get_todo_id}"
-        table = _render_todo_table([todo])
-        return f"待办详情:\n{table}"
-
-    if command.startswith("/todo update "):
-        update_parsed = _parse_todo_update_input(command.removeprefix("/todo update ").strip())
-        if update_parsed is None:
-            return (
-                "用法: /todo update <id> <内容> [--tag <标签>] "
-                "[--priority <>=0>] [--due <YYYY-MM-DD HH:MM>] [--remind <YYYY-MM-DD HH:MM>]"
-            )
-        (
-            update_todo_id,
-            content,
-            update_tag,
-            update_priority,
-            update_due_at,
-            update_remind_at,
-            has_priority,
-            has_due,
-            has_remind,
-        ) = update_parsed
-        current = agent.db.get_todo(update_todo_id)
-        if current is None:
-            return f"未找到待办 #{update_todo_id}"
-
-        if has_remind and update_remind_at and not ((has_due and update_due_at) or current.due_at):
-            return "提醒时间需要和截止时间一起设置。"
-
-        update_kwargs: dict[str, Any] = {"content": content}
-        if update_tag is not None:
-            update_kwargs["tag"] = update_tag
-        if has_priority:
-            update_kwargs["priority"] = update_priority
-        if has_due:
-            update_kwargs["due_at"] = update_due_at
-        if has_remind:
-            update_kwargs["remind_at"] = update_remind_at
-
-        updated = agent.db.update_todo(update_todo_id, **update_kwargs)
-        if not updated:
-            return f"未找到待办 #{update_todo_id}"
-        todo = agent.db.get_todo(update_todo_id)
-        if todo is None:
-            return f"已更新待办 #{update_todo_id}: {content}"
-        return (
-            f"已更新待办 #{update_todo_id} [标签:{todo.tag}]: {content}"
-            f"{_format_todo_meta_inline(todo.due_at, todo.remind_at, priority=todo.priority)}"
-        )
-
-    if command.startswith("/todo delete "):
-        delete_todo_id = _parse_positive_int(command.removeprefix("/todo delete ").strip())
-        if delete_todo_id is None:
-            return "用法: /todo delete <id>"
-        deleted = agent.db.delete_todo(delete_todo_id)
-        if not deleted:
-            return f"未找到待办 #{delete_todo_id}"
-        return f"待办 #{delete_todo_id} 已删除。"
-
-    if command.startswith("/todo done "):
-        done_todo_id = _parse_positive_int(command.removeprefix("/todo done ").strip())
-        if done_todo_id is None:
-            return "用法: /todo done <id>"
-        done = agent.db.mark_todo_done(done_todo_id)
-        if not done:
-            return f"未找到待办 #{done_todo_id}"
-        todo = agent.db.get_todo(done_todo_id)
-        done_completed_at = todo.completed_at if todo is not None else _now_time_text()
-        return f"待办 #{done_todo_id} 已完成。完成时间: {done_completed_at}"
 
     if command == "/schedule list" or command.startswith("/schedule list "):
         parsed_list_tag = _parse_schedule_list_tag_input(command.removeprefix("/schedule list").strip())

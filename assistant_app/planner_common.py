@@ -2,19 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-THOUGHT_EXECUTION_TOOL_NAMES = ("todo", "schedule", "internet_search", "history")
+THOUGHT_EXECUTION_TOOL_NAMES = ("schedule", "internet_search", "history")
 THOUGHT_RUNTIME_TOOL_NAMES = ("ask_user", "done")
 THOUGHT_ALL_TOOL_NAMES = (*THOUGHT_EXECUTION_TOOL_NAMES, *THOUGHT_RUNTIME_TOOL_NAMES)
-THOUGHT_TODO_TOOL_NAMES = (
-    "todo_add",
-    "todo_list",
-    "todo_view",
-    "todo_get",
-    "todo_update",
-    "todo_delete",
-    "todo_done",
-    "todo_search",
-)
 THOUGHT_HISTORY_TOOL_NAMES = (
     "history_list",
     "history_search",
@@ -33,7 +23,6 @@ THOUGHT_INTERNET_SEARCH_TOOL_NAMES = (
     "internet_search_fetch_url",
 )
 THOUGHT_TOOL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
-    "todo": THOUGHT_TODO_TOOL_NAMES,
     "history": THOUGHT_HISTORY_TOOL_NAMES,
     "schedule": THOUGHT_SCHEDULE_TOOL_NAMES,
     "internet_search": THOUGHT_INTERNET_SEARCH_TOOL_NAMES,

@@ -71,8 +71,8 @@ class OpenAICompatibleClientTest(unittest.TestCase):
                     {
                         "type": "function",
                         "function": {
-                            "name": "todo",
-                            "description": "执行 todo",
+                            "name": "schedule",
+                            "description": "执行 schedule",
                             "parameters": {"type": "object", "properties": {}, "required": []},
                         },
                     }
@@ -90,7 +90,7 @@ class OpenAICompatibleClientTest(unittest.TestCase):
                     {
                         "id": "call_1",
                         "type": "function",
-                        "function": {"name": "todo", "arguments": "{\"command\":\"/todo list\"}"},
+                        "function": {"name": "schedule", "arguments": "{\"command\":\"/schedule list\"}"},
                     }
                 ],
                 "reasoning_content": None,
@@ -103,7 +103,7 @@ class OpenAICompatibleClientTest(unittest.TestCase):
         self.assertIsNone(assistant_message.get("content"))
         tool_calls = assistant_message.get("tool_calls")
         self.assertIsInstance(tool_calls, list)
-        self.assertEqual(tool_calls[0]["function"]["name"], "todo")
+        self.assertEqual(tool_calls[0]["function"]["name"], "schedule")
         self.assertIsNone(payload.get("reasoning_content"))
 
 

@@ -42,7 +42,7 @@ class PersonaRewriterTest(unittest.TestCase):
                 raise RuntimeError("boom")
 
         rewriter = PersonaRewriter(llm_client=_ErrorLLMClient(), persona="严谨项目经理", enabled=True)
-        original = "已列出所有待办事项。"
+        original = "已列出所有日程。"
 
         result = rewriter.rewrite_final_response(original)
 
@@ -70,10 +70,10 @@ class PersonaRewriterTest(unittest.TestCase):
         self.assertNotIn("由你判断是否拆成多条发送；若拆分，请用空行分隔每条内容", payload["requirements"])
 
     def test_rewrite_progress_update_adds_result_only_guidance(self) -> None:
-        llm = _FakeLLMClient(response="已完成待办创建。")
+        llm = _FakeLLMClient(response="已完成日程创建。")
         rewriter = PersonaRewriter(llm_client=llm, persona="可靠同事", enabled=True)
 
-        rewriter.rewrite_progress_update("已完成待办创建。")
+        rewriter.rewrite_progress_update("已完成日程创建。")
 
         self.assertEqual(len(llm.calls), 1)
         payload = json.loads(llm.calls[0][1]["content"])

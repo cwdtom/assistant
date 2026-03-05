@@ -12,13 +12,8 @@ SCHEDULE_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2
 SCHEDULE_REMIND_START_OPTION_PATTERN = re.compile(
     r"(^|\s)--remind-start\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})"
 )
-TODO_TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
-TODO_VIEW_OPTION_PATTERN = re.compile(r"(^|\s)--view\s+(\S+)")
-TODO_PRIORITY_OPTION_PATTERN = re.compile(r"(^|\s)--priority\s+(-?\d+)")
-TODO_DUE_OPTION_PATTERN = re.compile(r"(^|\s)--due\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
-TODO_REMIND_OPTION_PATTERN = re.compile(r"(^|\s)--remind\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
+TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
 HISTORY_LIMIT_OPTION_PATTERN = re.compile(r"(^|\s)--limit\s+(\d+)")
-TODO_VIEW_NAMES = ("all", "today", "overdue", "upcoming", "inbox")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
@@ -67,165 +62,6 @@ def _parse_history_search_input(raw: str) -> tuple[str, int] | None:
     if not keyword:
         return None
     return keyword, limit
-
-
-def _parse_todo_add_input(raw: str) -> tuple[str, str, int, str | None, str | None] | None:
-    parsed = _parse_todo_text_with_options(raw, default_tag="default", default_priority=0)
-    if parsed is None:
-        return None
-    content, tag, priority, due_at, remind_at, _, _, _ = parsed
-    if remind_at and not due_at:
-        return None
-    if tag is None:
-        tag = "default"
-    if priority is None:
-        priority = 0
-    return content, tag, priority, due_at, remind_at
-
-
-def _parse_todo_update_input(
-    raw: str,
-) -> tuple[int, str, str | None, int | None, str | None, str | None, bool, bool, bool] | None:
-    parts = raw.strip().split(maxsplit=1)
-    if len(parts) != 2:
-        return None
-
-    todo_id = _parse_positive_int(parts[0])
-    if todo_id is None:
-        return None
-
-    parsed = _parse_todo_text_with_options(parts[1], default_tag=None, default_priority=None)
-    if parsed is None:
-        return None
-    content, tag, priority, due_at, remind_at, has_priority, has_due, has_remind = parsed
-    return todo_id, content, tag, priority, due_at, remind_at, has_priority, has_due, has_remind
-
-
-def _parse_todo_text_with_options(
-    raw: str,
-    *,
-    default_tag: str | None,
-    default_priority: int | None,
-) -> tuple[str, str | None, int | None, str | None, str | None, bool, bool, bool] | None:
-    text = raw.strip()
-    if not text:
-        return None
-
-    working = text
-    tag: str | None = default_tag
-    priority: int | None = default_priority
-    due_at: str | None = None
-    remind_at: str | None = None
-    has_priority = False
-    has_due = False
-    has_remind = False
-
-    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
-    if tag_match:
-        provided_tag = _sanitize_tag(tag_match.group(2))
-        if not provided_tag:
-            return None
-        tag = provided_tag
-        working = _remove_option_span(working, tag_match.span())
-
-    priority_match = TODO_PRIORITY_OPTION_PATTERN.search(working)
-    if priority_match:
-        parsed_priority = _normalize_todo_priority_value(priority_match.group(2))
-        if parsed_priority is None:
-            return None
-        priority = parsed_priority
-        has_priority = True
-        working = _remove_option_span(working, priority_match.span())
-
-    due_match = TODO_DUE_OPTION_PATTERN.search(working)
-    if due_match:
-        parsed_due = _normalize_datetime_text(due_match.group(2))
-        if not parsed_due:
-            return None
-        due_at = parsed_due
-        has_due = True
-        working = _remove_option_span(working, due_match.span())
-
-    remind_match = TODO_REMIND_OPTION_PATTERN.search(working)
-    if remind_match:
-        parsed_remind = _normalize_datetime_text(remind_match.group(2))
-        if not parsed_remind:
-            return None
-        remind_at = parsed_remind
-        has_remind = True
-        working = _remove_option_span(working, remind_match.span())
-
-    content = re.sub(r"\s+", " ", working).strip()
-    if not content:
-        return None
-
-    return content, tag, priority, due_at, remind_at, has_priority, has_due, has_remind
-
-
-def _parse_todo_list_options(command: str) -> tuple[str | None, str] | None:
-    if command == "/todo list":
-        return None, "all"
-
-    suffix = command.removeprefix("/todo list").strip()
-    if not suffix:
-        return None, "all"
-
-    working = suffix
-    tag: str | None = None
-    view_name = "all"
-
-    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
-    if tag_match:
-        parsed_tag = _sanitize_tag(tag_match.group(2))
-        if parsed_tag is None:
-            return None
-        tag = parsed_tag
-        working = _remove_option_span(working, tag_match.span())
-
-    view_match = TODO_VIEW_OPTION_PATTERN.search(working)
-    if view_match:
-        parsed_view = _normalize_todo_view_value(view_match.group(2))
-        if parsed_view is None:
-            return None
-        view_name = parsed_view
-        working = _remove_option_span(working, view_match.span())
-
-    leftover = re.sub(r"\s+", " ", working).strip()
-    if leftover:
-        if " " in leftover:
-            return None
-        if leftover.startswith("--"):
-            return None
-        parsed_tag = _sanitize_tag(leftover)
-        if parsed_tag is None:
-            return None
-        if tag is not None:
-            return None
-        tag = parsed_tag
-
-    return tag, view_name
-
-
-def _parse_todo_search_input(raw: str) -> tuple[str, str | None] | None:
-    text = raw.strip()
-    if not text:
-        return None
-
-    working = text
-    tag: str | None = None
-
-    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
-    if tag_match:
-        provided_tag = _sanitize_tag(tag_match.group(2))
-        if not provided_tag:
-            return None
-        tag = provided_tag
-        working = _remove_option_span(working, tag_match.span())
-
-    keyword = re.sub(r"\s+", " ", working).strip()
-    if not keyword:
-        return None
-    return keyword, tag
 
 
 def _parse_schedule_add_input(
@@ -346,7 +182,7 @@ def _parse_schedule_input(
     repeat_remind_start_time: str | None = None
     has_repeat_remind_start_time = False
 
-    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
+    tag_match = TAG_OPTION_PATTERN.search(working)
     if tag_match:
         parsed_tag = _sanitize_tag(tag_match.group(2))
         if not parsed_tag:
@@ -458,7 +294,7 @@ def _parse_schedule_view_command_input(raw: str) -> tuple[str, str | None, str |
     working = text
     tag: str | None = None
 
-    tag_match = TODO_TAG_OPTION_PATTERN.search(working)
+    tag_match = TAG_OPTION_PATTERN.search(working)
     if tag_match:
         parsed_tag = _sanitize_tag(tag_match.group(2))
         if not parsed_tag:
@@ -535,25 +371,10 @@ def _normalize_positive_int_value(value: Any) -> int | None:
     return parsed
 
 
-def _normalize_todo_tag_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    return _sanitize_tag(str(value))
-
-
 def _normalize_schedule_tag_value(value: Any) -> str | None:
     if value is None:
         return None
     return _sanitize_tag(str(value))
-
-
-def _normalize_todo_view_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip().lower()
-    if text in TODO_VIEW_NAMES:
-        return text
-    return None
 
 
 def _normalize_schedule_interval_minutes_value(value: Any) -> int | None:
@@ -653,28 +474,6 @@ def _normalize_schedule_view_anchor(*, view_name: str, value: str) -> str | None
     return None
 
 
-def _normalize_todo_priority_value(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, float):
-        if not value.is_integer():
-            return None
-        value = int(value)
-        return value if value >= 0 else None
-
-    text = str(value).strip()
-    if not re.fullmatch(r"-?\d+", text):
-        return None
-    parsed = int(text)
-    if parsed < 0:
-        return None
-    return parsed
-
-
 def _normalize_datetime_text(value: str) -> str | None:
     text = re.sub(r"\s+", " ", value).strip()
     try:
@@ -682,44 +481,6 @@ def _normalize_datetime_text(value: str) -> str | None:
     except ValueError:
         return None
     return parsed.strftime("%Y-%m-%d %H:%M")
-
-
-def _filter_todos_by_view(todos: list[Any], *, view_name: str, now: datetime | None = None) -> list[Any]:
-    if view_name == "all":
-        return todos
-
-    current = now or datetime.now()
-    today = current.date()
-    today_end = datetime.combine(today, datetime.max.time())
-    upcoming_end = current + timedelta(days=7)
-
-    filtered: list[Any] = []
-    for item in todos:
-        if item.done:
-            continue
-        due_at = _parse_due_datetime(item.due_at)
-
-        if view_name == "today":
-            if due_at is not None and due_at.date() == today:
-                filtered.append(item)
-            continue
-
-        if view_name == "overdue":
-            if due_at is not None and due_at < current:
-                filtered.append(item)
-            continue
-
-        if view_name == "upcoming":
-            if due_at is not None and today_end < due_at <= upcoming_end:
-                filtered.append(item)
-            continue
-
-        if view_name == "inbox":
-            if due_at is None:
-                filtered.append(item)
-            continue
-
-    return filtered
 
 
 def _filter_schedules_by_calendar_view(

@@ -281,12 +281,12 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
                 if task.ask_user_repeat_count >= agent._plan_continuous_failure_limit:
                     return (
                         "done_candidate",
-                        "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /todo 或 /schedule 命令。",
+                        "我已经拿到你的补充信息，但仍无法完成重规划。请直接使用 /schedule 命令。",
                     )
                 continue
             ask_turns = sum(1 for turn in outer.clarification_history if turn.role == "assistant_question")
             if ask_turns >= 6:
-                return "done_candidate", "澄清次数过多，我仍无法稳定重规划。请直接使用 /todo 或 /schedule 命令。"
+                return "done_candidate", "澄清次数过多，我仍无法稳定重规划。请直接使用 /schedule 命令。"
             task.ask_user_repeat_count = 0
             task.last_ask_user_question = question
             task.last_ask_user_clarification_len = len(outer.clarification_history)

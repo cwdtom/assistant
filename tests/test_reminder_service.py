@@ -31,12 +31,7 @@ class ReminderServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_poll_once_delivers_todo_and_schedule_reminders_once(self) -> None:
-        todo_id = self.db.add_todo(
-            "准备发布",
-            due_at="2026-02-24 18:00",
-            remind_at="2026-02-24 10:00",
-        )
+    def test_poll_once_delivers_schedule_reminders_once(self) -> None:
         schedule_id = self.db.add_schedule(
             "项目同步",
             "2026-02-24 11:00",
@@ -54,22 +49,21 @@ class ReminderServiceTest(unittest.TestCase):
         first = service.poll_once()
         second = service.poll_once()
 
-        self.assertEqual(first.candidate_count, 2)
-        self.assertEqual(first.delivered_count, 2)
+        self.assertEqual(first.candidate_count, 1)
+        self.assertEqual(first.delivered_count, 1)
         self.assertEqual(first.failed_count, 0)
-        self.assertEqual(second.candidate_count, 2)
+        self.assertEqual(second.candidate_count, 1)
         self.assertEqual(second.delivered_count, 0)
-        self.assertEqual(second.skipped_count, 2)
-        self.assertEqual(len(sink.events), 2)
-        self.assertTrue(any(event.source_type == "todo" and event.source_id == todo_id for event in sink.events))
+        self.assertEqual(second.skipped_count, 1)
+        self.assertEqual(len(sink.events), 1)
         self.assertTrue(
             any(event.source_type == "schedule" and event.source_id == schedule_id for event in sink.events)
         )
 
     def test_poll_once_rewrites_reminder_content_before_emit(self) -> None:
-        self.db.add_todo(
-            "准备发布",
-            due_at="2026-02-24 18:00",
+        self.db.add_schedule(
+            "项目同步",
+            "2026-02-24 11:00",
             remind_at="2026-02-24 10:00",
         )
         sink = _FakeSink()
@@ -86,12 +80,12 @@ class ReminderServiceTest(unittest.TestCase):
         self.assertEqual(stats.candidate_count, 1)
         self.assertEqual(stats.delivered_count, 1)
         self.assertEqual(len(sink.events), 1)
-        self.assertTrue(sink.events[0].content.startswith("【提醒管家】待办提醒 #1"))
+        self.assertTrue(sink.events[0].content.startswith("【提醒管家】日程提醒 #1"))
 
     def test_poll_once_rewrite_failure_falls_back_to_original_content(self) -> None:
-        self.db.add_todo(
-            "准备发布",
-            due_at="2026-02-24 18:00",
+        self.db.add_schedule(
+            "项目同步",
+            "2026-02-24 11:00",
             remind_at="2026-02-24 10:00",
         )
         sink = _FakeSink()
@@ -112,12 +106,15 @@ class ReminderServiceTest(unittest.TestCase):
         self.assertEqual(stats.candidate_count, 1)
         self.assertEqual(stats.delivered_count, 1)
         self.assertEqual(len(sink.events), 1)
-        self.assertEqual(sink.events[0].content, "待办提醒 #1: 准备发布（提醒时间 2026-02-24 10:00）")
+        self.assertEqual(
+            sink.events[0].content,
+            "日程提醒 #1: 项目同步（日程时间 2026-02-24 11:00，提醒时间 2026-02-24 10:00）",
+        )
 
     def test_poll_once_v1_keeps_catchup_disabled_even_when_configured(self) -> None:
-        self.db.add_todo(
-            "错过一分钟的提醒",
-            due_at="2026-02-24 18:00",
+        self.db.add_schedule(
+            "错过一分钟的日程提醒",
+            "2026-02-24 11:00",
             remind_at="2026-02-24 09:59",
         )
         sink = _FakeSink()
@@ -135,33 +132,13 @@ class ReminderServiceTest(unittest.TestCase):
         self.assertEqual(stats.delivered_count, 0)
         self.assertEqual(len(sink.events), 0)
 
-    def test_poll_once_skips_done_todo(self) -> None:
-        todo_id = self.db.add_todo(
-            "已完成事项",
-            due_at="2026-02-24 18:00",
-            remind_at="2026-02-24 10:00",
-        )
-        self.db.mark_todo_done(todo_id)
-        sink = _FakeSink()
-        service = ReminderService(
-            db=self.db,
-            sink=sink,
-            clock=lambda: self.fixed_now,
-            lookahead_seconds=0,
-        )
-
-        stats = service.poll_once()
-        self.assertEqual(stats.candidate_count, 0)
-        self.assertEqual(stats.delivered_count, 0)
-        self.assertEqual(len(sink.events), 0)
-
     def test_poll_once_sink_failure_does_not_mark_delivery(self) -> None:
-        self.db.add_todo(
+        self.db.add_schedule(
             "需要失败重试",
-            due_at="2026-02-24 18:00",
+            "2026-02-24 11:00",
             remind_at="2026-02-24 10:00",
         )
-        reminder_key = "todo:1:2026-02-24 10:00"
+        reminder_key = "schedule:1:2026-02-24 11:00:2026-02-24 10:00"
         sink = _FakeSink(raise_for_key=reminder_key)
         service = ReminderService(
             db=self.db,

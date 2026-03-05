@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import logging
 
-from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem, TodoItem
+from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
@@ -16,7 +16,6 @@ class ProactiveContextSnapshot:
     now: datetime
     lookahead_hours: int
     chat_lookback_hours: int
-    todos: list[TodoItem]
     schedules: list[ScheduleItem]
     turns: list[ChatTurn]
     user_profile_path: str
@@ -45,7 +44,7 @@ class ProactiveContextSnapshot:
                 "internet_search_allowed": internet_search_allowed,
             },
             "context_window": {
-                "todo_schedule_forward_hours": self.lookahead_hours,
+                "schedule_forward_hours": self.lookahead_hours,
                 "chat_history_backward_hours": self.chat_lookback_hours,
             },
             "user_profile": {
@@ -54,7 +53,6 @@ class ProactiveContextSnapshot:
                 "content": self.user_profile_content or "",
             },
             "internal_context": {
-                "todos": [_todo_to_payload(item) for item in self.todos],
                 "schedules": [_schedule_to_payload(item) for item in self.schedules],
                 "recent_chat_turns": [_turn_to_payload(item) for item in self.turns],
             },
@@ -85,7 +83,6 @@ def build_proactive_context_snapshot(
     scan_end = now + timedelta(hours=normalized_lookahead)
     window_days = max((normalized_lookahead + 23) // 24, 1)
 
-    todos = _collect_todos_in_window(db=db, now=now, scan_end=scan_end)
     schedules = db.list_schedules(
         window_start=now,
         window_end=scan_end,
@@ -104,26 +101,11 @@ def build_proactive_context_snapshot(
         now=now,
         lookahead_hours=normalized_lookahead,
         chat_lookback_hours=normalized_chat_lookback,
-        todos=todos,
         schedules=schedules,
         turns=turns,
         user_profile_path=resolved_profile_path,
         user_profile_content=profile_content,
     )
-
-
-def _collect_todos_in_window(*, db: AssistantDB, now: datetime, scan_end: datetime) -> list[TodoItem]:
-    result: list[TodoItem] = []
-    for item in db.list_todos():
-        if item.done:
-            continue
-        due_at = _parse_datetime(item.due_at)
-        if due_at is None:
-            continue
-        if due_at < now or due_at > scan_end:
-            continue
-        result.append(item)
-    return result
 
 
 def _load_user_profile(*, user_profile_path: str, logger: logging.Logger, max_chars: int) -> tuple[str, str | None]:
@@ -156,18 +138,6 @@ def _resolve_profile_path(raw_path: str) -> Path:
     return (PROJECT_ROOT / path).resolve()
 
 
-def _todo_to_payload(item: TodoItem) -> dict[str, object]:
-    return {
-        "id": item.id,
-        "content": item.content,
-        "tag": item.tag,
-        "priority": item.priority,
-        "done": item.done,
-        "due_at": item.due_at,
-        "remind_at": item.remind_at,
-    }
-
-
 def _schedule_to_payload(item: ScheduleItem) -> dict[str, object]:
     return {
         "id": item.id,
@@ -188,17 +158,6 @@ def _turn_to_payload(item: ChatTurn) -> dict[str, str]:
         "user_content": item.user_content,
         "assistant_content": item.assistant_content,
     }
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
-
-
 def _local_timezone_name(now: datetime) -> str:
     tzinfo = now.astimezone().tzinfo
     if tzinfo is None:

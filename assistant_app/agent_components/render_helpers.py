@@ -7,63 +7,6 @@ from typing import Any
 from assistant_app.db import ChatTurn
 from assistant_app.search import SearchResult
 
-TODO_TABLE_HEADERS = ["ID", "状态", "标签", "优先级", "内容", "创建时间", "完成时间", "截止时间", "提醒时间"]
-
-
-def _todo_table_rows(todos: list[Any]) -> list[list[str]]:
-    return [
-        [
-            str(item.id),
-            "完成" if item.done else "待办",
-            item.tag,
-            str(item.priority),
-            item.content,
-            item.created_at,
-            item.completed_at or "-",
-            item.due_at or "-",
-            item.remind_at or "-",
-        ]
-        for item in todos
-    ]
-
-
-def _render_todo_table(todos: list[Any]) -> str:
-    return _render_table(headers=TODO_TABLE_HEADERS, rows=_todo_table_rows(todos))
-
-
-def _todo_list_empty_text(*, tag: str | None, view_name: str) -> str:
-    if tag is None and view_name == "all":
-        return "暂无待办。"
-    if tag is None:
-        return f"视图 {view_name} 下暂无待办。"
-    if view_name == "all":
-        return f"标签 {tag} 下暂无待办。"
-    return f"标签 {tag} 的 {view_name} 视图下暂无待办。"
-
-
-def _todo_list_header(*, tag: str | None, view_name: str) -> str:
-    header_parts: list[str] = []
-    if tag is not None:
-        header_parts.append(f"标签: {tag}")
-    if view_name != "all":
-        header_parts.append(f"视图: {view_name}")
-    if not header_parts:
-        return "待办列表:"
-    return f"待办列表({', '.join(header_parts)}):"
-
-
-def _todo_search_empty_text(*, keyword: str, tag: str | None) -> str:
-    if tag is None:
-        return f"未找到包含“{keyword}”的待办。"
-    return f"未在标签 {tag} 下找到包含“{keyword}”的待办。"
-
-
-def _todo_search_header(*, keyword: str, tag: str | None) -> str:
-    if tag is None:
-        return f"搜索结果(关键词: {keyword}):"
-    return f"搜索结果(关键词: {keyword}, 标签: {tag}):"
-
-
 def _history_table_rows(turns: list[ChatTurn]) -> list[list[str]]:
     return [
         [
@@ -102,19 +45,6 @@ def _schedule_view_title(*, view_name: str, anchor: str | None, tag: str | None)
     if tag:
         title = f"{title} [标签:{tag}]"
     return title
-
-
-def _format_todo_meta_inline(due_at: str | None, remind_at: str | None, *, priority: int | None = None) -> str:
-    meta_parts: list[str] = []
-    if priority is not None:
-        meta_parts.append(f"优先级:{priority}")
-    if due_at:
-        meta_parts.append(f"截止:{due_at}")
-    if remind_at:
-        meta_parts.append(f"提醒:{remind_at}")
-    if not meta_parts:
-        return ""
-    return " | " + " ".join(meta_parts)
 
 
 def _format_schedule_remind_meta_inline(
@@ -219,13 +149,10 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
     if text.startswith("用法:") or text.startswith("未知命令"):
         return False
 
-    if tool == "todo":
-        if text.startswith("未找到待办 #") or text.startswith("提醒时间需要"):
-            return False
-    elif tool == "schedule":
+    if tool == "schedule":
         if text.startswith("未找到日程 #") or "没有可切换的重复规则" in text:
             return False
-    elif tool in {"history", "history_search"}:
+    if tool in {"history", "history_search"}:
         if text.startswith("未找到包含") or text.startswith("暂无历史会话"):
             return False
 
