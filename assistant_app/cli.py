@@ -17,6 +17,7 @@ from assistant_app.logging_setup import (
     configure_llm_trace_logger,
 )
 from assistant_app.persona import PersonaRewriter
+from assistant_app.proactive_reminder_service import ProactiveReminderService
 from assistant_app.reminder_service import ReminderService
 from assistant_app.reminder_sink import StdoutReminderSink
 from assistant_app.search import create_search_provider
@@ -183,9 +184,44 @@ def main() -> None:
             max_turns=config.user_profile_refresh_max_turns,
         )
         agent.set_user_profile_refresh_runner(user_profile_refresh_service.run_manual_refresh)
+    proactive_sender_holder: dict[str, Callable[[str, str], None] | None] = {"send": None}
+
+    def _send_proactive_text(open_id: str, text: str) -> None:
+        sender = proactive_sender_holder["send"]
+        if sender is None:
+            raise RuntimeError("feishu proactive sender not ready")
+        sender(open_id=open_id, text=text)
+
+    proactive_reminder_service: ProactiveReminderService | None = None
+    if config.proactive_reminder_enabled and not config.feishu_enabled:
+        app_logger.warning(
+            "proactive reminder requires feishu mode",
+            extra={"event": "proactive_config_requires_feishu"},
+        )
+    elif config.proactive_reminder_enabled:
+        proactive_reminder_service = ProactiveReminderService(
+            db=db,
+            llm_client=llm_client,
+            search_provider=search_provider,
+            logger=app_logger,
+            target_open_id=config.proactive_reminder_target_open_id,
+            send_text_to_open_id=_send_proactive_text,
+            lookahead_hours=config.proactive_reminder_lookahead_hours,
+            interval_minutes=config.proactive_reminder_interval_minutes,
+            night_quiet_hint=config.proactive_reminder_night_quiet_hint,
+            max_steps=config.plan_replan_max_steps,
+            user_profile_path=config.user_profile_path,
+            internet_search_top_k=config.internet_search_top_k,
+            final_content_rewriter=persona_rewriter.rewrite_final_response,
+        )
     timer_engine: TimerEngine | None = None
     feishu_runner = None
     if config.timer_enabled:
+        periodic_tasks: list[Callable[[], None]] = []
+        if user_profile_refresh_service is not None:
+            periodic_tasks.append(user_profile_refresh_service.poll_scheduled)
+        if proactive_reminder_service is not None:
+            periodic_tasks.append(proactive_reminder_service.poll_scheduled)
         reminder_sink = StdoutReminderSink(stream=sys.stdout)
         reminder_service = ReminderService(
             db=db,
@@ -198,9 +234,7 @@ def main() -> None:
         )
         timer_engine = TimerEngine(
             reminder_service=reminder_service,
-            periodic_tasks=[user_profile_refresh_service.poll_scheduled]
-            if user_profile_refresh_service is not None
-            else None,
+            periodic_tasks=periodic_tasks or None,
             poll_interval_seconds=config.timer_poll_interval_seconds,
             logger=app_logger,
         )
@@ -232,6 +266,7 @@ def main() -> None:
                 done_emoji_type=config.feishu_done_emoji_type,
             )
             feishu_runner.start_background()
+            proactive_sender_holder["send"] = feishu_runner.send_proactive_text
             print("助手> Feishu 长连接已在后台启动（单聊模式）。")
 
     try:
@@ -260,6 +295,7 @@ def main() -> None:
                 continue
             print(f"助手> {response}")
     finally:
+        proactive_sender_holder["send"] = None
         if feishu_runner is not None:
             feishu_runner.stop()
         if timer_engine is not None:

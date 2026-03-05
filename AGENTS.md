@@ -112,6 +112,11 @@ Optional runtime flags (all supported in `.env`):
 - `FEISHU_ACK_REACTION_ENABLED`: send ack reaction on incoming DM (default `true`)
 - `FEISHU_ACK_EMOJI_TYPE`: ack emoji type (default `OK`)
 - `FEISHU_DONE_EMOJI_TYPE`: done emoji type (default `DONE`)
+- `PROACTIVE_REMINDER_ENABLED`: enable proactive reminder evaluation (default `false`)
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages
+- `PROACTIVE_REMINDER_INTERVAL_MINUTES`: proactive evaluation interval in minutes (default `60`, min `60`)
+- `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`: proactive context lookahead window in hours (default `24`)
+- `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`: soft quiet-time hint in proactive prompt (default `23:00-08:00`)
 
 ## Supplement: Detailed Behavior Notes (moved from README)
 - Todo/Schedule both support full CRUD.
@@ -147,6 +152,11 @@ Optional runtime flags (all supported in `.env`):
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
 - Local reminder output can also be persona-rewritten (fallback on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
+- Proactive reminder uses an independent ReAct runtime (not coupled with the existing task ReAct loop).
+- Proactive ReAct reuses `PLAN_REPLAN_MAX_STEPS`, disables `ask_user`, and keeps mutating tools blocked by runtime allowlist/validator.
+- Proactive ReAct allows `internet_search` as optional evidence and injects `USER_PROFILE_PATH` content into prompt when available.
+- Proactive reminder default context window: todo/schedule in next 24h + chat_history in last 24h.
+- Proactive reminder runs on timer periodic tasks and sends to fixed `PROACTIVE_REMINDER_TARGET_OPEN_ID` via Feishu when `done.notify=true`.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).

@@ -57,6 +57,11 @@ class AppConfig:
     feishu_ack_reaction_enabled: bool
     feishu_ack_emoji_type: str
     feishu_done_emoji_type: str
+    proactive_reminder_enabled: bool
+    proactive_reminder_target_open_id: str
+    proactive_reminder_interval_minutes: int
+    proactive_reminder_lookahead_hours: int
+    proactive_reminder_night_quiet_hint: str
 
 
 def load_env_file(env_path: str = ".env") -> None:
@@ -142,6 +147,14 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
         feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="OK"),
         feishu_done_emoji_type=_read_env_text("FEISHU_DONE_EMOJI_TYPE", default="DONE"),
+        proactive_reminder_enabled=_read_env_bool("PROACTIVE_REMINDER_ENABLED", default=False),
+        proactive_reminder_target_open_id=_read_env_text("PROACTIVE_REMINDER_TARGET_OPEN_ID", default=""),
+        proactive_reminder_interval_minutes=_read_env_int("PROACTIVE_REMINDER_INTERVAL_MINUTES", default=60, min_value=60),
+        proactive_reminder_lookahead_hours=_read_env_int("PROACTIVE_REMINDER_LOOKAHEAD_HOURS", default=24, min_value=1),
+        proactive_reminder_night_quiet_hint=_read_env_text(
+            "PROACTIVE_REMINDER_NIGHT_QUIET_HINT",
+            default="23:00-08:00",
+        ),
     )
 
 

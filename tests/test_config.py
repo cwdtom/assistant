@@ -64,6 +64,11 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
         self.assertEqual(config.feishu_done_emoji_type, "DONE")
+        self.assertFalse(config.proactive_reminder_enabled)
+        self.assertEqual(config.proactive_reminder_target_open_id, "")
+        self.assertEqual(config.proactive_reminder_interval_minutes, 60)
+        self.assertEqual(config.proactive_reminder_lookahead_hours, 24)
+        self.assertEqual(config.proactive_reminder_night_quiet_hint, "23:00-08:00")
 
     def test_load_config_falls_back_to_openai_env(self) -> None:
         env = {
@@ -158,6 +163,11 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_ACK_REACTION_ENABLED": "off",
             "FEISHU_ACK_EMOJI_TYPE": "THUMBSUP",
             "FEISHU_DONE_EMOJI_TYPE": "DONE_CUSTOM",
+            "PROACTIVE_REMINDER_ENABLED": "on",
+            "PROACTIVE_REMINDER_TARGET_OPEN_ID": "ou_target_1",
+            "PROACTIVE_REMINDER_INTERVAL_MINUTES": "120",
+            "PROACTIVE_REMINDER_LOOKAHEAD_HOURS": "48",
+            "PROACTIVE_REMINDER_NIGHT_QUIET_HINT": "22:00-07:00",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -203,6 +213,11 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "THUMBSUP")
         self.assertEqual(config.feishu_done_emoji_type, "DONE_CUSTOM")
+        self.assertTrue(config.proactive_reminder_enabled)
+        self.assertEqual(config.proactive_reminder_target_open_id, "ou_target_1")
+        self.assertEqual(config.proactive_reminder_interval_minutes, 120)
+        self.assertEqual(config.proactive_reminder_lookahead_hours, 48)
+        self.assertEqual(config.proactive_reminder_night_quiet_hint, "22:00-07:00")
 
     def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
         env = {
@@ -247,6 +262,11 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_ACK_REACTION_ENABLED": "invalid",
             "FEISHU_ACK_EMOJI_TYPE": "   ",
             "FEISHU_DONE_EMOJI_TYPE": "   ",
+            "PROACTIVE_REMINDER_ENABLED": "invalid",
+            "PROACTIVE_REMINDER_TARGET_OPEN_ID": "   ",
+            "PROACTIVE_REMINDER_INTERVAL_MINUTES": "59",
+            "PROACTIVE_REMINDER_LOOKAHEAD_HOURS": "0",
+            "PROACTIVE_REMINDER_NIGHT_QUIET_HINT": "   ",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -292,6 +312,11 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "")
         self.assertEqual(config.feishu_done_emoji_type, "")
+        self.assertFalse(config.proactive_reminder_enabled)
+        self.assertEqual(config.proactive_reminder_target_open_id, "")
+        self.assertEqual(config.proactive_reminder_interval_minutes, 60)
+        self.assertEqual(config.proactive_reminder_lookahead_hours, 24)
+        self.assertEqual(config.proactive_reminder_night_quiet_hint, "")
 
     def test_load_env_file_prefers_dotenv_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -544,6 +544,8 @@ class FeishuLongConnectionRunner:
         self._sdk_module = sdk_module
         self._ws_client: Any | None = None
         self._thread: threading.Thread | None = None
+        self._proactive_sender_lock = threading.Lock()
+        self._send_text_to_open_id: Callable[[str, str], None] | None = None
 
     def start_background(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -562,6 +564,19 @@ class FeishuLongConnectionRunner:
             except Exception:  # noqa: BLE001
                 self._logger.warning("failed to stop feishu ws client", exc_info=True)
 
+    def send_proactive_text(self, *, open_id: str, text: str) -> None:
+        normalized_open_id = open_id.strip()
+        normalized_text = text.strip()
+        if not normalized_open_id:
+            raise ValueError("open_id is required")
+        if not normalized_text:
+            raise ValueError("text is required")
+        with self._proactive_sender_lock:
+            send_text_to_open_id = self._send_text_to_open_id
+        if send_text_to_open_id is None:
+            raise RuntimeError("feishu proactive sender not ready")
+        send_text_to_open_id(normalized_open_id, normalized_text)
+
     def _run(self) -> None:
         try:
             lark_module: Any = self._sdk_module
@@ -578,8 +593,13 @@ class FeishuLongConnectionRunner:
             def send_reaction(message_id: str, emoji_type: str) -> None:
                 self._send_ack_reaction(api_client=api_client, message_id=message_id, emoji_type=emoji_type)
 
+            def send_text_to_open_id(open_id: str, text: str) -> None:
+                self._send_text_message_by_open_id(api_client=api_client, open_id=open_id, text=text)
+
             self._event_processor.set_send_text(send_text)
             self._event_processor.set_send_reaction(send_reaction)
+            with self._proactive_sender_lock:
+                self._send_text_to_open_id = send_text_to_open_id
 
             event_handler = (
                 lark_module.EventDispatcherHandler.builder("", "")
@@ -599,6 +619,9 @@ class FeishuLongConnectionRunner:
             self._logger.exception("lark_oapi 未安装，无法启动飞书长连接")
         except Exception:  # noqa: BLE001
             self._logger.exception("飞书长连接运行失败")
+        finally:
+            with self._proactive_sender_lock:
+                self._send_text_to_open_id = None
 
     @staticmethod
     def _send_text_message(*, api_client: Any, chat_id: str, text: str) -> None:
@@ -613,6 +636,40 @@ class FeishuLongConnectionRunner:
             .request_body(
                 CreateMessageRequestBody.builder()
                 .receive_id(chat_id)
+                .msg_type("text")
+                .content(json.dumps({"text": text}, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        response = api_client.im.v1.message.create(request)
+
+        success = getattr(response, "success", None)
+        if callable(success):
+            if success():
+                return
+            code = getattr(response, "code", "unknown")
+            msg = getattr(response, "msg", "")
+            raise RuntimeError(f"send message failed: code={code}, msg={msg}")
+
+        code = _read_path(response, "code")
+        if code not in (None, 0):
+            msg = _read_path(response, "msg")
+            raise RuntimeError(f"send message failed: code={code}, msg={msg}")
+
+    @staticmethod
+    def _send_text_message_by_open_id(*, api_client: Any, open_id: str, text: str) -> None:
+        from lark_oapi.api.im.v1 import (  # type: ignore[import-untyped]
+            CreateMessageRequest,
+            CreateMessageRequestBody,
+        )
+
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type("open_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(open_id)
                 .msg_type("text")
                 .content(json.dumps({"text": text}, ensure_ascii=False))
                 .build()

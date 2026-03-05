@@ -117,6 +117,11 @@ python main.py
 - `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
 - `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`）
+- `PROACTIVE_REMINDER_ENABLED`：是否启用主动提醒（默认 `false`）
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：主动提醒目标用户 open_id（启用时必填）
+- `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
+- `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`：主动提醒上下文前瞻窗口小时数（默认 `24`）
+- `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`：夜间静默软约束提示（默认 `23:00-08:00`）
 
 完整变量与行为开关以 `AGENTS.md` 为准；`.env.example` 提供常用配置示例。
 
@@ -146,6 +151,8 @@ python main.py
 - Bocha 结果摘要提取规则：优先 `summary`，缺失时回退 `snippet`
 - 若启用 Feishu，plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
+- 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估，并在 `notify=true` 时向固定 `open_id` 主动发送 Feishu 文本
+- Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 todo/schedule + 过去 24 小时 chat_history 进行决策
 
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环
