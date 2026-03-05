@@ -126,6 +126,21 @@ class _ProgressReportingTaskAwareAgent:
             callback(result)
 
 
+class _RecordListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        with self._lock:
+            self.records.append(record)
+
+    def messages(self) -> list[str]:
+        with self._lock:
+            return [record.getMessage() for record in self.records]
+
+
 class FeishuAdapterTest(unittest.TestCase):
     def _wait_until(self, predicate, *, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
         deadline = time.monotonic() + timeout
@@ -290,6 +305,63 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(agent.inputs, ["安排下今天"])
         self.assertEqual(reactions, [("om_1", "OK")])
         self.assertEqual(sent, [("oc_1", "ab"), ("oc_1", "cd"), ("oc_1", "ef")])
+
+    def test_event_processor_logs_received_and_sent_message_text(self) -> None:
+        sent: list[tuple[str, str]] = []
+        logger = logging.getLogger("test.feishu_adapter.message_text_logs")
+        handler = _RecordListHandler()
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        agent = _FakeAgent(response="处理完成")
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=lambda _message_id, _emoji_type: None,
+            logger=logger,
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_log_1",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"请记录这条消息"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(
+            lambda: any(
+                "feishu inbound message received: message_id=om_log_1 chat_id=oc_1 open_id=ou_1 text=请记录这条消息" in message
+                for message in handler.messages()
+            )
+            and any(
+                "feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text=处理完成" in message
+                for message in handler.messages()
+            ),
+            timeout=2.0,
+        )
+        messages = handler.messages()
+        self.assertTrue(
+            any(
+                "feishu inbound message received: message_id=om_log_1 chat_id=oc_1 open_id=ou_1 text=请记录这条消息"
+                in message
+                for message in messages
+            )
+        )
+        self.assertTrue(
+            any(
+                "feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text=处理完成" in message
+                for message in messages
+            )
+        )
+        self.assertEqual(sent, [("oc_1", "处理完成")])
 
     def test_event_processor_retries_three_times_before_success(self) -> None:
         attempts = {"count": 0}
@@ -844,17 +916,23 @@ class FeishuAdapterTest(unittest.TestCase):
 
     def test_feishu_runner_send_proactive_text_uses_open_id_sender(self) -> None:
         agent = _FakeAgent(response="ok")
+        logger = logging.getLogger("test.feishu_adapter.proactive_send")
+        handler = _RecordListHandler()
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
         processor = FeishuEventProcessor(
             agent=agent,
             send_text=lambda _chat_id, _text: None,
             send_reaction=lambda _message_id, _emoji_type: None,
-            logger=logging.getLogger("test.feishu_adapter.proactive_send"),
+            logger=logger,
         )
         runner = FeishuLongConnectionRunner(
             app_id="app_id",
             app_secret="app_secret",
             event_processor=processor,
-            logger=logging.getLogger("test.feishu_adapter.proactive_send"),
+            logger=logger,
             sdk_module=None,
         )
         sent: list[tuple[str, str]] = []
@@ -863,6 +941,12 @@ class FeishuAdapterTest(unittest.TestCase):
         runner.send_proactive_text(open_id="ou_target", text="主动提醒")
 
         self.assertEqual(sent, [("ou_target", "主动提醒")])
+        self.assertTrue(
+            any(
+                "feishu proactive response sent: open_id=ou_target text=主动提醒" in message
+                for message in handler.messages()
+            )
+        )
 
     def test_feishu_runner_send_proactive_text_requires_open_id_and_text(self) -> None:
         agent = _FakeAgent(response="ok")

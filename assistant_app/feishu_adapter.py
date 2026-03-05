@@ -272,13 +272,17 @@ class FeishuEventProcessor:
             try:
                 self._send_text(update.chat_id, message)
                 self._logger.info(
-                    "feishu subtask progress sent: message_id=%s",
+                    "feishu subtask progress sent: message_id=%s chat_id=%s text=%s",
                     update.message_id,
+                    update.chat_id,
+                    message,
                 )
             except Exception:  # noqa: BLE001
                 self._logger.warning(
-                    "feishu subtask progress dropped: message_id=%s",
+                    "feishu subtask progress dropped: message_id=%s chat_id=%s text=%s",
                     update.message_id,
+                    update.chat_id,
+                    message,
                     exc_info=True,
                 )
 
@@ -286,6 +290,13 @@ class FeishuEventProcessor:
         message = extract_text_message(event_payload)
         if message is None:
             return
+        self._logger.info(
+            "feishu inbound message received: message_id=%s chat_id=%s open_id=%s text=%s",
+            message.message_id,
+            message.chat_id,
+            message.open_id,
+            message.text,
+        )
 
         if self._allowed_open_ids and message.open_id not in self._allowed_open_ids:
             self._logger.info("feishu event dropped: open_id not allowed")
@@ -389,12 +400,13 @@ class FeishuEventProcessor:
                                 break
                             self._send_with_retry(chat_id=active_task.chat_id, text=chunk)
                             self._logger.info(
-                                "feishu response sent: message_id=%s message=%s/%s chunk=%s/%s",
+                                "feishu response sent: message_id=%s message=%s/%s chunk=%s/%s text=%s",
                                 active_task.latest_message_id,
                                 message_index,
                                 len(semantic_messages),
                                 chunk_index,
                                 len(chunks),
+                                chunk,
                             )
                         if interrupted_while_sending:
                             break
@@ -575,7 +587,21 @@ class FeishuLongConnectionRunner:
             send_text_to_open_id = self._send_text_to_open_id
         if send_text_to_open_id is None:
             raise RuntimeError("feishu proactive sender not ready")
-        send_text_to_open_id(normalized_open_id, normalized_text)
+        try:
+            send_text_to_open_id(normalized_open_id, normalized_text)
+            self._logger.info(
+                "feishu proactive response sent: open_id=%s text=%s",
+                normalized_open_id,
+                normalized_text,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.warning(
+                "feishu proactive response failed: open_id=%s text=%s",
+                normalized_open_id,
+                normalized_text,
+                exc_info=True,
+            )
+            raise
 
     def _run(self) -> None:
         try:

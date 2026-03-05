@@ -177,6 +177,10 @@ python main.py
 - 常见排障字段：
   - `event`：事件名，例如 `llm_request`、`timer_tick`、`user_profile_read_failed`
   - `context`：事件上下文（message_id、call_id、路径、统计值等）
+- Feishu 通道日志会记录消息内容文本：
+  - 入站：`feishu inbound message received`（含 `message_id/chat_id/open_id/text`）
+  - 出站：`feishu response sent`、`feishu subtask progress sent`、`feishu proactive response sent`（含 `text`）
+  - 若需避免记录消息正文，可将 `FEISHU_LOG_PATH` 置空禁用该 logger 输出
 - 快速排查示例：
 ```bash
 # 看最近 30 条日志
