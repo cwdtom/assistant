@@ -1,0 +1,4 @@
+interface:
+  display_name: "后端能力转Skill"
+  short_description: "将现有后端项目抽取成可复用 skill（流程 + 模板 + references + 校验）"
+  default_prompt: "请使用 be-skill：先分析项目实现与边界，再生成可执行的 skill 包（默认 SKILL.md、references），并按目标平台决定是否需要额外元数据文件。"
