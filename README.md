@@ -107,6 +107,7 @@ python main.py
 - `DEEPSEEK_API_KEY`：必填
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
+- LLM 配置仅支持 `DEEPSEEK_*` 环境变量，不再兼容 `OPENAI_*` 同名配置
 - `LLM_TEMPERATURE`：默认 LLM 调用温度（默认 `1.3`，范围 `0.0~2.0`；`user_profile refresh` 固定使用 `0.0`）
 - `ASSISTANT_DB_PATH`：SQLite 路径（默认 `assistant.db`）
 - `USER_PROFILE_PATH`：user_profile 文件路径（用于计划上下文与自动刷新）

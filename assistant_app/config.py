@@ -88,9 +88,9 @@ def load_env_file(env_path: str = ".env") -> None:
 def load_config(load_dotenv: bool = True) -> AppConfig:
     if load_dotenv:
         load_env_file()
-    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.deepseek.com"
-    model = os.getenv("DEEPSEEK_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-chat"
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    base_url = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+    model = os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
     task_cancel_command = (os.getenv("TASK_CANCEL_COMMAND") or "取消当前任务").strip() or "取消当前任务"
     search_provider = (os.getenv("SEARCH_PROVIDER") or "bocha").strip().lower() or "bocha"
     if search_provider not in {"bing", "bocha", "bochaai"}:

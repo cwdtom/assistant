@@ -17,7 +17,6 @@ class ConfigTest(unittest.TestCase):
             "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
             "DEEPSEEK_MODEL": "deepseek-chat",
             "ASSISTANT_DB_PATH": "custom.db",
-            "OPENAI_API_KEY": "legacy-key",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -70,7 +69,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.proactive_reminder_lookahead_hours, 24)
         self.assertEqual(config.proactive_reminder_night_quiet_hint, "23:00-08:00")
 
-    def test_load_config_falls_back_to_openai_env(self) -> None:
+    def test_load_config_ignores_openai_compatibility_env(self) -> None:
         env = {
             "OPENAI_API_KEY": "legacy-key",
             "OPENAI_BASE_URL": "https://legacy.example.com/v1",
@@ -79,9 +78,9 @@ class ConfigTest(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
 
-        self.assertEqual(config.api_key, "legacy-key")
-        self.assertEqual(config.base_url, "https://legacy.example.com/v1")
-        self.assertEqual(config.model, "legacy-model")
+        self.assertIsNone(config.api_key)
+        self.assertEqual(config.base_url, "https://api.deepseek.com")
+        self.assertEqual(config.model, "deepseek-chat")
         self.assertEqual(config.llm_temperature, 1.3)
         self.assertEqual(config.db_path, "assistant.db")
         self.assertEqual(config.user_profile_path, "")
