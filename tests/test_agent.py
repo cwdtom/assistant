@@ -1287,6 +1287,37 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("任务已完成", response)
         self.assertEqual(progress_updates, ["任务目标：扩展后的目标"])
 
+    def test_replan_premature_done_with_pending_non_summary_step_is_ignored(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["查询明天日程", "添加临时日程"]),
+                _thought_continue("schedule", "/schedule view day 2026-03-07"),
+                _planner_done("已查询明天日程。"),
+                _planner_done("任务完成。明天的临时日程已添加，ID是#999。"),
+                _thought_continue(
+                    "schedule",
+                    "/schedule add 2026-03-07 09:00 临时日程 --remind 2026-03-07 08:50",
+                ),
+                _planner_done("已添加临时日程。"),
+                _planner_done("最终完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("明天先查一下日程，再加一个临时日程")
+
+        self.assertIn("最终完成", response)
+        matched = [
+            item
+            for item in self.db.list_schedules()
+            if item.title == "临时日程" and item.event_time == "2026-03-07 09:00"
+        ]
+        self.assertEqual(len(matched), 1)
+        phases = [_extract_phase_from_messages(call) for call in fake_llm.calls]
+        self.assertIn("replan", phases)
+        replan_index = phases.index("replan")
+        self.assertIn("thought", phases[replan_index + 1 :])
+
     def test_replan_continue_without_completed_subtask_does_not_notify_subtask_completion_result(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1452,7 +1483,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("最终完成", response)
 
         replan_calls = [call for call in fake_llm.calls if _extract_phase_from_messages(call) == "replan"]
-        self.assertEqual(len(replan_calls), 1)
+        self.assertGreaterEqual(len(replan_calls), 1)
         replan_payload = _extract_payload_from_messages(replan_calls[0])
         self.assertNotIn("tool_contract", replan_payload)
         self.assertNotIn("observations", replan_payload)

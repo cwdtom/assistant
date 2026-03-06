@@ -3,6 +3,30 @@ from __future__ import annotations
 from typing import Any
 
 
+_SUMMARY_STEP_KEYWORDS = ("总结", "汇总", "收尾", "输出结果", "最终", "回复")
+
+
+def _is_summary_like_step_text(step: str) -> bool:
+    normalized = step.strip()
+    if not normalized:
+        return True
+    return any(keyword in normalized for keyword in _SUMMARY_STEP_KEYWORDS)
+
+
+def _remaining_pending_plan_items(outer: Any) -> list[str]:
+    latest_plan = getattr(outer, "latest_plan", None)
+    if not isinstance(latest_plan, list):
+        return []
+    remaining: list[str] = []
+    for step in latest_plan:
+        if bool(getattr(step, "completed", False)):
+            continue
+        item = str(getattr(step, "item", "")).strip()
+        if item:
+            remaining.append(item)
+    return remaining
+
+
 def run_outer_plan_loop(agent: Any, task: Any) -> str:
     from assistant_app.agent_components.models import TaskInterruptedError, ThoughtToolCallingError
 
@@ -144,6 +168,23 @@ def run_replan_gate(agent: Any, task: Any) -> tuple[str, str | None]:
     agent._append_planner_decision_observation(task, phase="replan", decision=replan_decision)
     status = str(replan_decision.get("status") or "").strip().lower()
     if status == "done":
+        remaining_items = _remaining_pending_plan_items(outer)
+        non_summary_remaining = [item for item in remaining_items if not _is_summary_like_step_text(item)]
+        if non_summary_remaining:
+            task.needs_replan = False
+            agent._append_observation(
+                task,
+                PlannerObservation(
+                    tool="replan",
+                    input_text="done",
+                    ok=False,
+                    result="replan 提前 done：仍有未完成非收尾步骤，忽略本次 done 并继续当前计划。",
+                ),
+            )
+            agent._emit_progress(
+                "重规划返回 done，但仍存在未完成非收尾步骤；已忽略该结果并继续执行剩余计划。"
+            )
+            return "ok", None
         response = str(replan_decision.get("response") or "").strip()
         task.needs_replan = False
         return "done", response or None
