@@ -7,6 +7,20 @@ from assistant_app.llm import OpenAICompatibleClient
 
 
 class OpenAICompatibleClientTest(unittest.TestCase):
+    def test_reply_uses_default_temperature_when_not_specified(self) -> None:
+        client = OpenAICompatibleClient(
+            api_key="test-key",
+            base_url="https://api.example.com",
+            model="test-model",
+        )
+        messages = [{"role": "user", "content": "你好"}]
+
+        with patch.object(client, "_create_reply", return_value="ok") as mock_create:
+            result = client.reply(messages)
+
+        self.assertEqual(result, "ok")
+        mock_create.assert_called_once_with(messages=messages, temperature=1.3)
+
     def test_reply_uses_configured_temperature(self) -> None:
         client = OpenAICompatibleClient(
             api_key="test-key",

@@ -14,6 +14,9 @@ from assistant_app.cli import (
     _configure_llm_trace_logger,
     _exit_cli,
     _handle_input_with_feedback,
+    _is_feishu_calendar_sync_configured,
+    _is_feishu_configured,
+    _is_proactive_reminder_configured,
     _resolve_progress_color,
     _should_show_waiting,
 )
@@ -57,6 +60,22 @@ class CLIFeedbackTest(unittest.TestCase):
     def test_should_not_show_waiting_without_llm(self) -> None:
         agent = _FakeAgent(llm_enabled=False)
         self.assertFalse(_should_show_waiting(agent, "今天怎么安排"))
+
+    def test_is_feishu_configured_requires_both_credentials(self) -> None:
+        self.assertTrue(_is_feishu_configured("app-id", "app-secret"))
+        self.assertFalse(_is_feishu_configured("app-id", ""))
+        self.assertFalse(_is_feishu_configured("", "app-secret"))
+        self.assertFalse(_is_feishu_configured("   ", "secret"))
+
+    def test_is_feishu_calendar_sync_configured_requires_calendar_id(self) -> None:
+        self.assertTrue(_is_feishu_calendar_sync_configured("calendar-id"))
+        self.assertFalse(_is_feishu_calendar_sync_configured(""))
+        self.assertFalse(_is_feishu_calendar_sync_configured("   "))
+
+    def test_is_proactive_reminder_configured_requires_target_open_id(self) -> None:
+        self.assertTrue(_is_proactive_reminder_configured("ou_target"))
+        self.assertFalse(_is_proactive_reminder_configured(""))
+        self.assertFalse(_is_proactive_reminder_configured("   "))
 
     def test_handle_input_with_feedback_renders_progress_lines(self) -> None:
         agent = _FakeAgent(llm_enabled=True)

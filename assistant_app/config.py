@@ -43,7 +43,6 @@ class AppConfig:
     timer_batch_limit: int
     persona_rewrite_enabled: bool
     assistant_persona: str
-    feishu_enabled: bool
     feishu_app_id: str
     feishu_app_secret: str
     feishu_allowed_open_ids: tuple[str, ...]
@@ -55,12 +54,10 @@ class AppConfig:
     feishu_ack_reaction_enabled: bool
     feishu_ack_emoji_type: str
     feishu_done_emoji_type: str
-    feishu_calendar_sync_enabled: bool
     feishu_calendar_id: str
     feishu_calendar_reconcile_interval_minutes: int
     feishu_calendar_bootstrap_past_days: int
     feishu_calendar_bootstrap_future_days: int
-    proactive_reminder_enabled: bool
     proactive_reminder_target_open_id: str
     proactive_reminder_interval_minutes: int
     proactive_reminder_lookahead_hours: int
@@ -106,7 +103,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         api_key=api_key,
         base_url=base_url,
         model=model,
-        llm_temperature=_read_env_float("LLM_TEMPERATURE", default=0.3, min_value=0.0, max_value=2.0),
+        llm_temperature=_read_env_float("LLM_TEMPERATURE", default=1.3, min_value=0.0, max_value=2.0),
         db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
         user_profile_path=_read_env_text("USER_PROFILE_PATH", default=""),
         user_profile_refresh_enabled=_read_env_bool("USER_PROFILE_REFRESH_ENABLED", default=True),
@@ -136,19 +133,17 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         timer_batch_limit=_read_env_int("TIMER_BATCH_LIMIT", default=200, min_value=1),
         persona_rewrite_enabled=_read_env_bool("PERSONA_REWRITE_ENABLED", default=True),
         assistant_persona=_read_env_text("ASSISTANT_PERSONA", default=""),
-        feishu_enabled=_read_env_bool("FEISHU_ENABLED", default=False),
         feishu_app_id=_read_env_text("FEISHU_APP_ID", default=""),
         feishu_app_secret=_read_env_text("FEISHU_APP_SECRET", default=""),
         feishu_allowed_open_ids=_read_env_list("FEISHU_ALLOWED_OPEN_IDS"),
         feishu_send_retry_count=_read_env_int("FEISHU_SEND_RETRY_COUNT", default=3, min_value=0),
-        feishu_text_chunk_size=_read_env_int("FEISHU_TEXT_CHUNK_SIZE", default=1500, min_value=1),
+        feishu_text_chunk_size=_read_env_int("FEISHU_TEXT_CHUNK_SIZE", default=5000, min_value=1),
         feishu_dedup_ttl_seconds=_read_env_int("FEISHU_DEDUP_TTL_SECONDS", default=600, min_value=1),
         feishu_log_path=feishu_log_path,
         feishu_log_retention_days=_read_env_int("FEISHU_LOG_RETENTION_DAYS", default=7, min_value=1),
         feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
-        feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="OK"),
+        feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="Get"),
         feishu_done_emoji_type=_read_env_text("FEISHU_DONE_EMOJI_TYPE", default="DONE"),
-        feishu_calendar_sync_enabled=_read_env_bool("FEISHU_CALENDAR_SYNC_ENABLED", default=False),
         feishu_calendar_id=_read_env_text("FEISHU_CALENDAR_ID", default=""),
         feishu_calendar_reconcile_interval_minutes=_read_env_int(
             "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES", default=10, min_value=1
@@ -159,7 +154,6 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         feishu_calendar_bootstrap_future_days=_read_env_int(
             "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS", default=5, min_value=0
         ),
-        proactive_reminder_enabled=_read_env_bool("PROACTIVE_REMINDER_ENABLED", default=False),
         proactive_reminder_target_open_id=_read_env_text("PROACTIVE_REMINDER_TARGET_OPEN_ID", default=""),
         proactive_reminder_interval_minutes=_read_env_int("PROACTIVE_REMINDER_INTERVAL_MINUTES", default=60, min_value=60),
         proactive_reminder_lookahead_hours=_read_env_int("PROACTIVE_REMINDER_LOOKAHEAD_HOURS", default=24, min_value=1),

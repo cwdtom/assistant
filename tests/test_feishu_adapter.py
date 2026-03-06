@@ -303,7 +303,7 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(lambda: len(agent.inputs) == 1 and len(sent) == 3 and len(reactions) == 1)
         self.assertEqual(agent.inputs, ["安排下今天"])
-        self.assertEqual(reactions, [("om_1", "OK")])
+        self.assertEqual(reactions, [("om_1", "Get")])
         self.assertEqual(sent, [("oc_1", "ab"), ("oc_1", "cd"), ("oc_1", "ef")])
 
     def test_event_processor_logs_received_and_sent_message_text(self) -> None:
@@ -437,7 +437,7 @@ class FeishuAdapterTest(unittest.TestCase):
             send_text=lambda chat_id, text: sent.append((chat_id, text)),
             send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
             logger=logging.getLogger("test.feishu_adapter.semantic_split"),
-            text_chunk_size=1500,
+            text_chunk_size=5000,
         )
         payload = {
             "event": {
@@ -455,7 +455,7 @@ class FeishuAdapterTest(unittest.TestCase):
         processor.handle_event(payload)
 
         self._wait_until(lambda: len(reactions) == 1 and len(sent) == 2)
-        self.assertEqual(reactions, [("om_2", "OK")])
+        self.assertEqual(reactions, [("om_2", "Get")])
         self.assertEqual(sent, [("oc_1", "先同步结论。"), ("oc_1", "补充下一步：今天 18:00 前完成。")])
 
     def test_event_processor_sends_done_reaction_when_task_completed(self) -> None:
@@ -485,7 +485,7 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(lambda: len(agent.inputs) == 1 and len(reactions) == 2 and len(sent) == 1)
         self.assertEqual(agent.inputs, ["安排并给出结论"])
-        self.assertEqual(reactions, [("om_done", "OK"), ("om_done", "DONE")])
+        self.assertEqual(reactions, [("om_done", "Get"), ("om_done", "DONE")])
         self.assertEqual(sent, [("oc_1", "任务处理完成。")])
 
     def test_event_processor_uses_configured_done_emoji_type(self) -> None:
@@ -514,7 +514,7 @@ class FeishuAdapterTest(unittest.TestCase):
         processor.handle_event(payload)
 
         self._wait_until(lambda: len(reactions) == 2)
-        self.assertEqual(reactions, [("om_custom_done", "OK"), ("om_custom_done", "CHECKMARK")])
+        self.assertEqual(reactions, [("om_custom_done", "Get"), ("om_custom_done", "CHECKMARK")])
 
     def test_event_processor_task_completed_without_text_skips_text_send(self) -> None:
         sent: list[tuple[str, str]] = []
@@ -542,7 +542,7 @@ class FeishuAdapterTest(unittest.TestCase):
         processor.handle_event(payload)
 
         self._wait_until(lambda: len(reactions) == 2)
-        self.assertEqual(reactions, [("om_done_empty", "OK"), ("om_done_empty", "DONE")])
+        self.assertEqual(reactions, [("om_done_empty", "Get"), ("om_done_empty", "DONE")])
         self.assertEqual(sent, [])
 
     def test_event_processor_async_subtask_progress_rewrites_then_sends(self) -> None:
@@ -762,8 +762,8 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(
             reactions,
             [
-                ("om_busy_1", "OK"),
-                ("om_busy_2", "OK"),
+                ("om_busy_1", "Get"),
+                ("om_busy_2", "Get"),
                 ("om_busy_2", "DONE"),
             ],
         )
@@ -809,7 +809,7 @@ class FeishuAdapterTest(unittest.TestCase):
         processor.handle_event(second_payload)
 
         # 第二条不在“收到时”ACK，而是在合并任务真正开始执行时ACK。
-        self.assertEqual(reactions, [("om_ack_1", "OK")])
+        self.assertEqual(reactions, [("om_ack_1", "Get")])
 
         agent.release_first_call.set()
         first_thread.join(timeout=2.0)
@@ -818,8 +818,8 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(
             reactions,
             [
-                ("om_ack_1", "OK"),
-                ("om_ack_2", "OK"),
+                ("om_ack_1", "Get"),
+                ("om_ack_2", "Get"),
                 ("om_ack_2", "DONE"),
             ],
         )
@@ -873,8 +873,8 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(
             reactions,
             [
-                ("om_chat_a_1", "OK"),
-                ("om_chat_b_1", "OK"),
+                ("om_chat_a_1", "Get"),
+                ("om_chat_b_1", "Get"),
                 ("om_chat_b_1", "DONE"),
             ],
         )
@@ -937,8 +937,8 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(
             reactions,
             [
-                ("om_abort_1", "OK"),
-                ("om_abort_2", "OK"),
+                ("om_abort_1", "Get"),
+                ("om_abort_2", "Get"),
                 ("om_abort_2", "DONE"),
             ],
         )

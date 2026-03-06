@@ -107,7 +107,7 @@ python main.py
 - `DEEPSEEK_API_KEY`：必填
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
-- `LLM_TEMPERATURE`：所有 LLM 调用温度（默认 `0.3`，范围 `0.0~2.0`）
+- `LLM_TEMPERATURE`：默认 LLM 调用温度（默认 `1.3`，范围 `0.0~2.0`；`user_profile refresh` 固定使用 `0.0`）
 - `ASSISTANT_DB_PATH`：SQLite 路径（默认 `assistant.db`）
 - `USER_PROFILE_PATH`：user_profile 文件路径（用于计划上下文与自动刷新）
 - `USER_PROFILE_REFRESH_ENABLED`：是否启用 user_profile 自动刷新（默认 `true`）
@@ -116,15 +116,13 @@ python main.py
 - `BOCHA_SEARCH_SUMMARY`：是否请求 Bocha 返回 summary（默认 `true`）
 - `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
-- `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`）
-- `FEISHU_CALENDAR_SYNC_ENABLED`：是否启用本地日程与 Feishu 日历同步（默认 `false`）
-- `FEISHU_CALENDAR_ID`：同步目标日历 ID（启用同步时必填）
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：配置后自动启用 Feishu 长连接
+- `FEISHU_CALENDAR_ID`：配置后自动启用本地日程与 Feishu 日历同步；需同时配置 Feishu 凭据
 - `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`：Feishu 为准对账间隔分钟（默认 `10`）
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
   - 启动重建窗口按自然日对齐：`start=(today-past_days) 00:00:00`，`end=(today+future_days) 23:59:59`
-- `PROACTIVE_REMINDER_ENABLED`：是否启用主动提醒（默认 `false`）
-- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：主动提醒目标用户 open_id（启用时必填）
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：配置后自动启用主动提醒目标；需同时配置 Feishu 凭据
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`：主动提醒上下文前瞻窗口小时数（默认 `24`）
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`：夜间静默软约束提示（默认 `23:00-08:00`）

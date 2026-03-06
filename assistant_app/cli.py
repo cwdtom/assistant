@@ -43,6 +43,18 @@ def _should_show_waiting(agent: _AgentLike, user_input: str) -> bool:
     return bool(text) and not text.startswith("/") and agent.llm_client is not None
 
 
+def _is_feishu_configured(app_id: str, app_secret: str) -> bool:
+    return bool(app_id.strip() and app_secret.strip())
+
+
+def _is_proactive_reminder_configured(target_open_id: str) -> bool:
+    return bool(target_open_id.strip())
+
+
+def _is_feishu_calendar_sync_configured(calendar_id: str) -> bool:
+    return bool(calendar_id.strip())
+
+
 def _clear_terminal_history(stream: TextIO = sys.stdout) -> None:
     stream.write(CLEAR_TERMINAL_SEQUENCE)
     stream.flush()
@@ -187,48 +199,48 @@ def main() -> None:
         )
         agent.set_user_profile_refresh_runner(user_profile_refresh_service.run_manual_refresh)
     proactive_sender_holder: dict[str, Callable[[str, str], None] | None] = {"send": None}
+    feishu_configured = _is_feishu_configured(config.feishu_app_id, config.feishu_app_secret)
+    calendar_sync_configured = _is_feishu_calendar_sync_configured(config.feishu_calendar_id)
     calendar_sync_service: FeishuCalendarSyncService | None = None
-    if config.feishu_calendar_sync_enabled:
-        if not config.feishu_app_id or not config.feishu_app_secret or not config.feishu_calendar_id:
+    if calendar_sync_configured and not feishu_configured:
+        app_logger.warning(
+            "feishu calendar sync requires feishu credentials",
+            extra={
+                "event": "feishu_calendar_sync_config_invalid",
+                "context": {
+                    "has_app_id": bool(config.feishu_app_id),
+                    "has_app_secret": bool(config.feishu_app_secret),
+                    "has_calendar_id": bool(config.feishu_calendar_id),
+                },
+            },
+        )
+    elif calendar_sync_configured:
+        try:
+            calendar_client = FeishuCalendarClient(
+                app_id=config.feishu_app_id,
+                app_secret=config.feishu_app_secret,
+                logger=app_logger,
+            )
+            calendar_sync_service = FeishuCalendarSyncService(
+                db=db,
+                client=calendar_client,
+                logger=app_logger,
+                calendar_id=config.feishu_calendar_id,
+                reconcile_interval_minutes=config.feishu_calendar_reconcile_interval_minutes,
+                bootstrap_past_days=config.feishu_calendar_bootstrap_past_days,
+                bootstrap_future_days=config.feishu_calendar_bootstrap_future_days,
+            )
+            calendar_sync_service.start()
+            calendar_sync_service.run_startup_bootstrap_sync()
+            agent.set_schedule_sync_service(calendar_sync_service)
+        except Exception as exc:  # noqa: BLE001
             app_logger.warning(
-                "feishu calendar sync requires app_id/app_secret/calendar_id",
+                "feishu calendar sync initialization failed",
                 extra={
-                    "event": "feishu_calendar_sync_config_invalid",
-                    "context": {
-                        "enabled": True,
-                        "has_app_id": bool(config.feishu_app_id),
-                        "has_app_secret": bool(config.feishu_app_secret),
-                        "has_calendar_id": bool(config.feishu_calendar_id),
-                    },
+                    "event": "feishu_calendar_sync_init_failed",
+                    "context": {"error": repr(exc)},
                 },
             )
-        else:
-            try:
-                calendar_client = FeishuCalendarClient(
-                    app_id=config.feishu_app_id,
-                    app_secret=config.feishu_app_secret,
-                    logger=app_logger,
-                )
-                calendar_sync_service = FeishuCalendarSyncService(
-                    db=db,
-                    client=calendar_client,
-                    logger=app_logger,
-                    calendar_id=config.feishu_calendar_id,
-                    reconcile_interval_minutes=config.feishu_calendar_reconcile_interval_minutes,
-                    bootstrap_past_days=config.feishu_calendar_bootstrap_past_days,
-                    bootstrap_future_days=config.feishu_calendar_bootstrap_future_days,
-                )
-                calendar_sync_service.start()
-                calendar_sync_service.run_startup_bootstrap_sync()
-                agent.set_schedule_sync_service(calendar_sync_service)
-            except Exception as exc:  # noqa: BLE001
-                app_logger.warning(
-                    "feishu calendar sync initialization failed",
-                    extra={
-                        "event": "feishu_calendar_sync_init_failed",
-                        "context": {"error": repr(exc)},
-                    },
-                )
 
     def _send_proactive_text(open_id: str, text: str) -> None:
         sender = proactive_sender_holder["send"]
@@ -236,13 +248,15 @@ def main() -> None:
             raise RuntimeError("feishu proactive sender not ready")
         sender(open_id=open_id, text=text)
 
+    proactive_reminder_configured = _is_proactive_reminder_configured(config.proactive_reminder_target_open_id)
+
     proactive_reminder_service: ProactiveReminderService | None = None
-    if config.proactive_reminder_enabled and not config.feishu_enabled:
+    if proactive_reminder_configured and not feishu_configured:
         app_logger.warning(
             "proactive reminder requires feishu mode",
             extra={"event": "proactive_config_requires_feishu"},
         )
-    elif config.proactive_reminder_enabled:
+    elif proactive_reminder_configured:
         proactive_reminder_service = ProactiveReminderService(
             db=db,
             llm_client=llm_client,
@@ -285,34 +299,31 @@ def main() -> None:
         )
         timer_engine.start()
 
-    if config.feishu_enabled:
-        if not config.feishu_app_id or not config.feishu_app_secret:
-            print("助手> FEISHU_ENABLED=true 但 FEISHU_APP_ID/FEISHU_APP_SECRET 未配置，已跳过 Feishu 接入。")
-        else:
-            feishu_retention_days = config.feishu_log_retention_days
-            if _is_same_log_path(config.feishu_log_path, config.app_log_path):
-                feishu_retention_days = config.app_log_retention_days
-            feishu_logger = _configure_feishu_logger(
-                log_path=config.feishu_log_path,
-                retention_days=feishu_retention_days,
-            )
-            feishu_runner = create_feishu_runner(
-                app_id=config.feishu_app_id,
-                app_secret=config.feishu_app_secret,
-                agent=agent,
-                logger=feishu_logger,
-                progress_content_rewriter=None,
-                allowed_open_ids=set(config.feishu_allowed_open_ids),
-                send_retry_count=config.feishu_send_retry_count,
-                text_chunk_size=config.feishu_text_chunk_size,
-                dedup_ttl_seconds=config.feishu_dedup_ttl_seconds,
-                ack_reaction_enabled=config.feishu_ack_reaction_enabled,
-                ack_emoji_type=config.feishu_ack_emoji_type,
-                done_emoji_type=config.feishu_done_emoji_type,
-            )
-            feishu_runner.start_background()
-            proactive_sender_holder["send"] = feishu_runner.send_proactive_text
-            print("助手> Feishu 长连接已在后台启动（单聊模式）。")
+    if feishu_configured:
+        feishu_retention_days = config.feishu_log_retention_days
+        if _is_same_log_path(config.feishu_log_path, config.app_log_path):
+            feishu_retention_days = config.app_log_retention_days
+        feishu_logger = _configure_feishu_logger(
+            log_path=config.feishu_log_path,
+            retention_days=feishu_retention_days,
+        )
+        feishu_runner = create_feishu_runner(
+            app_id=config.feishu_app_id,
+            app_secret=config.feishu_app_secret,
+            agent=agent,
+            logger=feishu_logger,
+            progress_content_rewriter=None,
+            allowed_open_ids=set(config.feishu_allowed_open_ids),
+            send_retry_count=config.feishu_send_retry_count,
+            text_chunk_size=config.feishu_text_chunk_size,
+            dedup_ttl_seconds=config.feishu_dedup_ttl_seconds,
+            ack_reaction_enabled=config.feishu_ack_reaction_enabled,
+            ack_emoji_type=config.feishu_ack_emoji_type,
+            done_emoji_type=config.feishu_done_emoji_type,
+        )
+        feishu_runner.start_background()
+        proactive_sender_holder["send"] = feishu_runner.send_proactive_text
+        print("助手> Feishu 长连接已在后台启动（单聊模式）。")
 
     try:
         _clear_terminal_history()

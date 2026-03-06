@@ -71,7 +71,7 @@ Default model:
 - 配置读取优先级：若系统环境变量与 `.env` 同名，最终以 `.env` 中的值为准
 
 Optional runtime flags (all supported in `.env`):
-- `LLM_TEMPERATURE`: temperature for all LLM calls (default `0.3`, range `0.0~2.0`)
+- `LLM_TEMPERATURE`: default temperature for general LLM calls (default `1.3`, range `0.0~2.0`; `user_profile refresh` is fixed at `0.0`)
 - `PLAN_REPLAN_MAX_STEPS`: max plan-loop steps (default `100`)
 - `PLAN_REPLAN_RETRY_COUNT`: planner JSON retry count (default `3`)
 - `PLAN_OBSERVATION_CHAR_LIMIT`: max chars per observation (default `10000`)
@@ -98,24 +98,21 @@ Optional runtime flags (all supported in `.env`):
 - `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
 - `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
 - `LLM_TRACE_LOG_PATH`: LLM trace log path (default follows `APP_LOG_PATH`, empty to disable)
-- `FEISHU_ENABLED`: enable Feishu long connection (default `false`)
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`: Feishu app credentials
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`: Feishu app credentials; when both are non-empty, Feishu long connection is enabled
 - `FEISHU_ALLOWED_OPEN_IDS`: open_id whitelist (comma separated)
 - `FEISHU_SEND_RETRY_COUNT`: send retry count (default `3`)
-- `FEISHU_TEXT_CHUNK_SIZE`: long message chunk size (default `1500`)
+- `FEISHU_TEXT_CHUNK_SIZE`: long message chunk size (default `5000`)
 - `FEISHU_DEDUP_TTL_SECONDS`: dedup window in seconds (default `600`)
 - `FEISHU_LOG_PATH`: Feishu log path (default follows `APP_LOG_PATH`)
 - `FEISHU_LOG_RETENTION_DAYS`: Feishu log retention days (default `7`)
 - `FEISHU_ACK_REACTION_ENABLED`: send ack reaction on incoming DM (default `true`)
-- `FEISHU_ACK_EMOJI_TYPE`: ack emoji type (default `OK`)
+- `FEISHU_ACK_EMOJI_TYPE`: ack emoji type (default `Get`)
 - `FEISHU_DONE_EMOJI_TYPE`: done emoji type (default `DONE`)
-- `FEISHU_CALENDAR_SYNC_ENABLED`: enable local schedule <-> Feishu calendar sync (default `false`)
-- `FEISHU_CALENDAR_ID`: target Feishu calendar id for sync
+- `FEISHU_CALENDAR_ID`: target Feishu calendar id for sync; when non-empty and Feishu credentials are present, local schedule <-> Feishu calendar sync is enabled
 - `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`: Feishu-authoritative reconcile interval (default `10`)
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`: startup bootstrap sync lookback days (default `2`)
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`: startup bootstrap sync lookahead days (default `5`)
-- `PROACTIVE_REMINDER_ENABLED`: enable proactive reminder evaluation (default `false`)
-- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages; when non-empty and Feishu credentials are present, proactive reminder evaluation is enabled
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`: proactive evaluation interval in minutes (default `60`, min `60`)
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`: proactive context lookahead window in hours (default `24`)
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`: soft quiet-time hint in proactive prompt (default `23:00-08:00`)
