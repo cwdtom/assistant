@@ -164,14 +164,6 @@ def _message_payloads_by_phase(messages: list[dict[str, str]], phase: str) -> li
     return matched
 
 
-def _is_summary_like_step(step: str) -> bool:
-    normalized = step.strip()
-    if not normalized:
-        return True
-    keywords = ("总结", "汇总", "收尾", "输出结果", "最终", "回复")
-    return any(keyword in normalized for keyword in keywords)
-
-
 def _extract_plan_items_from_latest_plan(raw_plan: Any) -> list[str]:
     if not isinstance(raw_plan, list):
         return []
@@ -203,14 +195,6 @@ def _fallback_replan_from_messages(messages: list[dict[str, str]]) -> str:
                 if 0 <= raw_index < len(plan):
                     remaining = plan[raw_index:]
                     if remaining:
-                        if all(_is_summary_like_step(item) for item in remaining):
-                            completed_subtasks = payload.get("completed_subtasks")
-                            if isinstance(completed_subtasks, list) and completed_subtasks:
-                                last = completed_subtasks[-1]
-                                if isinstance(last, dict):
-                                    result = str(last.get("result") or "").strip()
-                                    if result:
-                                        return _planner_done(result)
                         return _planner_replanned(remaining)
                 if raw_index >= len(plan):
                     completed_subtasks = payload.get("completed_subtasks")
@@ -1059,10 +1043,10 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_schedule_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["新增日程", "总结结果"]),
+                _planner_planned(["新增日程"]),
                 _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会"),
                 _planner_done("已添加日程。"),
-                _planner_planned(["查看日程", "总结结果"]),
+                _planner_planned(["查看日程"]),
                 _thought_continue("schedule", "/schedule list"),
                 _planner_done("已查看日程：周会。"),
             ]
@@ -1103,7 +1087,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["新增重复日程", "总结结果"]),
+                _planner_planned(["新增重复日程"]),
                 _thought_continue("schedule", f"/schedule add {base_text} 周会 --interval 10080 --times 3"),
                 _planner_done("已添加重复日程 3 条。"),
             ]
@@ -1137,7 +1121,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_schedule_view_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["查看周视图", "总结结果"]),
+                _planner_planned(["查看周视图"]),
                 _thought_continue("schedule", "/schedule view week 2026-02-16"),
                 _planner_done("已查看周会。"),
             ]
@@ -1175,10 +1159,10 @@ class AssistantAgentTest(unittest.TestCase):
     def test_nl_schedule_repeat_toggle_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["停用重复", "总结结果"]),
+                _planner_planned(["停用重复"]),
                 _thought_continue("schedule", "/schedule repeat 1 off"),
                 _planner_done("已停用日程 #1 的重复规则。"),
-                _planner_planned(["启用重复", "总结结果"]),
+                _planner_planned(["启用重复"]),
                 _thought_continue("schedule", "/schedule repeat 1 on"),
                 _planner_done("已启用日程 #1 的重复规则。"),
             ]
@@ -2248,7 +2232,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_plan_replan_internet_search_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["搜索资料", "总结结果"]),
+                _planner_planned(["搜索资料"]),
                 _thought_continue("internet_search", "OpenAI Responses API"),
                 _planner_done("我找到了 3 条相关资料。"),
             ]
@@ -2401,7 +2385,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_plan_replan_history_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["检索历史", "总结结果"]),
+                _planner_planned(["检索历史"]),
                 _thought_continue("history", "/history search 牛奶"),
                 _planner_done("我找到了 1 条相关历史。"),
             ]
@@ -2641,7 +2625,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_schedule_repeat_invalid_combo_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["新增日程", "总结结果"]),
+                _planner_planned(["新增日程"]),
                 _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --times 2"),
                 _planner_done(
                     "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
@@ -2658,7 +2642,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_schedule_add_invalid_duration_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["新增日程", "总结结果"]),
+                _planner_planned(["新增日程"]),
                 _thought_continue("schedule", "/schedule add 2026-02-20 09:30 周会 --duration 0"),
                 _planner_done(
                     "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
@@ -2675,7 +2659,7 @@ class AssistantAgentTest(unittest.TestCase):
     def test_schedule_view_invalid_date_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
-                _planner_planned(["查看月视图", "总结结果"]),
+                _planner_planned(["查看月视图"]),
                 _thought_continue("schedule", "/schedule view month 2026-02-15"),
                 _planner_done("用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM]"),
             ]
