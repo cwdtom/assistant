@@ -3,9 +3,17 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from assistant_app.schemas.domain import (
+    ChatMessage,
+    ChatTurn,
+    RecurringScheduleRule,
+    ReminderDelivery,
+    ScheduleItem,
+    ThoughtItem,
+)
 
 _UNSET = object()
 THOUGHT_STATUS_TODO = "未完成"
@@ -16,67 +24,6 @@ THOUGHT_STATUS_VALUES = (
     THOUGHT_STATUS_DONE,
     THOUGHT_STATUS_DELETED,
 )
-
-
-@dataclass(frozen=True)
-class ScheduleItem:
-    id: int
-    title: str
-    tag: str
-    event_time: str
-    duration_minutes: int
-    created_at: str
-    remind_at: str | None = None
-    repeat_interval_minutes: int | None = None
-    repeat_times: int | None = None
-    repeat_enabled: bool | None = None
-    repeat_remind_start_time: str | None = None
-
-
-@dataclass(frozen=True)
-class RecurringScheduleRule:
-    id: int
-    schedule_id: int
-    start_time: str
-    repeat_interval_minutes: int
-    repeat_times: int
-    remind_start_time: str | None
-    enabled: bool
-    created_at: str
-
-
-@dataclass(frozen=True)
-class ChatMessage:
-    role: str
-    content: str
-
-
-@dataclass(frozen=True)
-class ChatTurn:
-    user_content: str
-    assistant_content: str
-    created_at: str
-
-
-@dataclass(frozen=True)
-class ThoughtItem:
-    id: int
-    content: str
-    status: str
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class ReminderDelivery:
-    reminder_key: str
-    source_type: str
-    source_id: int
-    occurrence_time: str | None
-    remind_time: str
-    delivered_at: str
-    payload: str | None
-
 
 class AssistantDB:
     def __init__(self, db_path: str) -> None:
@@ -581,7 +528,8 @@ class AssistantDB:
             ).fetchone()
             rule_row = conn.execute(
                 """
-                SELECT schedule_id, start_time, repeat_interval_minutes, repeat_times, remind_start_time, enabled
+                SELECT id, schedule_id, start_time, repeat_interval_minutes, repeat_times,
+                       remind_start_time, enabled, created_at
                 FROM recurring_schedules
                 WHERE schedule_id = ?
                 """,
@@ -591,30 +539,8 @@ class AssistantDB:
             return None
         rule: RecurringScheduleRule | None = None
         if rule_row is not None:
-            rule = RecurringScheduleRule(
-                id=0,
-                schedule_id=int(rule_row["schedule_id"]),
-                start_time=str(rule_row["start_time"]),
-                repeat_interval_minutes=int(rule_row["repeat_interval_minutes"]),
-                repeat_times=int(rule_row["repeat_times"]),
-                remind_start_time=str(rule_row["remind_start_time"]) if rule_row["remind_start_time"] else None,
-                enabled=bool(rule_row["enabled"]),
-                created_at=row["created_at"],
-            )
-        return _attach_recurrence_to_schedule(
-            ScheduleItem(
-                id=row["id"],
-                title=row["title"],
-                tag=_normalize_tag(str(row["tag"]) if row["tag"] is not None else None),
-                event_time=row["event_time"],
-                duration_minutes=_normalize_duration_minutes(
-                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
-                ),
-                remind_at=str(row["remind_at"]) if row["remind_at"] else None,
-                created_at=row["created_at"],
-            ),
-            rule,
-        )
+            rule = _recurring_schedule_rule_from_row(rule_row)
+        return _attach_recurrence_to_schedule(_schedule_item_from_row(row), rule)
 
     def update_schedule(
         self,
@@ -727,16 +653,7 @@ class AssistantDB:
             params = (normalized_status,)
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [
-            ThoughtItem(
-                id=int(row["id"]),
-                content=str(row["content"] or ""),
-                status=str(row["status"] or THOUGHT_STATUS_TODO),
-                created_at=str(row["created_at"] or ""),
-                updated_at=str(row["updated_at"] or ""),
-            )
-            for row in rows
-        ]
+        return [_thought_item_from_row(row) for row in rows]
 
     def get_thought(self, thought_id: int) -> ThoughtItem | None:
         with self._connect() as conn:
@@ -746,13 +663,7 @@ class AssistantDB:
             ).fetchone()
         if row is None:
             return None
-        return ThoughtItem(
-            id=int(row["id"]),
-            content=str(row["content"] or ""),
-            status=str(row["status"] or THOUGHT_STATUS_TODO),
-            created_at=str(row["created_at"] or ""),
-            updated_at=str(row["updated_at"] or ""),
-        )
+        return _thought_item_from_row(row)
 
     def update_thought(
         self,
@@ -792,20 +703,7 @@ class AssistantDB:
             "SELECT id, title, tag, event_time, duration_minutes, remind_at, created_at "
             "FROM schedules ORDER BY event_time ASC, id ASC"
         ).fetchall()
-        return [
-            ScheduleItem(
-                id=int(row["id"]),
-                title=str(row["title"]),
-                tag=_normalize_tag(str(row["tag"]) if row["tag"] is not None else None),
-                event_time=str(row["event_time"]),
-                duration_minutes=_normalize_duration_minutes(
-                    row["duration_minutes"] if row["duration_minutes"] is not None else 60
-                ),
-                remind_at=str(row["remind_at"]) if row["remind_at"] else None,
-                created_at=str(row["created_at"]),
-            )
-            for row in rows
-        ]
+        return [_schedule_item_from_row(row) for row in rows]
 
     def _list_recurring_rules(self, conn: sqlite3.Connection) -> list[RecurringScheduleRule]:
         rows = conn.execute(
@@ -816,19 +714,7 @@ class AssistantDB:
             ORDER BY id ASC
             """
         ).fetchall()
-        return [
-            RecurringScheduleRule(
-                id=int(row["id"]),
-                schedule_id=int(row["schedule_id"]),
-                start_time=str(row["start_time"]),
-                repeat_interval_minutes=int(row["repeat_interval_minutes"]),
-                repeat_times=int(row["repeat_times"]),
-                remind_start_time=str(row["remind_start_time"]) if row["remind_start_time"] else None,
-                enabled=bool(row["enabled"]) if row["enabled"] is not None else True,
-                created_at=str(row["created_at"]),
-            )
-            for row in rows
-        ]
+        return [_recurring_schedule_rule_from_row(row) for row in rows]
 
     def list_base_schedules(self) -> list[ScheduleItem]:
         with self._connect() as conn:
@@ -891,18 +777,7 @@ class AssistantDB:
                 ORDER BY id ASC
                 """
             ).fetchall()
-        return [
-            ReminderDelivery(
-                reminder_key=str(row["reminder_key"]),
-                source_type=str(row["source_type"]),
-                source_id=int(row["source_id"]),
-                occurrence_time=str(row["occurrence_time"]) if row["occurrence_time"] else None,
-                remind_time=str(row["remind_time"]),
-                delivered_at=str(row["delivered_at"]),
-                payload=str(row["payload"]) if row["payload"] is not None else None,
-            )
-            for row in rows
-        ]
+        return [_reminder_delivery_from_row(row) for row in rows]
 
     def save_message(self, role: str, content: str) -> None:
         normalized_role = role.strip().lower()
@@ -955,14 +830,7 @@ class AssistantDB:
             ).fetchall()
         # Reverse to keep chronological order for display.
         rows.reverse()
-        return [
-            ChatTurn(
-                user_content=str(row["user_content"] or ""),
-                assistant_content=str(row["assistant_content"] or ""),
-                created_at=str(row["created_at"] or ""),
-            )
-            for row in rows
-        ]
+        return [_chat_turn_from_row(row) for row in rows]
 
     def recent_turns_for_planner(self, *, lookback_hours: int = 24, limit: int = 50) -> list[ChatTurn]:
         normalized_hours = max(lookback_hours, 1)
@@ -980,14 +848,7 @@ class AssistantDB:
                 (since, normalized_limit),
             ).fetchall()
         rows.reverse()
-        return [
-            ChatTurn(
-                user_content=str(row["user_content"] or ""),
-                assistant_content=str(row["assistant_content"] or ""),
-                created_at=str(row["created_at"] or ""),
-            )
-            for row in rows
-        ]
+        return [_chat_turn_from_row(row) for row in rows]
 
     def recent_turns_since(self, *, since: datetime, limit: int = 10000) -> list[ChatTurn]:
         normalized_limit = max(limit, 1)
@@ -1004,14 +865,7 @@ class AssistantDB:
                 (normalized_since, normalized_limit),
             ).fetchall()
         rows.reverse()
-        return [
-            ChatTurn(
-                user_content=str(row["user_content"] or ""),
-                assistant_content=str(row["assistant_content"] or ""),
-                created_at=str(row["created_at"] or ""),
-            )
-            for row in rows
-        ]
+        return [_chat_turn_from_row(row) for row in rows]
 
     def search_turns(self, keyword: str, *, limit: int = 20) -> list[ChatTurn]:
         text = keyword.strip()
@@ -1031,14 +885,7 @@ class AssistantDB:
                 (like_pattern, like_pattern, normalized_limit),
             ).fetchall()
         rows.reverse()
-        return [
-            ChatTurn(
-                user_content=str(row["user_content"] or ""),
-                assistant_content=str(row["assistant_content"] or ""),
-                created_at=str(row["created_at"] or ""),
-            )
-            for row in rows
-        ]
+        return [_chat_turn_from_row(row) for row in rows]
 
     def recent_messages(self, limit: int = 8) -> list[ChatMessage]:
         turns = self.recent_turns(limit=max(limit, 1))
@@ -1086,6 +933,52 @@ def _normalize_thought_status(status: str) -> str:
     if normalized not in THOUGHT_STATUS_VALUES:
         raise ValueError("thought status must be one of 未完成|完成|删除")
     return normalized
+
+
+def _schedule_item_from_row(row: sqlite3.Row) -> ScheduleItem:
+    payload = dict(row)
+    payload["tag"] = _normalize_tag(str(payload.get("tag")) if payload.get("tag") is not None else None)
+    payload["duration_minutes"] = int(payload.get("duration_minutes") or 60)
+    payload["remind_at"] = str(payload["remind_at"]) if payload.get("remind_at") else None
+    payload["title"] = str(payload.get("title") or "")
+    payload["event_time"] = str(payload.get("event_time") or "")
+    payload["created_at"] = str(payload.get("created_at") or "")
+    return ScheduleItem.model_validate(payload)
+
+
+def _recurring_schedule_rule_from_row(row: sqlite3.Row) -> RecurringScheduleRule:
+    payload = dict(row)
+    payload["enabled"] = bool(payload["enabled"]) if payload.get("enabled") is not None else True
+    payload["remind_start_time"] = str(payload["remind_start_time"]) if payload.get("remind_start_time") else None
+    payload["start_time"] = str(payload.get("start_time") or "")
+    payload["created_at"] = str(payload.get("created_at") or "")
+    return RecurringScheduleRule.model_validate(payload)
+
+
+def _thought_item_from_row(row: sqlite3.Row) -> ThoughtItem:
+    payload = dict(row)
+    payload["content"] = str(payload.get("content") or "")
+    payload["status"] = str(payload.get("status") or THOUGHT_STATUS_TODO)
+    payload["created_at"] = str(payload.get("created_at") or "")
+    payload["updated_at"] = str(payload.get("updated_at") or "")
+    return ThoughtItem.model_validate(payload)
+
+
+def _reminder_delivery_from_row(row: sqlite3.Row) -> ReminderDelivery:
+    payload = dict(row)
+    payload["occurrence_time"] = str(payload["occurrence_time"]) if payload.get("occurrence_time") else None
+    payload["remind_time"] = str(payload.get("remind_time") or "")
+    payload["delivered_at"] = str(payload.get("delivered_at") or "")
+    payload["payload"] = str(payload["payload"]) if payload.get("payload") is not None else None
+    return ReminderDelivery.model_validate(payload)
+
+
+def _chat_turn_from_row(row: sqlite3.Row) -> ChatTurn:
+    payload = dict(row)
+    payload["user_content"] = str(payload.get("user_content") or "")
+    payload["assistant_content"] = str(payload.get("assistant_content") or "")
+    payload["created_at"] = str(payload.get("created_at") or "")
+    return ChatTurn.model_validate(payload)
 
 
 def _normalize_schedule_window(
@@ -1149,18 +1042,15 @@ def _expand_recurring_schedule_items(
     if not expanded_times:
         return []
     return [
-        ScheduleItem(
-            id=base.id,
-            title=base.title,
-            tag=base.tag,
-            event_time=event_time,
-            duration_minutes=base.duration_minutes,
-            created_at=base.created_at,
-            remind_at=base.remind_at,
-            repeat_interval_minutes=rule.repeat_interval_minutes,
-            repeat_times=rule.repeat_times,
-            repeat_enabled=rule.enabled,
-            repeat_remind_start_time=rule.remind_start_time,
+        ScheduleItem.model_validate(
+            {
+                **base.model_dump(),
+                "event_time": event_time,
+                "repeat_interval_minutes": rule.repeat_interval_minutes,
+                "repeat_times": rule.repeat_times,
+                "repeat_enabled": rule.enabled,
+                "repeat_remind_start_time": rule.remind_start_time,
+            }
         )
         for event_time in expanded_times
     ]
@@ -1169,18 +1059,14 @@ def _expand_recurring_schedule_items(
 def _attach_recurrence_to_schedule(base: ScheduleItem, rule: RecurringScheduleRule | None) -> ScheduleItem:
     if rule is None:
         return base
-    return ScheduleItem(
-        id=base.id,
-        title=base.title,
-        tag=base.tag,
-        event_time=base.event_time,
-        duration_minutes=base.duration_minutes,
-        created_at=base.created_at,
-        remind_at=base.remind_at,
-        repeat_interval_minutes=rule.repeat_interval_minutes,
-        repeat_times=rule.repeat_times,
-        repeat_enabled=rule.enabled,
-        repeat_remind_start_time=rule.remind_start_time,
+    return ScheduleItem.model_validate(
+        {
+            **base.model_dump(),
+            "repeat_interval_minutes": rule.repeat_interval_minutes,
+            "repeat_times": rule.repeat_times,
+            "repeat_enabled": rule.enabled,
+            "repeat_remind_start_time": rule.remind_start_time,
+        }
     )
 
 

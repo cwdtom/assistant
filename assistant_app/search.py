@@ -4,23 +4,13 @@ import html
 import json
 import logging
 import re
-from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
+from pydantic import ValidationError
 
-@dataclass(frozen=True)
-class SearchResult:
-    title: str
-    snippet: str
-    url: str
-
-
-@dataclass(frozen=True)
-class WebPageFetchResult:
-    url: str
-    main_text: str
+from assistant_app.schemas.domain import SearchResult, WebPageFetchResult
 
 
 class SearchProvider(Protocol):
@@ -287,7 +277,7 @@ def _fetch_webpage_main_text_via_playwright(
             browser.close()
 
     main_text = _normalize_main_text(raw_main_text, max_chars=max_chars)
-    return WebPageFetchResult(url=normalized_url, main_text=main_text)
+    return WebPageFetchResult.model_validate({"url": normalized_url, "main_text": main_text})
 
 
 def _fetch_webpage_main_text_via_requests(
@@ -310,7 +300,7 @@ def _fetch_webpage_main_text_via_requests(
     response_url = _normalize_fetch_url(getattr(response, "url", "") or normalized_url) or normalized_url
     raw_main_text = _extract_text_from_html(str(getattr(response, "text", "") or ""))
     main_text = _normalize_main_text(raw_main_text, max_chars=max_chars)
-    return WebPageFetchResult(url=response_url, main_text=main_text)
+    return WebPageFetchResult.model_validate({"url": response_url, "main_text": main_text})
 
 
 def _extract_bing_results(html_text: str, top_k: int = 3) -> list[SearchResult]:
@@ -337,7 +327,10 @@ def _extract_bing_results(html_text: str, top_k: int = 3) -> list[SearchResult]:
         snippet = _clean_html_text(snippet_match.group(1)) if snippet_match else ""
         if not title:
             continue
-        results.append(SearchResult(title=title, snippet=snippet, url=url))
+        result = _build_search_result(title=title, snippet=snippet, url=url)
+        if result is None:
+            continue
+        results.append(result)
         seen_urls.add(url)
         if len(results) >= top_k:
             return results
@@ -353,7 +346,10 @@ def _extract_bing_results(html_text: str, top_k: int = 3) -> list[SearchResult]:
         title = _clean_html_text(link_match.group(2))
         if not title:
             continue
-        results.append(SearchResult(title=title, snippet="", url=url))
+        result = _build_search_result(title=title, snippet="", url=url)
+        if result is None:
+            continue
+        results.append(result)
         seen_urls.add(url)
         if len(results) >= top_k:
             break
@@ -384,9 +380,19 @@ def _extract_bocha_results(payload: dict[str, object]) -> list[SearchResult]:
         if not title:
             continue
         snippet = _bocha_snippet(item)
-        results.append(SearchResult(title=title, snippet=snippet, url=url))
+        result = _build_search_result(title=title, snippet=snippet, url=url)
+        if result is None:
+            continue
+        results.append(result)
         seen_urls.add(url)
     return results
+
+
+def _build_search_result(*, title: str, snippet: str, url: str) -> SearchResult | None:
+    try:
+        return SearchResult.model_validate({"title": title, "snippet": snippet, "url": url})
+    except ValidationError:
+        return None
 
 
 def _is_valid_result_url(url: str) -> bool:
