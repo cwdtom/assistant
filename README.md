@@ -129,7 +129,7 @@ python main.py
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`：主动提醒上下文前瞻窗口小时数（默认 `24`）
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`：夜间静默软约束提示（默认 `23:00-08:00`）
 
-完整变量与行为开关以 `AGENTS.md` 为准；`.env.example` 提供常用配置示例。
+完整变量与行为开关以 `AGENTS.md` 为准；`.env.example` 提供最小可运行模板，额外调优项可按需从 `AGENTS.md` 拾取。
 
 ## Command Overview
 - `/help`

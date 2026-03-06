@@ -40,9 +40,7 @@ class AppConfig:
     timer_enabled: bool
     timer_poll_interval_seconds: int
     timer_lookahead_seconds: int
-    timer_catchup_seconds: int
     timer_batch_limit: int
-    reminder_delivery_retention_days: int
     persona_rewrite_enabled: bool
     assistant_persona: str
     feishu_enabled: bool
@@ -120,11 +118,11 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         llm_trace_log_path=llm_trace_log_path,
         app_log_path=app_log_path,
         app_log_retention_days=_read_env_int("APP_LOG_RETENTION_DAYS", default=7, min_value=1),
-        plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=20, min_value=1),
-        plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=2, min_value=0),
+        plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=100, min_value=1),
+        plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=3, min_value=0),
         plan_observation_char_limit=_read_env_int("PLAN_OBSERVATION_CHAR_LIMIT", default=10000, min_value=1),
         plan_observation_history_limit=_read_env_int("PLAN_OBSERVATION_HISTORY_LIMIT", default=100, min_value=1),
-        plan_continuous_failure_limit=_read_env_int("PLAN_CONTINUOUS_FAILURE_LIMIT", default=2, min_value=1),
+        plan_continuous_failure_limit=_read_env_int("PLAN_CONTINUOUS_FAILURE_LIMIT", default=3, min_value=1),
         task_cancel_command=task_cancel_command,
         internet_search_top_k=_read_env_int("INTERNET_SEARCH_TOP_K", default=3, min_value=1),
         search_provider=search_provider,
@@ -135,9 +133,7 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         timer_enabled=_read_env_bool("TIMER_ENABLED", default=True),
         timer_poll_interval_seconds=_read_env_int("TIMER_POLL_INTERVAL_SECONDS", default=15, min_value=1),
         timer_lookahead_seconds=_read_env_int("TIMER_LOOKAHEAD_SECONDS", default=30, min_value=0),
-        timer_catchup_seconds=0,
         timer_batch_limit=_read_env_int("TIMER_BATCH_LIMIT", default=200, min_value=1),
-        reminder_delivery_retention_days=_read_env_int("REMINDER_DELIVERY_RETENTION_DAYS", default=30, min_value=1),
         persona_rewrite_enabled=_read_env_bool("PERSONA_REWRITE_ENABLED", default=True),
         assistant_persona=_read_env_text("ASSISTANT_PERSONA", default=""),
         feishu_enabled=_read_env_bool("FEISHU_ENABLED", default=False),

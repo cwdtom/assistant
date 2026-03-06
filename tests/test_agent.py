@@ -2431,7 +2431,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("测试 plan tools 缺失")
         self.assertIn("计划执行服务暂时不可用", response)
-        self.assertEqual(fake_llm.model_call_count, 3)
+        self.assertEqual(fake_llm.model_call_count, 4)
 
 
 
@@ -2598,7 +2598,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("删掉这个日程")
         self.assertIn("计划执行服务暂时不可用", response)
-        self.assertEqual(fake_llm.model_call_count, 3)
+        self.assertEqual(fake_llm.model_call_count, 4)
 
     def test_invalid_intent_json_returns_service_unavailable(self) -> None:
         fake_llm = FakeLLMClient(responses=["不是json", "还是不是json", "依然不是json"])
@@ -2607,7 +2607,7 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("今天天气如何")
         self.assertIn("计划执行服务暂时不可用", response)
         self.assertIn("/schedule", response)
-        self.assertEqual(fake_llm.model_call_count, 3)
+        self.assertEqual(fake_llm.model_call_count, 4)
 
     def test_non_json_model_text_is_treated_as_failure(self) -> None:
         fake_llm = FakeLLMClient(responses=["我先快速扫一遍日程并给你汇总清单。"])
@@ -2615,7 +2615,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("看一下全部日程")
         self.assertIn("计划执行服务暂时不可用", response)
-        self.assertEqual(fake_llm.model_call_count, 3)
+        self.assertEqual(fake_llm.model_call_count, 4)
 
 
 
@@ -2679,7 +2679,7 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=fake_llm)
         response = agent.handle_input("停用重复日程")
         self.assertIn("计划执行服务暂时不可用", response)
-        self.assertEqual(fake_llm.model_call_count, 3)
+        self.assertEqual(fake_llm.model_call_count, 4)
 
     def test_chat_without_llm(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)

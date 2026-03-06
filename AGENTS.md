@@ -72,11 +72,11 @@ Default model:
 
 Optional runtime flags (all supported in `.env`):
 - `LLM_TEMPERATURE`: temperature for all LLM calls (default `0.3`, range `0.0~2.0`)
-- `PLAN_REPLAN_MAX_STEPS`: max plan-loop steps (default `20`)
-- `PLAN_REPLAN_RETRY_COUNT`: planner JSON retry count (default `2`)
+- `PLAN_REPLAN_MAX_STEPS`: max plan-loop steps (default `100`)
+- `PLAN_REPLAN_RETRY_COUNT`: planner JSON retry count (default `3`)
 - `PLAN_OBSERVATION_CHAR_LIMIT`: max chars per observation (default `10000`)
 - `PLAN_OBSERVATION_HISTORY_LIMIT`: observation history cap in thought context (default `100`)
-- `PLAN_CONTINUOUS_FAILURE_LIMIT`: fallback threshold for continuous failures (default `2`)
+- `PLAN_CONTINUOUS_FAILURE_LIMIT`: fallback threshold for continuous failures (default `3`)
 - `TASK_CANCEL_COMMAND`: task cancel phrase (default `取消当前任务`)
 - `INTERNET_SEARCH_TOP_K`: target top-k for Bocha reranker (`rerankTopK`, default `3`)
 - `SEARCH_PROVIDER`: search provider (default `bocha`, supports `bocha|bing`)
@@ -86,9 +86,7 @@ Optional runtime flags (all supported in `.env`):
 - `TIMER_ENABLED`: enable local reminder thread (default `true`)
 - `TIMER_POLL_INTERVAL_SECONDS`: reminder poll interval (default `15`)
 - `TIMER_LOOKAHEAD_SECONDS`: reminder lookahead window (default `30`)
-- `TIMER_CATCHUP_SECONDS`: reminder catch-up window (reserved in V1, default `0`)
 - `TIMER_BATCH_LIMIT`: max reminders per poll batch (default `200`)
-- `REMINDER_DELIVERY_RETENTION_DAYS`: retention days for delivery records (reserved in V1, default `30`)
 - `CLI_PROGRESS_COLOR`: progress output color (`gray|off`, default `gray`)
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text

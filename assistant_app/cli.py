@@ -273,7 +273,6 @@ def main() -> None:
             db=db,
             sink=reminder_sink,
             lookahead_seconds=config.timer_lookahead_seconds,
-            catchup_seconds=config.timer_catchup_seconds,
             batch_limit=config.timer_batch_limit,
             logger=app_logger,
             content_rewriter=persona_rewriter.rewrite_reminder_content,

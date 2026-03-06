@@ -32,7 +32,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.user_profile_refresh_hour, 4)
         self.assertEqual(config.user_profile_refresh_lookback_days, 30)
         self.assertEqual(config.user_profile_refresh_max_turns, 10000)
-        self.assertEqual(config.plan_replan_max_steps, 20)
+        self.assertEqual(config.plan_replan_max_steps, 100)
         self.assertEqual(config.plan_observation_history_limit, 100)
         self.assertEqual(config.internet_search_top_k, 3)
         self.assertEqual(config.search_provider, "bocha")
@@ -47,9 +47,7 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.timer_enabled)
         self.assertEqual(config.timer_poll_interval_seconds, 15)
         self.assertEqual(config.timer_lookahead_seconds, 30)
-        self.assertEqual(config.timer_catchup_seconds, 0)
         self.assertEqual(config.timer_batch_limit, 200)
-        self.assertEqual(config.reminder_delivery_retention_days, 30)
         self.assertTrue(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "")
         self.assertFalse(config.feishu_enabled)
@@ -97,10 +95,10 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.llm_trace_log_path, "logs/app.log")
         self.assertEqual(config.app_log_path, "logs/app.log")
         self.assertEqual(config.app_log_retention_days, 7)
-        self.assertEqual(config.plan_replan_retry_count, 2)
+        self.assertEqual(config.plan_replan_retry_count, 3)
         self.assertEqual(config.plan_observation_char_limit, 10000)
         self.assertEqual(config.plan_observation_history_limit, 100)
-        self.assertEqual(config.plan_continuous_failure_limit, 2)
+        self.assertEqual(config.plan_continuous_failure_limit, 3)
         self.assertEqual(config.search_provider, "bocha")
         self.assertIsNone(config.bocha_api_key)
         self.assertTrue(config.bocha_search_summary)
@@ -156,9 +154,7 @@ class ConfigTest(unittest.TestCase):
             "TIMER_ENABLED": "off",
             "TIMER_POLL_INTERVAL_SECONDS": "20",
             "TIMER_LOOKAHEAD_SECONDS": "45",
-            "TIMER_CATCHUP_SECONDS": "999",
             "TIMER_BATCH_LIMIT": "120",
-            "REMINDER_DELIVERY_RETENTION_DAYS": "7",
             "PERSONA_REWRITE_ENABLED": "off",
             "ASSISTANT_PERSONA": "你是严谨的项目经理",
             "FEISHU_ENABLED": "on",
@@ -211,9 +207,7 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.timer_enabled)
         self.assertEqual(config.timer_poll_interval_seconds, 20)
         self.assertEqual(config.timer_lookahead_seconds, 45)
-        self.assertEqual(config.timer_catchup_seconds, 0)
         self.assertEqual(config.timer_batch_limit, 120)
-        self.assertEqual(config.reminder_delivery_retention_days, 7)
         self.assertFalse(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "你是严谨的项目经理")
         self.assertTrue(config.feishu_enabled)
@@ -267,7 +261,6 @@ class ConfigTest(unittest.TestCase):
             "TIMER_POLL_INTERVAL_SECONDS": "0",
             "TIMER_LOOKAHEAD_SECONDS": "-1",
             "TIMER_BATCH_LIMIT": "bad",
-            "REMINDER_DELIVERY_RETENTION_DAYS": "0",
             "PERSONA_REWRITE_ENABLED": "invalid",
             "ASSISTANT_PERSONA": "   ",
             "FEISHU_ENABLED": "invalid",
@@ -296,12 +289,12 @@ class ConfigTest(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
 
-        self.assertEqual(config.plan_replan_max_steps, 20)
+        self.assertEqual(config.plan_replan_max_steps, 100)
         self.assertEqual(config.llm_temperature, 0.3)
-        self.assertEqual(config.plan_replan_retry_count, 2)
+        self.assertEqual(config.plan_replan_retry_count, 3)
         self.assertEqual(config.plan_observation_char_limit, 10000)
         self.assertEqual(config.plan_observation_history_limit, 100)
-        self.assertEqual(config.plan_continuous_failure_limit, 2)
+        self.assertEqual(config.plan_continuous_failure_limit, 3)
         self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.user_profile_path, "")
         self.assertTrue(config.user_profile_refresh_enabled)
@@ -320,9 +313,7 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.timer_enabled)
         self.assertEqual(config.timer_poll_interval_seconds, 15)
         self.assertEqual(config.timer_lookahead_seconds, 30)
-        self.assertEqual(config.timer_catchup_seconds, 0)
         self.assertEqual(config.timer_batch_limit, 200)
-        self.assertEqual(config.reminder_delivery_retention_days, 30)
         self.assertTrue(config.persona_rewrite_enabled)
         self.assertEqual(config.assistant_persona, "")
         self.assertFalse(config.feishu_enabled)
