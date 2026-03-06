@@ -127,6 +127,7 @@ class AssistantAgent:
         user_profile_refresh_runner: Callable[[], str] | None = None,
         final_response_rewriter: Callable[[str], str] | None = None,
         app_version: str = UNKNOWN_APP_VERSION,
+        schedule_sync_service: Any | None = None,
     ) -> None:
         self.db = db
         self.llm_client = llm_client
@@ -160,6 +161,7 @@ class AssistantAgent:
         self._final_response_rewriter = final_response_rewriter
         self._app_version = app_version.strip() or UNKNOWN_APP_VERSION
         self._subtask_result_callback: Callable[[str], None] | None = None
+        self._schedule_sync_service = schedule_sync_service
         self._planner_tool_routes = self._build_planner_tool_routes()
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
@@ -170,6 +172,51 @@ class AssistantAgent:
 
     def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None:
         self._subtask_result_callback = callback
+
+    def set_schedule_sync_service(self, service: Any | None) -> None:
+        self._schedule_sync_service = service
+
+    def notify_schedule_added(self, schedule_id: int) -> None:
+        self._notify_schedule_sync(action="add", schedule_id=schedule_id)
+
+    def notify_schedule_updated(self, schedule_id: int) -> None:
+        self._notify_schedule_sync(action="update", schedule_id=schedule_id)
+
+    def notify_schedule_deleted(self, schedule_id: int, feishu_event_id: str | None = None) -> None:
+        self._notify_schedule_sync(action="delete", schedule_id=schedule_id, feishu_event_id=feishu_event_id)
+
+    def _notify_schedule_sync(self, *, action: str, schedule_id: int, feishu_event_id: str | None = None) -> None:
+        service = self._schedule_sync_service
+        if service is None:
+            return
+        method_name = {
+            "add": "on_local_schedule_added",
+            "update": "on_local_schedule_updated",
+            "delete": "on_local_schedule_deleted",
+        }.get(action, "")
+        if not method_name:
+            return
+        callback = getattr(service, method_name, None)
+        if not callable(callback):
+            return
+        try:
+            if action == "delete":
+                callback(schedule_id=schedule_id, feishu_event_id=feishu_event_id)
+            else:
+                callback(schedule_id=schedule_id)
+        except Exception as exc:  # noqa: BLE001
+            self._app_logger.warning(
+                "schedule sync notify failed",
+                extra={
+                    "event": "schedule_sync_notify_failed",
+                    "context": {
+                        "action": action,
+                        "schedule_id": schedule_id,
+                        "feishu_event_id": feishu_event_id or "",
+                        "error": repr(exc),
+                    },
+                },
+            )
 
     @staticmethod
     def _outer_context(task: PendingPlanTask) -> OuterPlanContext:

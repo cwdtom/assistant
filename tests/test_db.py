@@ -242,6 +242,84 @@ class AssistantDBTest(unittest.TestCase):
         self.assertTrue(self.db.delete_schedule(schedule_id))
         self.assertEqual(self.db.list_schedules(), [])
 
+    def test_schedule_feishu_mapping_crud_and_lookup(self) -> None:
+        first_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
+        second_id = self.db.add_schedule("项目复盘", "2026-02-20 11:00")
+
+        self.assertTrue(
+            self.db.upsert_schedule_feishu_mapping(
+                schedule_id=first_id,
+                feishu_event_id="evt_1",
+                calendar_id="cal_1",
+            )
+        )
+        first_mapping = self.db.get_schedule_feishu_mapping(first_id)
+        self.assertIsNotNone(first_mapping)
+        assert first_mapping is not None
+        self.assertEqual(first_mapping.feishu_event_id, "evt_1")
+        self.assertEqual(first_mapping.calendar_id, "cal_1")
+
+        by_event = self.db.get_schedule_feishu_mapping_by_event_id("evt_1", calendar_id="cal_1")
+        self.assertIsNotNone(by_event)
+        assert by_event is not None
+        self.assertEqual(by_event.schedule_id, first_id)
+
+        self.assertTrue(
+            self.db.upsert_schedule_feishu_mapping(
+                schedule_id=first_id,
+                feishu_event_id="evt_2",
+                calendar_id="cal_1",
+            )
+        )
+        self.assertIsNone(self.db.get_schedule_feishu_mapping_by_event_id("evt_1"))
+        self.assertIsNotNone(self.db.get_schedule_feishu_mapping_by_event_id("evt_2"))
+
+        self.assertTrue(
+            self.db.upsert_schedule_feishu_mapping(
+                schedule_id=second_id,
+                feishu_event_id="evt_2",
+                calendar_id="cal_1",
+            )
+        )
+        self.assertIsNone(self.db.get_schedule_feishu_mapping(first_id))
+        second_mapping = self.db.get_schedule_feishu_mapping(second_id)
+        self.assertIsNotNone(second_mapping)
+        assert second_mapping is not None
+        self.assertEqual(second_mapping.feishu_event_id, "evt_2")
+
+        listed = self.db.list_schedule_feishu_mappings(calendar_id="cal_1")
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0].schedule_id, second_id)
+
+        self.assertEqual(self.db.delete_schedule_feishu_mapping_by_event_id("evt_2", calendar_id="cal_1"), 1)
+        self.assertEqual(self.db.list_schedule_feishu_mappings(calendar_id="cal_1"), [])
+
+    def test_schedule_feishu_mapping_cascade_on_schedule_delete(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
+        self.assertTrue(
+            self.db.upsert_schedule_feishu_mapping(
+                schedule_id=schedule_id,
+                feishu_event_id="evt_100",
+                calendar_id="cal_100",
+            )
+        )
+        self.assertTrue(self.db.delete_schedule(schedule_id))
+        self.assertIsNone(self.db.get_schedule_feishu_mapping(schedule_id))
+
+    def test_list_base_schedules_in_window_excludes_recurring_expansion(self) -> None:
+        schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00")
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-02-20 09:00",
+            repeat_interval_minutes=1440,
+            repeat_times=5,
+        )
+        start = datetime.strptime("2026-02-20 00:00", "%Y-%m-%d %H:%M")
+        end = datetime.strptime("2026-02-23 23:59", "%Y-%m-%d %H:%M")
+        items = self.db.list_base_schedules_in_window(window_start=start, window_end=end, max_window_days=31)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].event_time, "2026-02-20 09:00")
+
     def test_schedule_crud(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
 

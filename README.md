@@ -117,6 +117,11 @@ python main.py
 - `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
 - `FEISHU_ENABLED`：是否启用 Feishu 长连接（默认 `false`）
+- `FEISHU_CALENDAR_SYNC_ENABLED`：是否启用本地日程与 Feishu 日历同步（默认 `false`）
+- `FEISHU_CALENDAR_ID`：同步目标日历 ID（启用同步时必填）
+- `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`：Feishu 为准对账间隔分钟（默认 `10`）
+- `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
+- `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
 - `PROACTIVE_REMINDER_ENABLED`：是否启用主动提醒（默认 `false`）
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`：主动提醒目标用户 open_id（启用时必填）
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
@@ -156,6 +161,8 @@ python main.py
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 - 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估，并在 `notify=true` 时向固定 `open_id` 主动发送 Feishu 文本
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
+- 若启用 Feishu 日历同步：启动时会先按窗口执行本地->飞书重建；首次飞书->本地对账会延后到一个 `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES` 周期后
+- Feishu 日历周期对账由 timer 驱动；当 `TIMER_ENABLED=false` 时不会执行周期对账
 
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环

@@ -57,6 +57,11 @@ class AppConfig:
     feishu_ack_reaction_enabled: bool
     feishu_ack_emoji_type: str
     feishu_done_emoji_type: str
+    feishu_calendar_sync_enabled: bool
+    feishu_calendar_id: str
+    feishu_calendar_reconcile_interval_minutes: int
+    feishu_calendar_bootstrap_past_days: int
+    feishu_calendar_bootstrap_future_days: int
     proactive_reminder_enabled: bool
     proactive_reminder_target_open_id: str
     proactive_reminder_interval_minutes: int
@@ -147,6 +152,17 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
         feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
         feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="OK"),
         feishu_done_emoji_type=_read_env_text("FEISHU_DONE_EMOJI_TYPE", default="DONE"),
+        feishu_calendar_sync_enabled=_read_env_bool("FEISHU_CALENDAR_SYNC_ENABLED", default=False),
+        feishu_calendar_id=_read_env_text("FEISHU_CALENDAR_ID", default=""),
+        feishu_calendar_reconcile_interval_minutes=_read_env_int(
+            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES", default=10, min_value=1
+        ),
+        feishu_calendar_bootstrap_past_days=_read_env_int(
+            "FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS", default=2, min_value=0
+        ),
+        feishu_calendar_bootstrap_future_days=_read_env_int(
+            "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS", default=5, min_value=0
+        ),
         proactive_reminder_enabled=_read_env_bool("PROACTIVE_REMINDER_ENABLED", default=False),
         proactive_reminder_target_open_id=_read_env_text("PROACTIVE_REMINDER_TARGET_OPEN_ID", default=""),
         proactive_reminder_interval_minutes=_read_env_int("PROACTIVE_REMINDER_INTERVAL_MINUTES", default=60, min_value=60),

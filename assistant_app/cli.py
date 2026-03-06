@@ -9,7 +9,9 @@ from typing import Any, Protocol, TextIO
 from assistant_app.agent import AssistantAgent
 from assistant_app.config import load_config, load_startup_app_version
 from assistant_app.db import AssistantDB
+from assistant_app.feishu_calendar_client import FeishuCalendarClient
 from assistant_app.feishu_adapter import create_feishu_runner
+from assistant_app.feishu_calendar_sync_service import FeishuCalendarSyncService
 from assistant_app.llm import OpenAICompatibleClient
 from assistant_app.logging_setup import (
     configure_app_logger,
@@ -185,6 +187,48 @@ def main() -> None:
         )
         agent.set_user_profile_refresh_runner(user_profile_refresh_service.run_manual_refresh)
     proactive_sender_holder: dict[str, Callable[[str, str], None] | None] = {"send": None}
+    calendar_sync_service: FeishuCalendarSyncService | None = None
+    if config.feishu_calendar_sync_enabled:
+        if not config.feishu_app_id or not config.feishu_app_secret or not config.feishu_calendar_id:
+            app_logger.warning(
+                "feishu calendar sync requires app_id/app_secret/calendar_id",
+                extra={
+                    "event": "feishu_calendar_sync_config_invalid",
+                    "context": {
+                        "enabled": True,
+                        "has_app_id": bool(config.feishu_app_id),
+                        "has_app_secret": bool(config.feishu_app_secret),
+                        "has_calendar_id": bool(config.feishu_calendar_id),
+                    },
+                },
+            )
+        else:
+            try:
+                calendar_client = FeishuCalendarClient(
+                    app_id=config.feishu_app_id,
+                    app_secret=config.feishu_app_secret,
+                    logger=app_logger,
+                )
+                calendar_sync_service = FeishuCalendarSyncService(
+                    db=db,
+                    client=calendar_client,
+                    logger=app_logger,
+                    calendar_id=config.feishu_calendar_id,
+                    reconcile_interval_minutes=config.feishu_calendar_reconcile_interval_minutes,
+                    bootstrap_past_days=config.feishu_calendar_bootstrap_past_days,
+                    bootstrap_future_days=config.feishu_calendar_bootstrap_future_days,
+                )
+                calendar_sync_service.start()
+                calendar_sync_service.run_startup_bootstrap_sync()
+                agent.set_schedule_sync_service(calendar_sync_service)
+            except Exception as exc:  # noqa: BLE001
+                app_logger.warning(
+                    "feishu calendar sync initialization failed",
+                    extra={
+                        "event": "feishu_calendar_sync_init_failed",
+                        "context": {"error": repr(exc)},
+                    },
+                )
 
     def _send_proactive_text(open_id: str, text: str) -> None:
         sender = proactive_sender_holder["send"]
@@ -218,6 +262,8 @@ def main() -> None:
     feishu_runner = None
     if config.timer_enabled:
         periodic_tasks: list[Callable[[], None]] = []
+        if calendar_sync_service is not None:
+            periodic_tasks.append(calendar_sync_service.poll_scheduled_reconcile)
         if user_profile_refresh_service is not None:
             periodic_tasks.append(user_profile_refresh_service.poll_scheduled)
         if proactive_reminder_service is not None:
@@ -300,6 +346,8 @@ def main() -> None:
             feishu_runner.stop()
         if timer_engine is not None:
             timer_engine.stop()
+        if calendar_sync_service is not None:
+            calendar_sync_service.stop()
 
 
 if __name__ == "__main__":

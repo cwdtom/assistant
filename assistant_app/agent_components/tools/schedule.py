@@ -211,6 +211,9 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
                 repeat_times=add_repeat_times,
                 remind_start_time=add_repeat_remind_start_time_text,
             )
+        notify_added = getattr(agent, "notify_schedule_added", None)
+        if callable(notify_added):
+            notify_added(schedule_id)
         remind_meta = _format_schedule_remind_meta_inline(
             remind_at=add_remind_at_text,
             repeat_remind_start_time=add_repeat_remind_start_time_text,
@@ -380,6 +383,9 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
             )
         if repeat_times == 1:
             agent.db.clear_schedule_recurrence(target_schedule_id)
+            notify_updated = getattr(agent, "notify_schedule_updated", None)
+            if callable(notify_updated):
+                notify_updated(target_schedule_id)
             item = agent.db.get_schedule(target_schedule_id)
             remind_meta = _format_schedule_remind_meta_inline(
                 remind_at=item.remind_at if item else None,
@@ -409,6 +415,9 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
                 repeat_times=repeat_times,
                 remind_start_time=remind_start_for_rule,
             )
+        notify_updated = getattr(agent, "notify_schedule_updated", None)
+        if callable(notify_updated):
+            notify_updated(target_schedule_id)
         item = agent.db.get_schedule(target_schedule_id)
         remind_meta = _format_schedule_remind_meta_inline(
             remind_at=item.remind_at if item else None,
@@ -431,10 +440,14 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
         return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
 
     if action == "delete":
+        mapping = agent.db.get_schedule_feishu_mapping(target_schedule_id)
         deleted = agent.db.delete_schedule(target_schedule_id)
         if not deleted:
             result = f"未找到日程 #{target_schedule_id}"
         else:
+            notify_deleted = getattr(agent, "notify_schedule_deleted", None)
+            if callable(notify_deleted):
+                notify_deleted(target_schedule_id, mapping.feishu_event_id if mapping is not None else None)
             result = f"日程 #{target_schedule_id} 已删除。"
         ok = _is_planner_command_success(result, tool="schedule")
         return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)

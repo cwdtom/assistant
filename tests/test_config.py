@@ -64,6 +64,11 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
         self.assertEqual(config.feishu_done_emoji_type, "DONE")
+        self.assertFalse(config.feishu_calendar_sync_enabled)
+        self.assertEqual(config.feishu_calendar_id, "")
+        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 10)
+        self.assertEqual(config.feishu_calendar_bootstrap_past_days, 2)
+        self.assertEqual(config.feishu_calendar_bootstrap_future_days, 5)
         self.assertFalse(config.proactive_reminder_enabled)
         self.assertEqual(config.proactive_reminder_target_open_id, "")
         self.assertEqual(config.proactive_reminder_interval_minutes, 60)
@@ -106,6 +111,11 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "OK")
         self.assertEqual(config.feishu_done_emoji_type, "DONE")
+        self.assertFalse(config.feishu_calendar_sync_enabled)
+        self.assertEqual(config.feishu_calendar_id, "")
+        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 10)
+        self.assertEqual(config.feishu_calendar_bootstrap_past_days, 2)
+        self.assertEqual(config.feishu_calendar_bootstrap_future_days, 5)
 
     def test_load_config_log_paths_follow_app_log_path_by_default(self) -> None:
         env = {
@@ -163,6 +173,11 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_ACK_REACTION_ENABLED": "off",
             "FEISHU_ACK_EMOJI_TYPE": "THUMBSUP",
             "FEISHU_DONE_EMOJI_TYPE": "DONE_CUSTOM",
+            "FEISHU_CALENDAR_SYNC_ENABLED": "on",
+            "FEISHU_CALENDAR_ID": "feishu.cn_demo@group.calendar.feishu.cn",
+            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES": "15",
+            "FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS": "3",
+            "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS": "8",
             "PROACTIVE_REMINDER_ENABLED": "on",
             "PROACTIVE_REMINDER_TARGET_OPEN_ID": "ou_target_1",
             "PROACTIVE_REMINDER_INTERVAL_MINUTES": "120",
@@ -213,6 +228,11 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "THUMBSUP")
         self.assertEqual(config.feishu_done_emoji_type, "DONE_CUSTOM")
+        self.assertTrue(config.feishu_calendar_sync_enabled)
+        self.assertEqual(config.feishu_calendar_id, "feishu.cn_demo@group.calendar.feishu.cn")
+        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 15)
+        self.assertEqual(config.feishu_calendar_bootstrap_past_days, 3)
+        self.assertEqual(config.feishu_calendar_bootstrap_future_days, 8)
         self.assertTrue(config.proactive_reminder_enabled)
         self.assertEqual(config.proactive_reminder_target_open_id, "ou_target_1")
         self.assertEqual(config.proactive_reminder_interval_minutes, 120)
@@ -262,6 +282,11 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_ACK_REACTION_ENABLED": "invalid",
             "FEISHU_ACK_EMOJI_TYPE": "   ",
             "FEISHU_DONE_EMOJI_TYPE": "   ",
+            "FEISHU_CALENDAR_SYNC_ENABLED": "invalid",
+            "FEISHU_CALENDAR_ID": "   ",
+            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES": "0",
+            "FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS": "-1",
+            "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS": "-2",
             "PROACTIVE_REMINDER_ENABLED": "invalid",
             "PROACTIVE_REMINDER_TARGET_OPEN_ID": "   ",
             "PROACTIVE_REMINDER_INTERVAL_MINUTES": "59",
@@ -312,6 +337,11 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "")
         self.assertEqual(config.feishu_done_emoji_type, "")
+        self.assertFalse(config.feishu_calendar_sync_enabled)
+        self.assertEqual(config.feishu_calendar_id, "")
+        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 10)
+        self.assertEqual(config.feishu_calendar_bootstrap_past_days, 2)
+        self.assertEqual(config.feishu_calendar_bootstrap_future_days, 5)
         self.assertFalse(config.proactive_reminder_enabled)
         self.assertEqual(config.proactive_reminder_target_open_id, "")
         self.assertEqual(config.proactive_reminder_interval_minutes, 60)

@@ -111,6 +111,11 @@ Optional runtime flags (all supported in `.env`):
 - `FEISHU_ACK_REACTION_ENABLED`: send ack reaction on incoming DM (default `true`)
 - `FEISHU_ACK_EMOJI_TYPE`: ack emoji type (default `OK`)
 - `FEISHU_DONE_EMOJI_TYPE`: done emoji type (default `DONE`)
+- `FEISHU_CALENDAR_SYNC_ENABLED`: enable local schedule <-> Feishu calendar sync (default `false`)
+- `FEISHU_CALENDAR_ID`: target Feishu calendar id for sync
+- `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`: Feishu-authoritative reconcile interval (default `10`)
+- `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`: startup bootstrap sync lookback days (default `2`)
+- `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`: startup bootstrap sync lookahead days (default `5`)
 - `PROACTIVE_REMINDER_ENABLED`: enable proactive reminder evaluation (default `false`)
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`: proactive evaluation interval in minutes (default `60`, min `60`)
@@ -128,6 +133,10 @@ Optional runtime flags (all supported in `.env`):
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
+- Optional Feishu calendar sync supports async create/delete after local schedule writes (updates use delete+create).
+- Optional Feishu calendar startup bootstrap + periodic reconcile window uses `[now-2d, now+5d]` by default.
+- Feishu calendar sync startup does not run immediate Feishu->local reconcile pull; first reconcile is delayed by one reconcile interval.
+- Feishu calendar periodic reconcile is driven by timer periodic tasks, so it does not run when `TIMER_ENABLED=false`.
 - Recurring schedule supports reminder start (`--remind-start`).
 - CLI starts a local reminder thread by default (`TIMER_ENABLED=off` to disable).
 - V1 reminders include single schedule reminders and recurring occurrence reminders.
