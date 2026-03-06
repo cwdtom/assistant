@@ -134,7 +134,8 @@ Optional runtime flags (all supported in `.env`):
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
 - Optional Feishu calendar sync supports async create/delete after local schedule writes (updates use delete+create).
-- Optional Feishu calendar startup bootstrap + periodic reconcile window uses `[now-2d, now+5d]` by default.
+- Optional Feishu calendar startup bootstrap + periodic reconcile window is day-aligned by default:
+  start=`(today-2d) 00:00:00`, end=`(today+5d) 23:59:59`.
 - Feishu calendar sync startup does not run immediate Feishu->local reconcile pull; first reconcile is delayed by one reconcile interval.
 - Feishu calendar periodic reconcile is driven by timer periodic tasks, so it does not run when `TIMER_ENABLED=false`.
 - Recurring schedule supports reminder start (`--remind-start`).

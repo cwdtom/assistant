@@ -144,6 +144,12 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
         assert mapping is not None
         self.assertEqual(mapping.feishu_event_id, "evt_rebuilt")
 
+    def test_window_bounds_are_day_aligned(self) -> None:
+        start, end = self.service._window_bounds(datetime(2026, 3, 5, 12, 34, 56))
+
+        self.assertEqual(start, datetime(2026, 3, 3, 0, 0, 0))
+        self.assertEqual(end, datetime(2026, 3, 10, 23, 59, 59))
+
     def test_startup_bootstrap_delays_first_reconcile_pull(self) -> None:
         self.service.run_startup_bootstrap_sync()
         list_calls_after_bootstrap = len(self.client.list_calls)

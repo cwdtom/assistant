@@ -488,7 +488,11 @@ class FeishuCalendarSyncService:
         )
 
     def _window_bounds(self, now: datetime) -> tuple[datetime, datetime]:
-        return now - timedelta(days=self._bootstrap_past_days), now + timedelta(days=self._bootstrap_future_days)
+        start_day = (now - timedelta(days=self._bootstrap_past_days)).date()
+        end_day = (now + timedelta(days=self._bootstrap_future_days)).date()
+        window_start = datetime.combine(start_day, datetime.min.time())
+        window_end = datetime.combine(end_day + timedelta(days=1), datetime.min.time()) - timedelta(seconds=1)
+        return window_start, window_end
 
     def _schedule_time_range(self, item: ScheduleItem) -> tuple[int, int]:
         try:

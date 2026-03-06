@@ -122,6 +122,7 @@ python main.py
 - `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`：Feishu 为准对账间隔分钟（默认 `10`）
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
+  - 启动重建窗口按自然日对齐：`start=(today-past_days) 00:00:00`，`end=(today+future_days) 23:59:59`
 - `PROACTIVE_REMINDER_ENABLED`：是否启用主动提醒（默认 `false`）
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`：主动提醒目标用户 open_id（启用时必填）
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
