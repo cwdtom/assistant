@@ -34,6 +34,10 @@
 ./scripts/bootstrap.sh --skip-install
 ./scripts/bootstrap.sh --skip-db
 ./scripts/bootstrap.sh --force-env
+
+# normalize minute-precision dirty datetime data in SQLite
+./scripts/fix_dirty_datetime_data.sh --db-path assistant.db --dry-run
+./scripts/fix_dirty_datetime_data.sh --db-path assistant.db
 ```
 
 1. 创建虚拟环境并安装依赖
