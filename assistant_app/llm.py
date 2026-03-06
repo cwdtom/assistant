@@ -4,6 +4,8 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from assistant_app.schemas.planner import ToolReplyPayload, normalize_tool_call_payload
+
 warnings.filterwarnings(
     "ignore",
     message=r"urllib3 v2 only supports OpenSSL 1\.1\.1\+.*",
@@ -184,14 +186,17 @@ class OpenAICompatibleClient:
         else:
             reasoning_text = str(reasoning)
 
-        return {
-            "assistant_message": {
-                "role": "assistant",
-                "content": content_text,
-                "tool_calls": OpenAICompatibleClient._normalize_tool_calls(message_payload.get("tool_calls")),
-            },
-            "reasoning_content": reasoning_text,
-        }
+        payload = ToolReplyPayload.model_validate(
+            {
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": content_text,
+                    "tool_calls": OpenAICompatibleClient._normalize_tool_calls(message_payload.get("tool_calls")),
+                },
+                "reasoning_content": reasoning_text,
+            }
+        )
+        return payload.model_dump()
 
     @staticmethod
     def _to_plain_message(message: Any) -> dict[str, Any]:
@@ -216,22 +221,10 @@ class OpenAICompatibleClient:
         normalized: list[dict[str, Any]] = []
         for raw in raw_tool_calls:
             payload = OpenAICompatibleClient._to_plain_tool_call(raw)
-            function = payload.get("function")
-            if not isinstance(function, dict):
+            tool_call = normalize_tool_call_payload(payload)
+            if tool_call is None:
                 continue
-            name = str(function.get("name") or "").strip()
-            arguments = function.get("arguments")
-            if arguments is None:
-                arguments = "{}"
-            elif not isinstance(arguments, str):
-                arguments = str(arguments)
-            normalized.append(
-                {
-                    "id": str(payload.get("id") or ""),
-                    "type": str(payload.get("type") or "function"),
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
+            normalized.append(tool_call.model_dump())
         return normalized
 
     @staticmethod

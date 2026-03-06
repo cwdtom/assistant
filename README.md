@@ -174,7 +174,7 @@ python main.py
 - `assistant_app/planner_plan_replan.py`：plan/replan 核心循环
 - `assistant_app/db.py`：SQLite 数据访问
 - `assistant_app/llm.py`：模型网关
-- `assistant_app/schemas/`：Pydantic schema 基类与后续结构化 payload 模型
+- `assistant_app/schemas/`：Pydantic schema 基类，以及 domain / planner 等结构化 payload 模型
 - `tests/`：单元测试
 - `main.py`：本地启动入口
 

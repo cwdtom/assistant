@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import unittest
+
+from assistant_app.planner_plan_replan import normalize_plan_decision, normalize_replan_decision
+from assistant_app.proactive_react import _normalize_done_arguments
+from assistant_app.schemas.planner import (
+    PlannedDecision,
+    ProactiveDoneArguments,
+    ReplannedDecision,
+    ThoughtContinueDecision,
+    ToolReplyPayload,
+)
+from pydantic import ValidationError
+
+
+class PlannerSchemaTest(unittest.TestCase):
+    def test_planned_decision_normalizes_tools(self) -> None:
+        decision = PlannedDecision.model_validate(
+            {
+                "status": "planned",
+                "goal": "查询最近历史",
+                "plan": [
+                    {"task": "检索历史", "completed": False, "tools": ["history", "history"]},
+                ],
+            }
+        )
+
+        self.assertEqual(decision.plan[0].tools, ["history"])
+
+    def test_planned_decision_rejects_completed_step(self) -> None:
+        with self.assertRaises(ValidationError):
+            PlannedDecision.model_validate(
+                {
+                    "status": "planned",
+                    "goal": "查询最近历史",
+                    "plan": [{"task": "检索历史", "completed": True, "tools": ["history"]}],
+                }
+            )
+
+    def test_planned_decision_rejects_extra_fields(self) -> None:
+        with self.assertRaises(ValidationError):
+            PlannedDecision.model_validate(
+                {
+                    "status": "planned",
+                    "goal": "查询最近历史",
+                    "plan": [{"task": "检索历史", "completed": False, "tools": ["history"]}],
+                    "unexpected": "value",
+                }
+            )
+
+    def test_replanned_decision_requires_pending_step(self) -> None:
+        with self.assertRaises(ValidationError):
+            ReplannedDecision.model_validate(
+                {
+                    "status": "replanned",
+                    "plan": [{"task": "检索历史", "completed": True, "tools": ["history"]}],
+                }
+            )
+
+    def test_thought_continue_rejects_non_execution_tool(self) -> None:
+        with self.assertRaises(ValidationError):
+            ThoughtContinueDecision.model_validate(
+                {
+                    "status": "continue",
+                    "current_step": "继续执行",
+                    "next_action": {"tool": "ask_user", "input": "请确认"},
+                    "question": None,
+                    "response": None,
+                }
+            )
+
+    def test_tool_reply_payload_accepts_nullable_content(self) -> None:
+        payload = ToolReplyPayload.model_validate(
+            {
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "schedule_list", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "reasoning_content": None,
+            }
+        )
+
+        self.assertIsNone(payload.assistant_message.content)
+        self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "schedule_list")
+
+    def test_proactive_done_arguments_reject_bool_score(self) -> None:
+        with self.assertRaises(ValidationError):
+            ProactiveDoneArguments.model_validate(
+                {"score": True, "message": "提醒", "reason": "重要"}
+            )
+
+    def test_normalize_plan_decision_ignores_extra_fields_for_compatibility(self) -> None:
+        decision = normalize_plan_decision(
+            {
+                "status": "planned",
+                "goal": "查询最近历史",
+                "plan": [{"task": "检索历史", "completed": False, "tools": ["history"]}],
+                "unexpected": "value",
+            }
+        )
+
+        self.assertIsNotNone(decision)
+
+    def test_normalize_replan_decision_rejects_completed_only_plan(self) -> None:
+        decision = normalize_replan_decision(
+            {
+                "status": "replanned",
+                "plan": [{"task": "检索历史", "completed": True, "tools": ["history"]}],
+            }
+        )
+
+        self.assertIsNone(decision)
+
+    def test_normalize_done_arguments_requires_message_above_threshold(self) -> None:
+        decision = _normalize_done_arguments(
+            {"score": 80, "message": " ", "reason": "存在风险"},
+            score_threshold=80,
+        )
+
+        self.assertIsNone(decision)
+
+
+if __name__ == "__main__":
+    unittest.main()

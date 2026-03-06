@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from assistant_app.planner_common import normalize_tool_names
+from pydantic import ValidationError
+
+from assistant_app.schemas.planner import PlannedDecision, ReplanDoneDecision, ReplannedDecision
 
 PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
@@ -101,53 +103,37 @@ REPLAN_PROMPT = f"""
 
 
 def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
-    status = str(payload.get("status") or "").strip().lower()
-    goal = str(payload.get("goal") or "").strip()
-    if status == "planned":
-        raw_plan = payload.get("plan", [])
-        if raw_plan is None:
-            raw_plan = []
-        if not goal or not isinstance(raw_plan, list):
-            return None
-        plan_items: list[dict[str, Any]] = []
-        for item in raw_plan:
-            if not isinstance(item, dict):
-                return None
-            task = str(item.get("task") or "").strip()
-            completed = item.get("completed")
-            tools = normalize_tool_names(item.get("tools"))
-            if not task or completed is not False or tools is None:
-                return None
-            plan_items.append({"task": task, "completed": False, "tools": tools})
-        return {"status": "planned", "goal": goal, "plan": plan_items}
-    return None
+    if not isinstance(payload, dict):
+        return None
+    normalized_payload = {
+        "status": str(payload.get("status") or "").strip().lower(),
+        "goal": str(payload.get("goal") or "").strip(),
+        "plan": [] if payload.get("plan") is None else payload.get("plan"),
+    }
+    try:
+        return PlannedDecision.model_validate(normalized_payload).model_dump()
+    except ValidationError:
+        return None
 
 
 def normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
     status = str(payload.get("status") or "").strip().lower()
-    if status == "replanned":
-        raw_plan = payload.get("plan")
-        if not isinstance(raw_plan, list):
-            return None
-        plan_items: list[dict[str, Any]] = []
-        has_pending = False
-        for item in raw_plan:
-            if not isinstance(item, dict):
-                return None
-            task = str(item.get("task") or "").strip()
-            completed = item.get("completed")
-            tools = normalize_tool_names(item.get("tools"))
-            if not task or not isinstance(completed, bool) or tools is None:
-                return None
-            if not completed:
-                has_pending = True
-            plan_items.append({"task": task, "completed": completed, "tools": tools})
-        if not plan_items or not has_pending:
-            return None
-        return {"status": "replanned", "plan": plan_items}
     if status == "done":
-        response = str(payload.get("response") or "").strip()
-        if not response:
+        normalized_payload = {
+            "status": "done",
+            "response": str(payload.get("response") or "").strip(),
+        }
+        try:
+            return ReplanDoneDecision.model_validate(normalized_payload).model_dump()
+        except ValidationError:
             return None
-        return {"status": "done", "response": response}
-    return None
+    normalized_payload = {
+        "status": status,
+        "plan": payload.get("plan"),
+    }
+    try:
+        return ReplannedDecision.model_validate(normalized_payload).model_dump()
+    except ValidationError:
+        return None

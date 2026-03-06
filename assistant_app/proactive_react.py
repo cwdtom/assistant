@@ -5,9 +5,12 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
+
 from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
+from assistant_app.schemas.planner import AssistantToolMessage, ProactiveDoneArguments, normalize_tool_call_payload
 
 PROACTIVE_REACT_SYSTEM_PROMPT = """
 你是“主动提醒决策器”。
@@ -218,18 +221,26 @@ def _normalize_assistant_message(payload: dict[str, Any]) -> dict[str, Any]:
     assistant_message = payload.get("assistant_message") if isinstance(payload, dict) else None
     if not isinstance(assistant_message, dict):
         return {"role": "assistant", "content": "", "tool_calls": []}
-    role = str(assistant_message.get("role") or "assistant")
-    content = assistant_message.get("content")
-    if not isinstance(content, str):
-        content = "" if content is None else str(content)
-    tool_calls = assistant_message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        tool_calls = []
-    return {
-        "role": role,
-        "content": content,
-        "tool_calls": tool_calls,
-    }
+    raw_tool_calls = assistant_message.get("tool_calls")
+    tool_calls: list[dict[str, Any]] = []
+    if isinstance(raw_tool_calls, list):
+        for item in raw_tool_calls:
+            tool_call = normalize_tool_call_payload(item)
+            if tool_call is not None:
+                tool_calls.append(tool_call.model_dump())
+    try:
+        normalized = AssistantToolMessage.model_validate(
+            {
+                "role": str(assistant_message.get("role") or "assistant"),
+                "content": assistant_message.get("content"),
+                "tool_calls": tool_calls,
+            }
+        ).model_dump()
+    except ValidationError:
+        return {"role": "assistant", "content": "", "tool_calls": []}
+    content = normalized.get("content")
+    normalized["content"] = "" if content is None else str(content)
+    return normalized
 
 
 def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
@@ -254,24 +265,17 @@ def _normalize_done_arguments(
     *,
     score_threshold: int,
 ) -> ProactiveDecision | None:
-    score = arguments.get("score")
-    message = arguments.get("message")
-    reason = arguments.get("reason")
-    if not isinstance(score, int) or isinstance(score, bool):
+    try:
+        parsed = ProactiveDoneArguments.model_validate(arguments)
+    except ValidationError:
         return None
-    if score < 0 or score > 100:
-        return None
-    if not isinstance(message, str):
-        return None
-    if not isinstance(reason, str) or not reason.strip():
-        return None
-    normalized_message = message.strip()
-    if score >= score_threshold and not normalized_message:
+    normalized_message = parsed.message.strip()
+    if parsed.score >= score_threshold and not normalized_message:
         return None
     return ProactiveDecision(
-        score=score,
+        score=parsed.score,
         message=normalized_message,
-        reason=reason.strip(),
+        reason=parsed.reason.strip(),
     )
 
 
