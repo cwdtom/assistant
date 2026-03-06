@@ -170,7 +170,7 @@ python main.py
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环
 - `assistant_app/agent.py`：命令分发与自然语言流程编排
-- `assistant_app/agent_components/`：`agent.py` 拆分后的组件目录（command handlers / planner loop / parsing utils / render helpers / tools / shared models）
+- `assistant_app/agent_components/`：`agent.py` 拆分后的组件目录（command handlers / planner loop / parsing utils / render helpers / tools / 基于 Pydantic 的内部状态模型）
 - `assistant_app/planner_plan_replan.py`：plan/replan 核心循环
 - `assistant_app/db.py`：SQLite 数据访问
 - `assistant_app/llm.py`：模型网关
