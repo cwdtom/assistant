@@ -9,6 +9,8 @@ dependencies = [
   "openai>=1.50.0",
   "lark-oapi>=1.4.11",
   "playwright>=1.52.0",
+  "pydantic>=2",
+  "pydantic-settings>=2",
   "requests>=2.32.0"
 ]
 
@@ -27,8 +29,8 @@ assistant = "assistant_app.cli:main"
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["assistant_app"]
+[tool.setuptools.packages.find]
+include = ["assistant_app", "assistant_app.*"]
 
 [tool.ruff]
 target-version = "py310"

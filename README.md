@@ -104,6 +104,7 @@ python main.py
 
 ## Core Environment Variables
 - `.env` 加载优先级最高：若系统环境与 `.env` 同名，最终以 `.env` 值为准
+- 配置加载现已使用 Pydantic 校验：非法布尔/数值/越界配置会在启动时直接报 `ValidationError`，不再静默回退
 - `DEEPSEEK_API_KEY`：必填
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
@@ -112,12 +113,13 @@ python main.py
 - `ASSISTANT_DB_PATH`：SQLite 路径（默认 `assistant.db`）
 - `USER_PROFILE_PATH`：user_profile 文件路径（用于计划上下文与自动刷新）
 - `USER_PROFILE_REFRESH_ENABLED`：是否启用 user_profile 自动刷新（默认 `true`）
-- `SEARCH_PROVIDER`：搜索 provider（`bocha|bing`）
+- `SEARCH_PROVIDER`：搜索 provider（`bocha|bochaai|bing`；其中 `bochaai` 作为 `bocha` 兼容别名）
 - `BOCHA_API_KEY`：当 provider 为 `bocha` 时推荐配置
 - `BOCHA_SEARCH_SUMMARY`：是否请求 Bocha 返回 summary（默认 `true`）
 - `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
 - `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：配置后自动启用 Feishu 长连接
+- `FEISHU_ALLOWED_OPEN_IDS`：open_id 白名单；支持逗号分隔字符串，也支持 JSON 数组
 - `FEISHU_CALENDAR_ID`：配置后自动启用本地日程与 Feishu 日历同步；需同时配置 Feishu 凭据
 - `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`：Feishu 为准对账间隔分钟（默认 `10`）
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
@@ -172,6 +174,7 @@ python main.py
 - `assistant_app/planner_plan_replan.py`：plan/replan 核心循环
 - `assistant_app/db.py`：SQLite 数据访问
 - `assistant_app/llm.py`：模型网关
+- `assistant_app/schemas/`：Pydantic schema 基类与后续结构化 payload 模型
 - `tests/`：单元测试
 - `main.py`：本地启动入口
 

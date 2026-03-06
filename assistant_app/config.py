@@ -1,73 +1,222 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated, Any, Optional, Tuple
+
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 UNKNOWN_APP_VERSION = "unknown"
 DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD = 80
+DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 _PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$""")
 
 
-@dataclass(frozen=True)
-class AppConfig:
-    api_key: str | None
-    base_url: str
-    model: str
-    llm_temperature: float
-    db_path: str
-    user_profile_path: str
-    user_profile_refresh_enabled: bool
-    user_profile_refresh_hour: int
-    user_profile_refresh_lookback_days: int
-    user_profile_refresh_max_turns: int
-    llm_trace_log_path: str
-    app_log_path: str
-    app_log_retention_days: int
-    plan_replan_max_steps: int
-    plan_replan_retry_count: int
-    plan_observation_char_limit: int
-    plan_observation_history_limit: int
-    plan_continuous_failure_limit: int
-    task_cancel_command: str
-    internet_search_top_k: int
-    search_provider: str
-    bocha_api_key: str | None
-    bocha_search_summary: bool
-    schedule_max_window_days: int
-    cli_progress_color: str
-    timer_enabled: bool
-    timer_poll_interval_seconds: int
-    timer_lookahead_seconds: int
-    timer_batch_limit: int
-    persona_rewrite_enabled: bool
-    assistant_persona: str
-    feishu_app_id: str
-    feishu_app_secret: str
-    feishu_allowed_open_ids: tuple[str, ...]
-    feishu_send_retry_count: int
-    feishu_text_chunk_size: int
-    feishu_dedup_ttl_seconds: int
-    feishu_log_path: str
-    feishu_log_retention_days: int
-    feishu_ack_reaction_enabled: bool
-    feishu_ack_emoji_type: str
-    feishu_done_emoji_type: str
-    feishu_calendar_id: str
-    feishu_calendar_reconcile_interval_minutes: int
-    feishu_calendar_bootstrap_past_days: int
-    feishu_calendar_bootstrap_future_days: int
-    proactive_reminder_target_open_id: str
-    proactive_reminder_interval_minutes: int
-    proactive_reminder_lookahead_hours: int
-    proactive_reminder_night_quiet_hint: str
-    proactive_reminder_score_threshold: int
+class AppConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+    )
+
+    api_key: Optional[str] = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
+    base_url: str = Field(default="https://api.deepseek.com", validation_alias="DEEPSEEK_BASE_URL")
+    model: str = Field(default="deepseek-chat", validation_alias="DEEPSEEK_MODEL")
+    llm_temperature: float = Field(default=1.3, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
+    db_path: str = Field(default="assistant.db", validation_alias="ASSISTANT_DB_PATH")
+    user_profile_path: str = Field(default="", validation_alias="USER_PROFILE_PATH")
+    user_profile_refresh_enabled: bool = Field(default=True, validation_alias="USER_PROFILE_REFRESH_ENABLED")
+    user_profile_refresh_hour: int = Field(default=4, ge=0, le=23, validation_alias="USER_PROFILE_REFRESH_HOUR")
+    user_profile_refresh_lookback_days: int = Field(
+        default=30,
+        ge=1,
+        validation_alias="USER_PROFILE_REFRESH_LOOKBACK_DAYS",
+    )
+    user_profile_refresh_max_turns: int = Field(default=10000, ge=1, validation_alias="USER_PROFILE_REFRESH_MAX_TURNS")
+    llm_trace_log_path: str = Field(default="", validation_alias="LLM_TRACE_LOG_PATH")
+    app_log_path: str = Field(default="logs/app.log", validation_alias="APP_LOG_PATH")
+    app_log_retention_days: int = Field(default=7, ge=1, validation_alias="APP_LOG_RETENTION_DAYS")
+    plan_replan_max_steps: int = Field(default=100, ge=1, validation_alias="PLAN_REPLAN_MAX_STEPS")
+    plan_replan_retry_count: int = Field(default=3, ge=0, validation_alias="PLAN_REPLAN_RETRY_COUNT")
+    plan_observation_char_limit: int = Field(default=10000, ge=1, validation_alias="PLAN_OBSERVATION_CHAR_LIMIT")
+    plan_observation_history_limit: int = Field(
+        default=100,
+        ge=1,
+        validation_alias="PLAN_OBSERVATION_HISTORY_LIMIT",
+    )
+    plan_continuous_failure_limit: int = Field(
+        default=3,
+        ge=1,
+        validation_alias="PLAN_CONTINUOUS_FAILURE_LIMIT",
+    )
+    task_cancel_command: str = Field(default=DEFAULT_TASK_CANCEL_COMMAND, validation_alias="TASK_CANCEL_COMMAND")
+    internet_search_top_k: int = Field(default=3, ge=1, validation_alias="INTERNET_SEARCH_TOP_K")
+    search_provider: str = Field(default="bocha", validation_alias="SEARCH_PROVIDER")
+    bocha_api_key: Optional[str] = Field(default=None, validation_alias="BOCHA_API_KEY")
+    bocha_search_summary: bool = Field(default=True, validation_alias="BOCHA_SEARCH_SUMMARY")
+    schedule_max_window_days: int = Field(default=31, ge=1, validation_alias="SCHEDULE_MAX_WINDOW_DAYS")
+    cli_progress_color: str = Field(default="gray", validation_alias="CLI_PROGRESS_COLOR")
+    timer_enabled: bool = Field(default=True, validation_alias="TIMER_ENABLED")
+    timer_poll_interval_seconds: int = Field(default=15, ge=1, validation_alias="TIMER_POLL_INTERVAL_SECONDS")
+    timer_lookahead_seconds: int = Field(default=30, ge=1, validation_alias="TIMER_LOOKAHEAD_SECONDS")
+    timer_batch_limit: int = Field(default=200, ge=1, validation_alias="TIMER_BATCH_LIMIT")
+    persona_rewrite_enabled: bool = Field(default=True, validation_alias="PERSONA_REWRITE_ENABLED")
+    assistant_persona: str = Field(default="", validation_alias="ASSISTANT_PERSONA")
+    feishu_app_id: str = Field(default="", validation_alias="FEISHU_APP_ID")
+    feishu_app_secret: str = Field(default="", validation_alias="FEISHU_APP_SECRET")
+    feishu_allowed_open_ids: Annotated[Tuple[str, ...], NoDecode] = Field(default=(), validation_alias="FEISHU_ALLOWED_OPEN_IDS")
+    feishu_send_retry_count: int = Field(default=3, ge=0, validation_alias="FEISHU_SEND_RETRY_COUNT")
+    feishu_text_chunk_size: int = Field(default=5000, ge=1, validation_alias="FEISHU_TEXT_CHUNK_SIZE")
+    feishu_dedup_ttl_seconds: int = Field(default=600, ge=1, validation_alias="FEISHU_DEDUP_TTL_SECONDS")
+    feishu_log_path: str = Field(default="", validation_alias="FEISHU_LOG_PATH")
+    feishu_log_retention_days: int = Field(default=7, ge=1, validation_alias="FEISHU_LOG_RETENTION_DAYS")
+    feishu_ack_reaction_enabled: bool = Field(default=True, validation_alias="FEISHU_ACK_REACTION_ENABLED")
+    feishu_ack_emoji_type: str = Field(default="Get", validation_alias="FEISHU_ACK_EMOJI_TYPE")
+    feishu_done_emoji_type: str = Field(default="DONE", validation_alias="FEISHU_DONE_EMOJI_TYPE")
+    feishu_calendar_id: str = Field(default="", validation_alias="FEISHU_CALENDAR_ID")
+    feishu_calendar_reconcile_interval_minutes: int = Field(
+        default=10,
+        ge=1,
+        validation_alias="FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES",
+    )
+    feishu_calendar_bootstrap_past_days: int = Field(
+        default=2,
+        ge=0,
+        validation_alias="FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS",
+    )
+    feishu_calendar_bootstrap_future_days: int = Field(
+        default=5,
+        ge=0,
+        validation_alias="FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS",
+    )
+    proactive_reminder_target_open_id: str = Field(
+        default="",
+        validation_alias="PROACTIVE_REMINDER_TARGET_OPEN_ID",
+    )
+    proactive_reminder_interval_minutes: int = Field(
+        default=60,
+        ge=60,
+        validation_alias="PROACTIVE_REMINDER_INTERVAL_MINUTES",
+    )
+    proactive_reminder_lookahead_hours: int = Field(
+        default=24,
+        ge=1,
+        validation_alias="PROACTIVE_REMINDER_LOOKAHEAD_HOURS",
+    )
+    proactive_reminder_night_quiet_hint: str = Field(
+        default="23:00-08:00",
+        validation_alias="PROACTIVE_REMINDER_NIGHT_QUIET_HINT",
+    )
+    proactive_reminder_score_threshold: int = Field(
+        default=DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
+        ge=0,
+        le=100,
+        validation_alias="PROACTIVE_REMINDER_SCORE_THRESHOLD",
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: Any,
+        env_settings: Any,
+        dotenv_settings: Any,
+        file_secret_settings: Any,
+    ) -> tuple[Any, ...]:
+        return init_settings, dotenv_settings, env_settings, file_secret_settings
+
+    @field_validator("api_key", "base_url", "model", mode="before")
+    @classmethod
+    def _default_blank_core_text(cls, value: Any, info: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if value.strip():
+            return value
+        defaults = {
+            "api_key": None,
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-chat",
+        }
+        return defaults[info.field_name]
+
+    @field_validator("task_cancel_command", mode="before")
+    @classmethod
+    def _default_blank_task_cancel_command(cls, value: Any) -> Any:
+        if value is None:
+            return DEFAULT_TASK_CANCEL_COMMAND
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_TASK_CANCEL_COMMAND
+        return value
+
+    @field_validator("search_provider", mode="before")
+    @classmethod
+    def _normalize_search_provider(cls, value: Any) -> Any:
+        if value is None:
+            return "bocha"
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        if not normalized:
+            return "bocha"
+        if normalized not in {"bing", "bocha", "bochaai"}:
+            raise ValueError("SEARCH_PROVIDER must be one of: bing, bocha, bochaai")
+        return normalized
+
+    @field_validator("cli_progress_color", mode="before")
+    @classmethod
+    def _normalize_cli_progress_color(cls, value: Any) -> Any:
+        if value is None:
+            return "gray"
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        return normalized or "gray"
+
+    @field_validator("bocha_api_key", mode="before")
+    @classmethod
+    def _normalize_optional_text(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("feishu_allowed_open_ids", mode="before")
+    @classmethod
+    def _parse_feishu_allowed_open_ids(cls, value: Any) -> Any:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            if not value.strip():
+                return ()
+            stripped = value.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                loaded = json.loads(stripped)
+                if not isinstance(loaded, list):
+                    raise ValueError("FEISHU_ALLOWED_OPEN_IDS JSON value must be a list")
+                return tuple(str(item).strip() for item in loaded if str(item).strip())
+            return tuple(item.strip() for item in stripped.split(",") if item.strip())
+        if isinstance(value, (list, tuple, set)):
+            return tuple(str(item).strip() for item in value if str(item).strip())
+        return value
+
+    @model_validator(mode="after")
+    def _inherit_log_paths(self) -> "AppConfig":
+        if "llm_trace_log_path" not in self.model_fields_set:
+            object.__setattr__(self, "llm_trace_log_path", self.app_log_path)
+        if "feishu_log_path" not in self.model_fields_set:
+            object.__setattr__(self, "feishu_log_path", self.app_log_path)
+        return self
 
 
 def load_env_file(env_path: str = ".env") -> None:
-    """Minimal .env loader to avoid extra dependency for MVP.
+    """Minimal .env loader kept for compatibility and tests.
 
     `.env` values intentionally override existing process env values so local
     project configuration is always deterministic when the file is present.
@@ -88,168 +237,13 @@ def load_env_file(env_path: str = ".env") -> None:
 
 
 def load_config(load_dotenv: bool = True) -> AppConfig:
-    if load_dotenv:
-        load_env_file()
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    base_url = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
-    model = os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
-    task_cancel_command = (os.getenv("TASK_CANCEL_COMMAND") or "取消当前任务").strip() or "取消当前任务"
-    search_provider = (os.getenv("SEARCH_PROVIDER") or "bocha").strip().lower() or "bocha"
-    if search_provider not in {"bing", "bocha", "bochaai"}:
-        search_provider = "bocha"
-    bocha_api_key = (os.getenv("BOCHA_API_KEY") or "").strip() or None
-    app_log_path = _read_env_text("APP_LOG_PATH", default="logs/app.log")
-    llm_trace_log_path = _read_env_text("LLM_TRACE_LOG_PATH", default=app_log_path)
-    feishu_log_path = _read_env_text("FEISHU_LOG_PATH", default=app_log_path)
-    return AppConfig(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        llm_temperature=_read_env_float("LLM_TEMPERATURE", default=1.3, min_value=0.0, max_value=2.0),
-        db_path=os.getenv("ASSISTANT_DB_PATH", "assistant.db"),
-        user_profile_path=_read_env_text("USER_PROFILE_PATH", default=""),
-        user_profile_refresh_enabled=_read_env_bool("USER_PROFILE_REFRESH_ENABLED", default=True),
-        user_profile_refresh_hour=_read_env_hour("USER_PROFILE_REFRESH_HOUR", default=4),
-        user_profile_refresh_lookback_days=_read_env_int(
-            "USER_PROFILE_REFRESH_LOOKBACK_DAYS", default=30, min_value=1
-        ),
-        user_profile_refresh_max_turns=_read_env_int("USER_PROFILE_REFRESH_MAX_TURNS", default=10000, min_value=1),
-        llm_trace_log_path=llm_trace_log_path,
-        app_log_path=app_log_path,
-        app_log_retention_days=_read_env_int("APP_LOG_RETENTION_DAYS", default=7, min_value=1),
-        plan_replan_max_steps=_read_env_int("PLAN_REPLAN_MAX_STEPS", default=100, min_value=1),
-        plan_replan_retry_count=_read_env_int("PLAN_REPLAN_RETRY_COUNT", default=3, min_value=0),
-        plan_observation_char_limit=_read_env_int("PLAN_OBSERVATION_CHAR_LIMIT", default=10000, min_value=1),
-        plan_observation_history_limit=_read_env_int("PLAN_OBSERVATION_HISTORY_LIMIT", default=100, min_value=1),
-        plan_continuous_failure_limit=_read_env_int("PLAN_CONTINUOUS_FAILURE_LIMIT", default=3, min_value=1),
-        task_cancel_command=task_cancel_command,
-        internet_search_top_k=_read_env_int("INTERNET_SEARCH_TOP_K", default=3, min_value=1),
-        search_provider=search_provider,
-        bocha_api_key=bocha_api_key,
-        bocha_search_summary=_read_env_bool("BOCHA_SEARCH_SUMMARY", default=True),
-        schedule_max_window_days=_read_env_int("SCHEDULE_MAX_WINDOW_DAYS", default=31, min_value=1),
-        cli_progress_color=(os.getenv("CLI_PROGRESS_COLOR") or "gray").strip().lower() or "gray",
-        timer_enabled=_read_env_bool("TIMER_ENABLED", default=True),
-        timer_poll_interval_seconds=_read_env_int("TIMER_POLL_INTERVAL_SECONDS", default=15, min_value=1),
-        timer_lookahead_seconds=_read_env_int("TIMER_LOOKAHEAD_SECONDS", default=30, min_value=0),
-        timer_batch_limit=_read_env_int("TIMER_BATCH_LIMIT", default=200, min_value=1),
-        persona_rewrite_enabled=_read_env_bool("PERSONA_REWRITE_ENABLED", default=True),
-        assistant_persona=_read_env_text("ASSISTANT_PERSONA", default=""),
-        feishu_app_id=_read_env_text("FEISHU_APP_ID", default=""),
-        feishu_app_secret=_read_env_text("FEISHU_APP_SECRET", default=""),
-        feishu_allowed_open_ids=_read_env_list("FEISHU_ALLOWED_OPEN_IDS"),
-        feishu_send_retry_count=_read_env_int("FEISHU_SEND_RETRY_COUNT", default=3, min_value=0),
-        feishu_text_chunk_size=_read_env_int("FEISHU_TEXT_CHUNK_SIZE", default=5000, min_value=1),
-        feishu_dedup_ttl_seconds=_read_env_int("FEISHU_DEDUP_TTL_SECONDS", default=600, min_value=1),
-        feishu_log_path=feishu_log_path,
-        feishu_log_retention_days=_read_env_int("FEISHU_LOG_RETENTION_DAYS", default=7, min_value=1),
-        feishu_ack_reaction_enabled=_read_env_bool("FEISHU_ACK_REACTION_ENABLED", default=True),
-        feishu_ack_emoji_type=_read_env_text("FEISHU_ACK_EMOJI_TYPE", default="Get"),
-        feishu_done_emoji_type=_read_env_text("FEISHU_DONE_EMOJI_TYPE", default="DONE"),
-        feishu_calendar_id=_read_env_text("FEISHU_CALENDAR_ID", default=""),
-        feishu_calendar_reconcile_interval_minutes=_read_env_int(
-            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES", default=10, min_value=1
-        ),
-        feishu_calendar_bootstrap_past_days=_read_env_int(
-            "FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS", default=2, min_value=0
-        ),
-        feishu_calendar_bootstrap_future_days=_read_env_int(
-            "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS", default=5, min_value=0
-        ),
-        proactive_reminder_target_open_id=_read_env_text("PROACTIVE_REMINDER_TARGET_OPEN_ID", default=""),
-        proactive_reminder_interval_minutes=_read_env_int("PROACTIVE_REMINDER_INTERVAL_MINUTES", default=60, min_value=60),
-        proactive_reminder_lookahead_hours=_read_env_int("PROACTIVE_REMINDER_LOOKAHEAD_HOURS", default=24, min_value=1),
-        proactive_reminder_night_quiet_hint=_read_env_text(
-            "PROACTIVE_REMINDER_NIGHT_QUIET_HINT",
-            default="23:00-08:00",
-        ),
-        proactive_reminder_score_threshold=_read_env_int_in_range(
-            "PROACTIVE_REMINDER_SCORE_THRESHOLD",
-            default=DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
-            min_value=0,
-            max_value=100,
-        ),
-    )
-
-
-def _read_env_int(name: str, *, default: int, min_value: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw.strip())
-    except ValueError:
-        return default
-    if value < min_value:
-        return default
-    return value
-
-
-def _read_env_hour(name: str, *, default: int) -> int:
-    value = _read_env_int(name, default=default, min_value=0)
-    if value > 23:
-        return default
-    return value
-
-
-def _read_env_float(name: str, *, default: float, min_value: float, max_value: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw.strip())
-    except ValueError:
-        return default
-    if value < min_value or value > max_value:
-        return default
-    return value
-
-
-def _read_env_int_in_range(name: str, *, default: int, min_value: int, max_value: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw.strip())
-    except ValueError:
-        return default
-    if value < min_value or value > max_value:
-        return default
-    return value
-
-
-def _read_env_text(name: str, *, default: str) -> str:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip()
-
-
-def _read_env_bool(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _read_env_list(name: str) -> tuple[str, ...]:
-    raw = os.getenv(name)
-    if raw is None:
-        return ()
-    values = [item.strip() for item in raw.split(",")]
-    result = tuple(item for item in values if item)
-    return result
+    return AppConfig(_env_file=None if not load_dotenv else ".env")
 
 
 def load_startup_app_version(
     *,
-    pyproject_path: str | Path,
-    logger: logging.Logger | None = None,
+    pyproject_path: Any,
+    logger: Optional[logging.Logger] = None,
 ) -> str:
     path = Path(pyproject_path)
     try:

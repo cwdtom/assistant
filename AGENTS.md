@@ -50,6 +50,7 @@ Supported input forms in CLI:
 2. Add/update unit tests with each functional change.
 3. Fix existing defects before extending features.
 4. Keep interfaces stable and explicit.
+5. New structured payloads should prefer Pydantic schemas under `assistant_app/schemas/`.
 
 ### Step 3: output report
 - Report generation is optional for current user request.

@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from assistant_app.config import (
     DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
     UNKNOWN_APP_VERSION,
@@ -230,107 +232,65 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.proactive_reminder_night_quiet_hint, "22:00-07:00")
         self.assertEqual(config.proactive_reminder_score_threshold, 95)
 
-    def test_load_config_invalid_runtime_knobs_fall_back_to_defaults(self) -> None:
+    def test_load_config_rejects_invalid_bool_value(self) -> None:
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
-            "USER_PROFILE_PATH": "   ",
             "USER_PROFILE_REFRESH_ENABLED": "invalid",
-            "USER_PROFILE_REFRESH_HOUR": "24",
-            "USER_PROFILE_REFRESH_LOOKBACK_DAYS": "0",
-            "USER_PROFILE_REFRESH_MAX_TURNS": "bad",
-            "LLM_TEMPERATURE": "3.5",
-            "PLAN_REPLAN_MAX_STEPS": "0",
-            "PLAN_REPLAN_RETRY_COUNT": "-3",
-            "PLAN_OBSERVATION_CHAR_LIMIT": "bad",
-            "PLAN_OBSERVATION_HISTORY_LIMIT": "0",
-            "PLAN_CONTINUOUS_FAILURE_LIMIT": "-1",
-            "TASK_CANCEL_COMMAND": "   ",
-            "INTERNET_SEARCH_TOP_K": "0",
-            "SEARCH_PROVIDER": "unsupported",
-            "BOCHA_API_KEY": "   ",
-            "BOCHA_SEARCH_SUMMARY": "bad",
-            "SCHEDULE_MAX_WINDOW_DAYS": "-7",
-            "CLI_PROGRESS_COLOR": "  ",
-            "LLM_TRACE_LOG_PATH": "   ",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ValidationError):
+                load_config(load_dotenv=False)
+
+    def test_load_config_rejects_invalid_float_value(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "deep-key",
+            "LLM_TEMPERATURE": "bad",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ValidationError):
+                load_config(load_dotenv=False)
+
+    def test_load_config_rejects_out_of_range_value(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "deep-key",
+            "PROACTIVE_REMINDER_SCORE_THRESHOLD": "101",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ValidationError):
+                load_config(load_dotenv=False)
+
+    def test_load_config_normalizes_blank_text_fields(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "   ",
             "APP_LOG_PATH": "   ",
-            "APP_LOG_RETENTION_DAYS": "0",
-            "TIMER_ENABLED": "invalid",
-            "TIMER_POLL_INTERVAL_SECONDS": "0",
-            "TIMER_LOOKAHEAD_SECONDS": "-1",
-            "TIMER_BATCH_LIMIT": "bad",
-            "PERSONA_REWRITE_ENABLED": "invalid",
-            "ASSISTANT_PERSONA": "   ",
-            "FEISHU_APP_ID": "   ",
-            "FEISHU_APP_SECRET": "   ",
-            "FEISHU_ALLOWED_OPEN_IDS": " , ,, ",
-            "FEISHU_SEND_RETRY_COUNT": "-1",
-            "FEISHU_TEXT_CHUNK_SIZE": "0",
-            "FEISHU_DEDUP_TTL_SECONDS": "abc",
+            "LLM_TRACE_LOG_PATH": "   ",
             "FEISHU_LOG_PATH": "   ",
-            "FEISHU_LOG_RETENTION_DAYS": "0",
-            "FEISHU_ACK_REACTION_ENABLED": "invalid",
             "FEISHU_ACK_EMOJI_TYPE": "   ",
             "FEISHU_DONE_EMOJI_TYPE": "   ",
-            "FEISHU_CALENDAR_ID": "   ",
-            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES": "0",
-            "FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS": "-1",
-            "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS": "-2",
-            "PROACTIVE_REMINDER_TARGET_OPEN_ID": "   ",
-            "PROACTIVE_REMINDER_INTERVAL_MINUTES": "59",
-            "PROACTIVE_REMINDER_LOOKAHEAD_HOURS": "0",
+            "TASK_CANCEL_COMMAND": "   ",
             "PROACTIVE_REMINDER_NIGHT_QUIET_HINT": "   ",
-            "PROACTIVE_REMINDER_SCORE_THRESHOLD": "101",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
 
-        self.assertEqual(config.plan_replan_max_steps, 100)
-        self.assertEqual(config.llm_temperature, 1.3)
-        self.assertEqual(config.plan_replan_retry_count, 3)
-        self.assertEqual(config.plan_observation_char_limit, 10000)
-        self.assertEqual(config.plan_observation_history_limit, 100)
-        self.assertEqual(config.plan_continuous_failure_limit, 3)
-        self.assertEqual(config.task_cancel_command, "取消当前任务")
-        self.assertEqual(config.user_profile_path, "")
-        self.assertTrue(config.user_profile_refresh_enabled)
-        self.assertEqual(config.user_profile_refresh_hour, 4)
-        self.assertEqual(config.user_profile_refresh_lookback_days, 30)
-        self.assertEqual(config.user_profile_refresh_max_turns, 10000)
-        self.assertEqual(config.internet_search_top_k, 3)
-        self.assertEqual(config.search_provider, "bocha")
-        self.assertIsNone(config.bocha_api_key)
-        self.assertTrue(config.bocha_search_summary)
-        self.assertEqual(config.schedule_max_window_days, 31)
-        self.assertEqual(config.cli_progress_color, "gray")
-        self.assertEqual(config.llm_trace_log_path, "")
+        self.assertIsNone(config.api_key)
         self.assertEqual(config.app_log_path, "")
-        self.assertEqual(config.app_log_retention_days, 7)
-        self.assertTrue(config.timer_enabled)
-        self.assertEqual(config.timer_poll_interval_seconds, 15)
-        self.assertEqual(config.timer_lookahead_seconds, 30)
-        self.assertEqual(config.timer_batch_limit, 200)
-        self.assertTrue(config.persona_rewrite_enabled)
-        self.assertEqual(config.assistant_persona, "")
-        self.assertEqual(config.feishu_app_id, "")
-        self.assertEqual(config.feishu_app_secret, "")
-        self.assertEqual(config.feishu_allowed_open_ids, ())
-        self.assertEqual(config.feishu_send_retry_count, 3)
-        self.assertEqual(config.feishu_text_chunk_size, 5000)
-        self.assertEqual(config.feishu_dedup_ttl_seconds, 600)
+        self.assertEqual(config.llm_trace_log_path, "")
         self.assertEqual(config.feishu_log_path, "")
-        self.assertEqual(config.feishu_log_retention_days, 7)
-        self.assertTrue(config.feishu_ack_reaction_enabled)
         self.assertEqual(config.feishu_ack_emoji_type, "")
         self.assertEqual(config.feishu_done_emoji_type, "")
-        self.assertEqual(config.feishu_calendar_id, "")
-        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 10)
-        self.assertEqual(config.feishu_calendar_bootstrap_past_days, 2)
-        self.assertEqual(config.feishu_calendar_bootstrap_future_days, 5)
-        self.assertEqual(config.proactive_reminder_target_open_id, "")
-        self.assertEqual(config.proactive_reminder_interval_minutes, 60)
-        self.assertEqual(config.proactive_reminder_lookahead_hours, 24)
+        self.assertEqual(config.task_cancel_command, "取消当前任务")
         self.assertEqual(config.proactive_reminder_night_quiet_hint, "")
-        self.assertEqual(config.proactive_reminder_score_threshold, DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD)
+
+    def test_load_config_parses_feishu_open_id_list(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "deep-key",
+            "FEISHU_ALLOWED_OPEN_IDS": " ou_1, ,ou_2 ,ou_3 ",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = load_config(load_dotenv=False)
+
+        self.assertEqual(config.feishu_allowed_open_ids, ("ou_1", "ou_2", "ou_3"))
 
     def test_load_config_accepts_zero_proactive_score_threshold(self) -> None:
         env = {
