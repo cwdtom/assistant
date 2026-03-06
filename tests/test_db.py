@@ -242,69 +242,37 @@ class AssistantDBTest(unittest.TestCase):
         self.assertTrue(self.db.delete_schedule(schedule_id))
         self.assertEqual(self.db.list_schedules(), [])
 
-    def test_schedule_feishu_mapping_crud_and_lookup(self) -> None:
-        first_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
-        second_id = self.db.add_schedule("项目复盘", "2026-02-20 11:00")
-
-        self.assertTrue(
-            self.db.upsert_schedule_feishu_mapping(
-                schedule_id=first_id,
-                feishu_event_id="evt_1",
-                calendar_id="cal_1",
+    def test_legacy_schedule_feishu_sync_table_is_dropped_on_init(self) -> None:
+        legacy_path = Path(self.tmp.name) / "assistant_legacy.db"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_feishu_sync (
+                    schedule_id INTEGER PRIMARY KEY,
+                    feishu_event_id TEXT NOT NULL UNIQUE,
+                    calendar_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-        )
-        first_mapping = self.db.get_schedule_feishu_mapping(first_id)
-        self.assertIsNotNone(first_mapping)
-        assert first_mapping is not None
-        self.assertEqual(first_mapping.feishu_event_id, "evt_1")
-        self.assertEqual(first_mapping.calendar_id, "cal_1")
+            exists_before = conn.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'schedule_feishu_sync'
+                """
+            ).fetchone()
+        self.assertIsNotNone(exists_before)
 
-        by_event = self.db.get_schedule_feishu_mapping_by_event_id("evt_1", calendar_id="cal_1")
-        self.assertIsNotNone(by_event)
-        assert by_event is not None
-        self.assertEqual(by_event.schedule_id, first_id)
+        AssistantDB(str(legacy_path))
 
-        self.assertTrue(
-            self.db.upsert_schedule_feishu_mapping(
-                schedule_id=first_id,
-                feishu_event_id="evt_2",
-                calendar_id="cal_1",
-            )
-        )
-        self.assertIsNone(self.db.get_schedule_feishu_mapping_by_event_id("evt_1"))
-        self.assertIsNotNone(self.db.get_schedule_feishu_mapping_by_event_id("evt_2"))
-
-        self.assertTrue(
-            self.db.upsert_schedule_feishu_mapping(
-                schedule_id=second_id,
-                feishu_event_id="evt_2",
-                calendar_id="cal_1",
-            )
-        )
-        self.assertIsNone(self.db.get_schedule_feishu_mapping(first_id))
-        second_mapping = self.db.get_schedule_feishu_mapping(second_id)
-        self.assertIsNotNone(second_mapping)
-        assert second_mapping is not None
-        self.assertEqual(second_mapping.feishu_event_id, "evt_2")
-
-        listed = self.db.list_schedule_feishu_mappings(calendar_id="cal_1")
-        self.assertEqual(len(listed), 1)
-        self.assertEqual(listed[0].schedule_id, second_id)
-
-        self.assertEqual(self.db.delete_schedule_feishu_mapping_by_event_id("evt_2", calendar_id="cal_1"), 1)
-        self.assertEqual(self.db.list_schedule_feishu_mappings(calendar_id="cal_1"), [])
-
-    def test_schedule_feishu_mapping_cascade_on_schedule_delete(self) -> None:
-        schedule_id = self.db.add_schedule("项目同步", "2026-02-20 10:00")
-        self.assertTrue(
-            self.db.upsert_schedule_feishu_mapping(
-                schedule_id=schedule_id,
-                feishu_event_id="evt_100",
-                calendar_id="cal_100",
-            )
-        )
-        self.assertTrue(self.db.delete_schedule(schedule_id))
-        self.assertIsNone(self.db.get_schedule_feishu_mapping(schedule_id))
+        with sqlite3.connect(legacy_path) as conn:
+            exists_after = conn.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'schedule_feishu_sync'
+                """
+            ).fetchone()
+        self.assertIsNone(exists_after)
 
     def test_list_base_schedules_in_window_excludes_recurring_expansion(self) -> None:
         schedule_id = self.db.add_schedule("周会", "2026-02-20 09:00")

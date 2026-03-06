@@ -16,6 +16,7 @@ class FeishuCalendarEvent:
     start_timestamp: int
     end_timestamp: int
     timezone: str
+    create_timestamp: int | None = None
 
 
 class FeishuCalendarClientError(RuntimeError):
@@ -170,6 +171,7 @@ class FeishuCalendarClient:
             _first_non_empty(_read_path(payload, "start_time.timezone"), _read_path(payload, "end_time.timezone"))
             or self._default_timezone
         )
+        created_timestamp = _parse_unix_seconds(_read_path(payload, "create_time"))
         return FeishuCalendarEvent(
             event_id=event_id,
             summary=str(_read_path(payload, "summary") or ""),
@@ -177,6 +179,7 @@ class FeishuCalendarClient:
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
             timezone=timezone,
+            create_timestamp=created_timestamp,
         )
 
     def _ensure_api_client(self) -> Any:
@@ -265,3 +268,13 @@ def _parse_int(value: Any) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _parse_unix_seconds(value: Any) -> int | None:
+    parsed = _parse_int(value)
+    if parsed is None:
+        return None
+    # Feishu may return create_time in milliseconds.
+    if abs(parsed) >= 10**12:
+        return parsed // 1000
+    return parsed

@@ -133,7 +133,7 @@ Optional runtime flags (all supported in `.env`):
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
-- Optional Feishu calendar sync supports async create/delete after local schedule writes (updates use delete+create).
+- Optional Feishu calendar sync uses identity matching by `title + description(tag) + start + end` (minute-level); local writes still sync asynchronously, and updates perform old-identity cleanup + new-identity upsert.
 - Optional Feishu calendar startup bootstrap + periodic reconcile window is day-aligned by default:
   start=`(today-2d) 00:00:00`, end=`(today+5d) 23:59:59`.
 - Feishu calendar sync startup does not run immediate Feishu->local reconcile pull; first reconcile is delayed by one reconcile interval.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -12,13 +13,15 @@ from assistant_app.db import AssistantDB, ScheduleItem
 from assistant_app.feishu_calendar_client import FeishuCalendarClient, FeishuCalendarClientError, FeishuCalendarEvent
 
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
+_DEFAULT_EMPTY_TITLE = "(无标题日程)"
+_DEFAULT_EMPTY_DESCRIPTION = "default"
 
 
 @dataclass(frozen=True)
 class _WriteSyncTask:
     action: str
     schedule_id: int
-    feishu_event_id: str | None = None
+    schedule_snapshot: ScheduleItem | None = None
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,20 @@ class _LocalSchedulePayload:
     tag: str
     event_time: str
     duration_minutes: int
+
+
+@dataclass(frozen=True)
+class _IdentityKey:
+    title: str
+    description: str
+    start_minute: int
+    end_minute: int
+
+
+@dataclass(frozen=True)
+class _IdentityMatch:
+    event: FeishuCalendarEvent | None
+    candidate_count: int
 
 
 class FeishuCalendarSyncService:
@@ -85,12 +102,14 @@ class FeishuCalendarSyncService:
     def on_local_schedule_added(self, *, schedule_id: int) -> None:
         self._enqueue_write_task(_WriteSyncTask(action="add", schedule_id=schedule_id))
 
-    def on_local_schedule_updated(self, *, schedule_id: int) -> None:
-        self._enqueue_write_task(_WriteSyncTask(action="update", schedule_id=schedule_id))
-
-    def on_local_schedule_deleted(self, *, schedule_id: int, feishu_event_id: str | None = None) -> None:
+    def on_local_schedule_updated(self, *, schedule_id: int, old_schedule: ScheduleItem | None = None) -> None:
         self._enqueue_write_task(
-            _WriteSyncTask(action="delete", schedule_id=schedule_id, feishu_event_id=feishu_event_id)
+            _WriteSyncTask(action="update", schedule_id=schedule_id, schedule_snapshot=old_schedule)
+        )
+
+    def on_local_schedule_deleted(self, *, schedule_id: int, deleted_schedule: ScheduleItem | None = None) -> None:
+        self._enqueue_write_task(
+            _WriteSyncTask(action="delete", schedule_id=schedule_id, schedule_snapshot=deleted_schedule)
         )
 
     def run_startup_bootstrap_sync(self) -> None:
@@ -129,7 +148,6 @@ class FeishuCalendarSyncService:
                             "context": {"event_id": event.event_id, "error": repr(exc)},
                         },
                     )
-                self._db.delete_schedule_feishu_mapping_by_event_id(event.event_id, calendar_id=self._calendar_id)
 
             local_items = self._db.list_base_schedules_in_window(
                 window_start=window_start,
@@ -138,14 +156,9 @@ class FeishuCalendarSyncService:
             )
             for item in local_items:
                 event_id = self._create_feishu_event_from_schedule(item)
-                if event_id is None:
-                    continue
-                if self._db.upsert_schedule_feishu_mapping(
-                    schedule_id=item.id,
-                    feishu_event_id=event_id,
-                    calendar_id=self._calendar_id,
-                ):
+                if event_id is not None:
                     created_count += 1
+
             self._logger.info(
                 "feishu calendar bootstrap done",
                 extra={
@@ -205,7 +218,7 @@ class FeishuCalendarSyncService:
                         "context": {
                             "action": task.action,
                             "schedule_id": task.schedule_id,
-                            "feishu_event_id": task.feishu_event_id or "",
+                            "has_schedule_snapshot": task.schedule_snapshot is not None,
                             "error": repr(exc),
                         },
                     },
@@ -220,7 +233,7 @@ class FeishuCalendarSyncService:
                 "context": {
                     "action": task.action,
                     "schedule_id": task.schedule_id,
-                    "feishu_event_id": task.feishu_event_id or "",
+                    "has_schedule_snapshot": task.schedule_snapshot is not None,
                 },
             },
         )
@@ -233,16 +246,16 @@ class FeishuCalendarSyncService:
                 "context": {
                     "action": task.action,
                     "schedule_id": task.schedule_id,
-                    "feishu_event_id": task.feishu_event_id or "",
+                    "has_schedule_snapshot": task.schedule_snapshot is not None,
                 },
             },
         )
         if task.action == "add":
             self._process_add(task.schedule_id)
         elif task.action == "update":
-            self._process_update(task.schedule_id)
+            self._process_update(task.schedule_id, task.schedule_snapshot)
         elif task.action == "delete":
-            self._process_delete(task.schedule_id, task.feishu_event_id)
+            self._process_delete(task.schedule_id, task.schedule_snapshot)
         else:
             raise RuntimeError(f"unknown feishu sync action: {task.action}")
 
@@ -250,60 +263,99 @@ class FeishuCalendarSyncService:
         item = self._db.get_schedule(schedule_id)
         if item is None:
             return
+        identity = self._identity_from_schedule(item)
+        existing = self._match_feishu_event_by_identity(action="add", schedule_id=schedule_id, identity=identity)
+        if existing.event is not None:
+            self._logger.info(
+                "feishu calendar write skipped existing identity",
+                extra={
+                    "event": "feishu_calendar_sync_write_skip_existing",
+                    "context": {
+                        "action": "add",
+                        "schedule_id": schedule_id,
+                        "matched_event_id": existing.event.event_id,
+                        "candidate_count": existing.candidate_count,
+                        "identity_key": self._identity_key_text(identity),
+                    },
+                },
+            )
+            self._log_write_done(action="add", schedule_id=schedule_id, event_id=existing.event.event_id, skipped=True)
+            return
+
         event_id = self._create_feishu_event_from_schedule(item)
         if event_id is None:
             return
-        self._db.upsert_schedule_feishu_mapping(
-            schedule_id=schedule_id,
-            feishu_event_id=event_id,
-            calendar_id=self._calendar_id,
-        )
         self._log_write_done(action="add", schedule_id=schedule_id, event_id=event_id)
 
-    def _process_update(self, schedule_id: int) -> None:
-        old_mapping = self._db.get_schedule_feishu_mapping(schedule_id)
-        if old_mapping is not None:
-            try:
-                self._client.delete_event(
-                    calendar_id=self._calendar_id,
-                    event_id=old_mapping.feishu_event_id,
-                    need_notification=False,
-                    ignore_not_found=True,
-                )
-            finally:
-                self._db.delete_schedule_feishu_mapping(schedule_id)
-
+    def _process_update(self, schedule_id: int, old_schedule: ScheduleItem | None) -> None:
         item = self._db.get_schedule(schedule_id)
         if item is None:
             return
+
+        old_identity = self._identity_from_schedule(old_schedule) if old_schedule is not None else None
+        new_identity = self._identity_from_schedule(item)
+
+        if old_identity is not None and old_identity != new_identity:
+            old_match = self._match_feishu_event_by_identity(
+                action="update",
+                schedule_id=schedule_id,
+                identity=old_identity,
+            )
+            if old_match.event is not None:
+                self._client.delete_event(
+                    calendar_id=self._calendar_id,
+                    event_id=old_match.event.event_id,
+                    need_notification=False,
+                    ignore_not_found=True,
+                )
+
+        new_match = self._match_feishu_event_by_identity(action="update", schedule_id=schedule_id, identity=new_identity)
+        if new_match.event is not None:
+            self._logger.info(
+                "feishu calendar write skipped existing identity",
+                extra={
+                    "event": "feishu_calendar_sync_write_skip_existing",
+                    "context": {
+                        "action": "update",
+                        "schedule_id": schedule_id,
+                        "matched_event_id": new_match.event.event_id,
+                        "candidate_count": new_match.candidate_count,
+                        "identity_key": self._identity_key_text(new_identity),
+                    },
+                },
+            )
+            self._log_write_done(
+                action="update",
+                schedule_id=schedule_id,
+                event_id=new_match.event.event_id,
+                skipped=True,
+            )
+            return
+
         event_id = self._create_feishu_event_from_schedule(item)
         if event_id is None:
             return
-        self._db.upsert_schedule_feishu_mapping(
-            schedule_id=schedule_id,
-            feishu_event_id=event_id,
-            calendar_id=self._calendar_id,
-        )
         self._log_write_done(action="update", schedule_id=schedule_id, event_id=event_id)
 
-    def _process_delete(self, schedule_id: int, feishu_event_id: str | None) -> None:
-        event_id = (feishu_event_id or "").strip() or None
-        if event_id is None:
-            mapping = self._db.get_schedule_feishu_mapping(schedule_id)
-            if mapping is not None:
-                event_id = mapping.feishu_event_id
-        if event_id is not None:
+    def _process_delete(self, schedule_id: int, deleted_schedule: ScheduleItem | None) -> None:
+        if deleted_schedule is None:
+            self._log_write_done(action="delete", schedule_id=schedule_id, event_id=None, skipped=True)
+            return
+
+        identity = self._identity_from_schedule(deleted_schedule)
+        match = self._match_feishu_event_by_identity(action="delete", schedule_id=schedule_id, identity=identity)
+        event_id: str | None = None
+        if match.event is not None:
+            event_id = match.event.event_id
             self._client.delete_event(
                 calendar_id=self._calendar_id,
                 event_id=event_id,
                 need_notification=False,
                 ignore_not_found=True,
             )
-            self._db.delete_schedule_feishu_mapping_by_event_id(event_id, calendar_id=self._calendar_id)
-        self._db.delete_schedule_feishu_mapping(schedule_id)
-        self._log_write_done(action="delete", schedule_id=schedule_id, event_id=event_id)
+        self._log_write_done(action="delete", schedule_id=schedule_id, event_id=event_id, skipped=event_id is None)
 
-    def _log_write_done(self, *, action: str, schedule_id: int, event_id: str | None) -> None:
+    def _log_write_done(self, *, action: str, schedule_id: int, event_id: str | None, skipped: bool = False) -> None:
         self._logger.info(
             "feishu calendar write done",
             extra={
@@ -312,6 +364,8 @@ class FeishuCalendarSyncService:
                     "action": action,
                     "schedule_id": schedule_id,
                     "feishu_event_id": event_id or "",
+                    "matched_event_id": event_id or "",
+                    "skipped": skipped,
                     "ok": True,
                 },
             },
@@ -322,8 +376,8 @@ class FeishuCalendarSyncService:
         try:
             return self._client.create_event(
                 calendar_id=self._calendar_id,
-                summary=item.title,
-                description=item.tag if item.tag else "",
+                summary=self._normalize_title(item.title),
+                description=self._normalize_description(item.tag),
                 start_timestamp=start_ts,
                 end_timestamp=end_ts,
                 timezone=self._timezone,
@@ -369,83 +423,74 @@ class FeishuCalendarSyncService:
         local_deleted = 0
         try:
             feishu_items = self._list_feishu_events(window_start=window_start, window_end=window_end)
-            feishu_by_event_id = {item.event_id: item for item in feishu_items}
-            mappings = self._db.list_schedule_feishu_mappings(calendar_id=self._calendar_id)
-            mapping_by_event_id = {item.feishu_event_id: item for item in mappings}
             local_items = self._db.list_base_schedules_in_window(
                 window_start=window_start,
                 window_end=window_end,
                 max_window_days=self._window_max_days,
             )
-            local_by_id = {item.id: item for item in local_items}
 
-            for event in feishu_items:
-                desired = self._build_local_payload(event)
-                mapping = mapping_by_event_id.get(event.event_id)
-                if mapping is None:
-                    created_id = self._db.add_schedule(
+            feishu_groups = self._group_feishu_by_identity(feishu_items)
+            local_groups = self._group_local_by_identity(local_items)
+
+            for identity in set(feishu_groups) | set(local_groups):
+                feishu_bucket = feishu_groups.get(identity, [])
+                local_bucket = local_groups.get(identity, [])
+
+                if len(feishu_bucket) > 1:
+                    self._log_identity_ambiguous(
+                        action="reconcile",
+                        schedule_id=None,
+                        identity=identity,
+                        source="feishu",
+                        candidate_count=len(feishu_bucket),
+                    )
+                if len(local_bucket) > 1:
+                    self._log_identity_ambiguous(
+                        action="reconcile",
+                        schedule_id=None,
+                        identity=identity,
+                        source="local",
+                        candidate_count=len(local_bucket),
+                    )
+
+                pair_count = min(len(feishu_bucket), len(local_bucket))
+                for idx in range(pair_count):
+                    event = feishu_bucket[idx]
+                    current = local_bucket[idx]
+                    self._log_identity_match(
+                        action="reconcile",
+                        schedule_id=current.id,
+                        identity=identity,
+                        event_id=event.event_id,
+                        candidate_count=len(feishu_bucket),
+                    )
+                    desired = self._build_local_payload(event)
+                    if self._needs_local_update(current=current, desired=desired):
+                        updated = self._db.update_schedule(
+                            current.id,
+                            title=desired.title,
+                            event_time=desired.event_time,
+                            duration_minutes=desired.duration_minutes,
+                            tag=desired.tag,
+                            remind_at=None,
+                        )
+                        if updated:
+                            local_updated += 1
+
+                for event in feishu_bucket[pair_count:]:
+                    desired = self._build_local_payload(event)
+                    self._db.add_schedule(
                         title=desired.title,
                         event_time=desired.event_time,
                         duration_minutes=desired.duration_minutes,
                         remind_at=None,
                         tag=desired.tag,
-                    )
-                    self._db.upsert_schedule_feishu_mapping(
-                        schedule_id=created_id,
-                        feishu_event_id=event.event_id,
-                        calendar_id=self._calendar_id,
                     )
                     local_created += 1
-                    continue
 
-                current = local_by_id.get(mapping.schedule_id)
-                if current is None:
-                    created_id = self._db.add_schedule(
-                        title=desired.title,
-                        event_time=desired.event_time,
-                        duration_minutes=desired.duration_minutes,
-                        remind_at=None,
-                        tag=desired.tag,
-                    )
-                    self._db.upsert_schedule_feishu_mapping(
-                        schedule_id=created_id,
-                        feishu_event_id=event.event_id,
-                        calendar_id=self._calendar_id,
-                    )
-                    local_created += 1
-                    continue
-
-                if self._needs_local_update(current=current, desired=desired):
-                    updated = self._db.update_schedule(
-                        mapping.schedule_id,
-                        title=desired.title,
-                        event_time=desired.event_time,
-                        duration_minutes=desired.duration_minutes,
-                        tag=desired.tag,
-                        remind_at=None,
-                    )
-                    if updated:
-                        local_updated += 1
-
-            feishu_event_ids = set(feishu_by_event_id)
-            for mapping in mappings:
-                if mapping.feishu_event_id in feishu_event_ids:
-                    continue
-                if self._db.delete_schedule(mapping.schedule_id):
-                    local_deleted += 1
-
-            refreshed_mappings = self._db.list_schedule_feishu_mappings(calendar_id=self._calendar_id)
-            mapped_schedule_ids = {item.schedule_id for item in refreshed_mappings}
-            local_after = self._db.list_base_schedules_in_window(
-                window_start=window_start,
-                window_end=window_end,
-                max_window_days=self._window_max_days,
-            )
-            for item in local_after:
-                if item.id in mapped_schedule_ids:
-                    continue
-                if self._db.delete_schedule(item.id):
-                    local_deleted += 1
+                for current in local_bucket[pair_count:]:
+                    if self._db.delete_schedule(current.id):
+                        local_deleted += 1
 
             self._logger.info(
                 "feishu calendar reconcile done",
@@ -480,10 +525,15 @@ class FeishuCalendarSyncService:
     def _list_feishu_events(self, *, window_start: datetime, window_end: datetime) -> list[FeishuCalendarEvent]:
         start_ts = int(window_start.timestamp())
         end_ts = int(window_end.timestamp())
+        return self._list_feishu_events_by_timestamp(start_ts=start_ts, end_ts=end_ts)
+
+    def _list_feishu_events_by_timestamp(self, *, start_ts: int, end_ts: int) -> list[FeishuCalendarEvent]:
+        normalized_start_ts = max(int(start_ts), 0)
+        normalized_end_ts = max(int(end_ts), normalized_start_ts + 1)
         return self._client.list_events(
             calendar_id=self._calendar_id,
-            start_timestamp=start_ts,
-            end_timestamp=end_ts,
+            start_timestamp=normalized_start_ts,
+            end_timestamp=normalized_end_ts,
             page_size=1000,
         )
 
@@ -518,15 +568,152 @@ class FeishuCalendarSyncService:
         except ZoneInfoNotFoundError:
             local_zone = ZoneInfo(_DEFAULT_TIMEZONE)
 
-        start_dt = datetime.fromtimestamp(event.start_timestamp, tz=event_zone).astimezone(local_zone)
-        duration_minutes = max(1, int((event.end_timestamp - event.start_timestamp) // 60))
-        title = event.summary.strip() or "(无标题日程)"
-        tag = event.description.strip() or "default"
+        start_minute = event.start_timestamp // 60
+        end_minute = event.end_timestamp // 60
+        duration_minutes = max(1, end_minute - start_minute)
+        start_dt = datetime.fromtimestamp(start_minute * 60, tz=event_zone).astimezone(local_zone)
         return _LocalSchedulePayload(
-            title=title,
-            tag=tag,
+            title=self._normalize_title(event.summary),
+            tag=self._normalize_description(event.description),
             event_time=start_dt.strftime("%Y-%m-%d %H:%M"),
             duration_minutes=duration_minutes,
+        )
+
+    def _match_feishu_event_by_identity(
+        self,
+        *,
+        action: str,
+        schedule_id: int,
+        identity: _IdentityKey,
+    ) -> _IdentityMatch:
+        start_ts = identity.start_minute * 60 - 60
+        end_ts = (identity.end_minute + 1) * 60 + 60
+        window_items = self._list_feishu_events_by_timestamp(start_ts=start_ts, end_ts=end_ts)
+        candidates = [item for item in window_items if self._identity_from_event(item) == identity]
+        candidates.sort(key=self._feishu_event_order_key)
+
+        if len(candidates) > 1:
+            self._log_identity_ambiguous(
+                action=action,
+                schedule_id=schedule_id,
+                identity=identity,
+                source="feishu",
+                candidate_count=len(candidates),
+            )
+        matched = candidates[0] if candidates else None
+        if matched is not None:
+            self._log_identity_match(
+                action=action,
+                schedule_id=schedule_id,
+                identity=identity,
+                event_id=matched.event_id,
+                candidate_count=len(candidates),
+            )
+        return _IdentityMatch(event=matched, candidate_count=len(candidates))
+
+    def _group_local_by_identity(self, items: list[ScheduleItem]) -> dict[_IdentityKey, list[ScheduleItem]]:
+        grouped: dict[_IdentityKey, list[ScheduleItem]] = defaultdict(list)
+        for item in items:
+            grouped[self._identity_from_schedule(item)].append(item)
+        for bucket in grouped.values():
+            bucket.sort(key=self._local_schedule_order_key)
+        return dict(grouped)
+
+    def _group_feishu_by_identity(self, items: list[FeishuCalendarEvent]) -> dict[_IdentityKey, list[FeishuCalendarEvent]]:
+        grouped: dict[_IdentityKey, list[FeishuCalendarEvent]] = defaultdict(list)
+        for item in items:
+            grouped[self._identity_from_event(item)].append(item)
+        for bucket in grouped.values():
+            bucket.sort(key=self._feishu_event_order_key)
+        return dict(grouped)
+
+    def _identity_from_schedule(self, item: ScheduleItem) -> _IdentityKey:
+        start_ts, end_ts = self._schedule_time_range(item)
+        return _IdentityKey(
+            title=self._normalize_title(item.title),
+            description=self._normalize_description(item.tag),
+            start_minute=start_ts // 60,
+            end_minute=end_ts // 60,
+        )
+
+    def _identity_from_event(self, event: FeishuCalendarEvent) -> _IdentityKey:
+        return _IdentityKey(
+            title=self._normalize_title(event.summary),
+            description=self._normalize_description(event.description),
+            start_minute=event.start_timestamp // 60,
+            end_minute=event.end_timestamp // 60,
+        )
+
+    @staticmethod
+    def _normalize_title(value: str) -> str:
+        normalized = str(value or "").strip()
+        return normalized or _DEFAULT_EMPTY_TITLE
+
+    @staticmethod
+    def _normalize_description(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized or _DEFAULT_EMPTY_DESCRIPTION
+
+    @staticmethod
+    def _local_schedule_order_key(item: ScheduleItem) -> tuple[str, int]:
+        return (str(item.created_at or ""), int(item.id))
+
+    @staticmethod
+    def _feishu_event_order_key(item: FeishuCalendarEvent) -> tuple[int, int, str]:
+        created_ts = item.create_timestamp if item.create_timestamp is not None else item.start_timestamp
+        return (int(created_ts), int(item.start_timestamp), str(item.event_id))
+
+    @staticmethod
+    def _identity_key_text(identity: _IdentityKey) -> str:
+        return (
+            f"title={identity.title!r}|description={identity.description!r}|"
+            f"start_minute={identity.start_minute}|end_minute={identity.end_minute}"
+        )
+
+    def _log_identity_match(
+        self,
+        *,
+        action: str,
+        schedule_id: int | None,
+        identity: _IdentityKey,
+        event_id: str,
+        candidate_count: int,
+    ) -> None:
+        context: dict[str, object] = {
+            "action": action,
+            "matched_event_id": event_id,
+            "candidate_count": candidate_count,
+            "match_strategy": "earliest_created",
+            "identity_key": self._identity_key_text(identity),
+        }
+        if schedule_id is not None:
+            context["schedule_id"] = schedule_id
+        self._logger.info(
+            "feishu calendar identity matched",
+            extra={"event": "feishu_calendar_identity_match", "context": context},
+        )
+
+    def _log_identity_ambiguous(
+        self,
+        *,
+        action: str,
+        schedule_id: int | None,
+        identity: _IdentityKey,
+        source: str,
+        candidate_count: int,
+    ) -> None:
+        context: dict[str, object] = {
+            "action": action,
+            "source": source,
+            "candidate_count": candidate_count,
+            "match_strategy": "earliest_created",
+            "identity_key": self._identity_key_text(identity),
+        }
+        if schedule_id is not None:
+            context["schedule_id"] = schedule_id
+        self._logger.info(
+            "feishu calendar identity ambiguous",
+            extra={"event": "feishu_calendar_identity_ambiguous", "context": context},
         )
 
     @staticmethod

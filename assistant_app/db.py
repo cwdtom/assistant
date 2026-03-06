@@ -78,14 +78,6 @@ class ReminderDelivery:
     payload: str | None
 
 
-@dataclass(frozen=True)
-class ScheduleFeishuSyncMapping:
-    schedule_id: int
-    feishu_event_id: str
-    calendar_id: str
-    updated_at: str
-
-
 class AssistantDB:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -181,17 +173,10 @@ class AssistantDB:
                 )
                 """
             )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schedule_feishu_sync (
-                    schedule_id INTEGER PRIMARY KEY,
-                    feishu_event_id TEXT NOT NULL UNIQUE,
-                    calendar_id TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
-                )
-                """
-            )
+            self._drop_legacy_schedule_feishu_sync_table(conn)
+
+    def _drop_legacy_schedule_feishu_sync_table(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP TABLE IF EXISTS schedule_feishu_sync")
 
     def _ensure_schedule_duration_column(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
@@ -716,142 +701,6 @@ class AssistantDB:
                 window_end=effective_window_end,
             )
         ]
-
-    def upsert_schedule_feishu_mapping(self, *, schedule_id: int, feishu_event_id: str, calendar_id: str) -> bool:
-        normalized_event_id = str(feishu_event_id or "").strip()
-        normalized_calendar_id = str(calendar_id or "").strip()
-        if not normalized_event_id or not normalized_calendar_id:
-            return False
-
-        updated_at = _now_iso()
-        with self._connect() as conn:
-            has_schedule = conn.execute("SELECT 1 FROM schedules WHERE id = ?", (schedule_id,)).fetchone() is not None
-            if not has_schedule:
-                return False
-            conn.execute(
-                "DELETE FROM schedule_feishu_sync WHERE feishu_event_id = ? AND schedule_id != ?",
-                (normalized_event_id, schedule_id),
-            )
-            conn.execute(
-                """
-                INSERT INTO schedule_feishu_sync (schedule_id, feishu_event_id, calendar_id, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(schedule_id) DO UPDATE SET
-                    feishu_event_id = excluded.feishu_event_id,
-                    calendar_id = excluded.calendar_id,
-                    updated_at = excluded.updated_at
-                """,
-                (schedule_id, normalized_event_id, normalized_calendar_id, updated_at),
-            )
-        return True
-
-    def get_schedule_feishu_mapping(self, schedule_id: int) -> ScheduleFeishuSyncMapping | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT schedule_id, feishu_event_id, calendar_id, updated_at
-                FROM schedule_feishu_sync
-                WHERE schedule_id = ?
-                """,
-                (schedule_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return ScheduleFeishuSyncMapping(
-            schedule_id=int(row["schedule_id"]),
-            feishu_event_id=str(row["feishu_event_id"]),
-            calendar_id=str(row["calendar_id"]),
-            updated_at=str(row["updated_at"]),
-        )
-
-    def get_schedule_feishu_mapping_by_event_id(
-        self, feishu_event_id: str, *, calendar_id: str | None = None
-    ) -> ScheduleFeishuSyncMapping | None:
-        normalized_event_id = str(feishu_event_id or "").strip()
-        if not normalized_event_id:
-            return None
-        with self._connect() as conn:
-            if calendar_id is None:
-                row = conn.execute(
-                    """
-                    SELECT schedule_id, feishu_event_id, calendar_id, updated_at
-                    FROM schedule_feishu_sync
-                    WHERE feishu_event_id = ?
-                    """,
-                    (normalized_event_id,),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    """
-                    SELECT schedule_id, feishu_event_id, calendar_id, updated_at
-                    FROM schedule_feishu_sync
-                    WHERE feishu_event_id = ? AND calendar_id = ?
-                    """,
-                    (normalized_event_id, calendar_id.strip()),
-                ).fetchone()
-        if row is None:
-            return None
-        return ScheduleFeishuSyncMapping(
-            schedule_id=int(row["schedule_id"]),
-            feishu_event_id=str(row["feishu_event_id"]),
-            calendar_id=str(row["calendar_id"]),
-            updated_at=str(row["updated_at"]),
-        )
-
-    def list_schedule_feishu_mappings(self, *, calendar_id: str | None = None) -> list[ScheduleFeishuSyncMapping]:
-        with self._connect() as conn:
-            if calendar_id is None:
-                rows = conn.execute(
-                    """
-                    SELECT schedule_id, feishu_event_id, calendar_id, updated_at
-                    FROM schedule_feishu_sync
-                    ORDER BY schedule_id ASC
-                    """
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT schedule_id, feishu_event_id, calendar_id, updated_at
-                    FROM schedule_feishu_sync
-                    WHERE calendar_id = ?
-                    ORDER BY schedule_id ASC
-                    """,
-                    (calendar_id.strip(),),
-                ).fetchall()
-        return [
-            ScheduleFeishuSyncMapping(
-                schedule_id=int(row["schedule_id"]),
-                feishu_event_id=str(row["feishu_event_id"]),
-                calendar_id=str(row["calendar_id"]),
-                updated_at=str(row["updated_at"]),
-            )
-            for row in rows
-        ]
-
-    def delete_schedule_feishu_mapping(self, schedule_id: int) -> bool:
-        with self._connect() as conn:
-            cur = conn.execute(
-                "DELETE FROM schedule_feishu_sync WHERE schedule_id = ?",
-                (schedule_id,),
-            )
-            return cur.rowcount > 0
-
-    def delete_schedule_feishu_mapping_by_event_id(self, feishu_event_id: str, *, calendar_id: str | None = None) -> int:
-        normalized_event_id = str(feishu_event_id or "").strip()
-        if not normalized_event_id:
-            return 0
-        with self._connect() as conn:
-            if calendar_id is None:
-                cur = conn.execute(
-                    "DELETE FROM schedule_feishu_sync WHERE feishu_event_id = ?",
-                    (normalized_event_id,),
-                )
-            else:
-                cur = conn.execute(
-                    "DELETE FROM schedule_feishu_sync WHERE feishu_event_id = ? AND calendar_id = ?",
-                    (normalized_event_id, calendar_id.strip()),
-                )
-            return cur.rowcount
 
     def add_thought(self, content: str, status: str = THOUGHT_STATUS_TODO) -> int:
         timestamp = _now_iso()

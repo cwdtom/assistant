@@ -385,7 +385,7 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
             agent.db.clear_schedule_recurrence(target_schedule_id)
             notify_updated = getattr(agent, "notify_schedule_updated", None)
             if callable(notify_updated):
-                notify_updated(target_schedule_id)
+                notify_updated(target_schedule_id, old_schedule=current_item)
             item = agent.db.get_schedule(target_schedule_id)
             remind_meta = _format_schedule_remind_meta_inline(
                 remind_at=item.remind_at if item else None,
@@ -417,7 +417,7 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
             )
         notify_updated = getattr(agent, "notify_schedule_updated", None)
         if callable(notify_updated):
-            notify_updated(target_schedule_id)
+            notify_updated(target_schedule_id, old_schedule=current_item)
         item = agent.db.get_schedule(target_schedule_id)
         remind_meta = _format_schedule_remind_meta_inline(
             remind_at=item.remind_at if item else None,
@@ -440,14 +440,14 @@ def execute_schedule_system_action(agent: Any, payload: dict[str, Any], *, raw_i
         return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)
 
     if action == "delete":
-        mapping = agent.db.get_schedule_feishu_mapping(target_schedule_id)
+        current_item = agent.db.get_schedule(target_schedule_id)
         deleted = agent.db.delete_schedule(target_schedule_id)
         if not deleted:
             result = f"未找到日程 #{target_schedule_id}"
         else:
             notify_deleted = getattr(agent, "notify_schedule_deleted", None)
             if callable(notify_deleted):
-                notify_deleted(target_schedule_id, mapping.feishu_event_id if mapping is not None else None)
+                notify_deleted(target_schedule_id, deleted_schedule=current_item)
             result = f"日程 #{target_schedule_id} 已删除。"
         ok = _is_planner_command_success(result, tool="schedule")
         return PlannerObservation(tool="schedule", input_text=raw_input, ok=ok, result=result)

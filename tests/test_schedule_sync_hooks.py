@@ -6,7 +6,7 @@ from pathlib import Path
 
 from assistant_app.agent_components.command_handlers import handle_command
 from assistant_app.agent_components.tools.schedule import execute_schedule_system_action
-from assistant_app.db import AssistantDB
+from assistant_app.db import AssistantDB, ScheduleItem
 
 
 class _AgentStub:
@@ -14,17 +14,17 @@ class _AgentStub:
         self.db = db
         self._schedule_max_window_days = 31
         self.added: list[int] = []
-        self.updated: list[int] = []
-        self.deleted: list[tuple[int, str | None]] = []
+        self.updated: list[tuple[int, ScheduleItem | None]] = []
+        self.deleted: list[tuple[int, ScheduleItem | None]] = []
 
     def notify_schedule_added(self, schedule_id: int) -> None:
         self.added.append(schedule_id)
 
-    def notify_schedule_updated(self, schedule_id: int) -> None:
-        self.updated.append(schedule_id)
+    def notify_schedule_updated(self, schedule_id: int, old_schedule: ScheduleItem | None = None) -> None:
+        self.updated.append((schedule_id, old_schedule))
 
-    def notify_schedule_deleted(self, schedule_id: int, feishu_event_id: str | None = None) -> None:
-        self.deleted.append((schedule_id, feishu_event_id))
+    def notify_schedule_deleted(self, schedule_id: int, deleted_schedule: ScheduleItem | None = None) -> None:
+        self.deleted.append((schedule_id, deleted_schedule))
 
 
 class ScheduleSyncHookTest(unittest.TestCase):
@@ -44,16 +44,21 @@ class ScheduleSyncHookTest(unittest.TestCase):
 
         update_result = handle_command(self.agent, f"/schedule update {added_id} 2026-03-05 11:00 项目复盘")
         self.assertIn("已更新日程 #", update_result)
-        self.assertEqual(self.agent.updated, [added_id])
+        self.assertEqual(len(self.agent.updated), 1)
+        update_schedule_id, old_schedule = self.agent.updated[0]
+        self.assertEqual(update_schedule_id, added_id)
+        self.assertIsNotNone(old_schedule)
+        assert old_schedule is not None
+        self.assertEqual(old_schedule.title, "项目同步")
 
-        self.db.upsert_schedule_feishu_mapping(
-            schedule_id=added_id,
-            feishu_event_id="evt_cmd_del",
-            calendar_id="cal_1",
-        )
         delete_result = handle_command(self.agent, f"/schedule delete {added_id}")
         self.assertEqual(delete_result, f"日程 #{added_id} 已删除。")
-        self.assertEqual(self.agent.deleted, [(added_id, "evt_cmd_del")])
+        self.assertEqual(len(self.agent.deleted), 1)
+        delete_schedule_id, deleted_schedule = self.agent.deleted[0]
+        self.assertEqual(delete_schedule_id, added_id)
+        self.assertIsNotNone(deleted_schedule)
+        assert deleted_schedule is not None
+        self.assertEqual(deleted_schedule.title, "项目复盘")
 
     def test_planner_tool_path_triggers_sync_notifications(self) -> None:
         add_obs = execute_schedule_system_action(
@@ -80,20 +85,25 @@ class ScheduleSyncHookTest(unittest.TestCase):
             raw_input='{"action":"update"}',
         )
         self.assertTrue(update_obs.ok)
-        self.assertEqual(self.agent.updated, [added_id])
+        self.assertEqual(len(self.agent.updated), 1)
+        update_schedule_id, old_schedule = self.agent.updated[0]
+        self.assertEqual(update_schedule_id, added_id)
+        self.assertIsNotNone(old_schedule)
+        assert old_schedule is not None
+        self.assertEqual(old_schedule.title, "工具新增")
 
-        self.db.upsert_schedule_feishu_mapping(
-            schedule_id=added_id,
-            feishu_event_id="evt_tool_del",
-            calendar_id="cal_1",
-        )
         delete_obs = execute_schedule_system_action(
             self.agent,
             payload={"action": "delete", "id": added_id},
             raw_input='{"action":"delete"}',
         )
         self.assertTrue(delete_obs.ok)
-        self.assertEqual(self.agent.deleted, [(added_id, "evt_tool_del")])
+        self.assertEqual(len(self.agent.deleted), 1)
+        delete_schedule_id, deleted_schedule = self.agent.deleted[0]
+        self.assertEqual(delete_schedule_id, added_id)
+        self.assertIsNotNone(deleted_schedule)
+        assert deleted_schedule is not None
+        self.assertEqual(deleted_schedule.title, "工具更新")
 
 
 if __name__ == "__main__":

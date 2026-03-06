@@ -117,6 +117,7 @@ class FeishuCalendarClientTest(unittest.TestCase):
                             "event_id": "evt_1",
                             "summary": "A",
                             "description": "work",
+                            "create_time": "1700000000123",
                             "start_time": {"time_stamp": "1700000000", "timezone": "Asia/Shanghai"},
                             "end_time": {"time_stamp": "1700003600", "timezone": "Asia/Shanghai"},
                         }
@@ -148,6 +149,8 @@ class FeishuCalendarClientTest(unittest.TestCase):
         )
 
         self.assertEqual([item.event_id for item in items], ["evt_1", "evt_2"])
+        self.assertEqual(items[0].create_timestamp, 1700000000)
+        self.assertIsNone(items[1].create_timestamp)
         self.assertEqual(len(self.calendar_api.list_requests), 2)
         self.assertIsNone(self.calendar_api.list_requests[0].page_token)
         self.assertEqual(self.calendar_api.list_requests[1].page_token, "token_1")

@@ -66,7 +66,7 @@ from assistant_app.agent_components.tools.schedule import (
 from assistant_app.agent_components.tools.thoughts import (
     execute_thoughts_system_action as _execute_thoughts_system_action_impl,
 )
-from assistant_app.db import AssistantDB, ChatTurn
+from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem
 from assistant_app.llm import LLMClient
 from assistant_app.planner_plan_replan import (
     PLAN_ONCE_PROMPT,
@@ -179,13 +179,19 @@ class AssistantAgent:
     def notify_schedule_added(self, schedule_id: int) -> None:
         self._notify_schedule_sync(action="add", schedule_id=schedule_id)
 
-    def notify_schedule_updated(self, schedule_id: int) -> None:
-        self._notify_schedule_sync(action="update", schedule_id=schedule_id)
+    def notify_schedule_updated(self, schedule_id: int, old_schedule: ScheduleItem | None = None) -> None:
+        self._notify_schedule_sync(action="update", schedule_id=schedule_id, schedule_snapshot=old_schedule)
 
-    def notify_schedule_deleted(self, schedule_id: int, feishu_event_id: str | None = None) -> None:
-        self._notify_schedule_sync(action="delete", schedule_id=schedule_id, feishu_event_id=feishu_event_id)
+    def notify_schedule_deleted(self, schedule_id: int, deleted_schedule: ScheduleItem | None = None) -> None:
+        self._notify_schedule_sync(action="delete", schedule_id=schedule_id, schedule_snapshot=deleted_schedule)
 
-    def _notify_schedule_sync(self, *, action: str, schedule_id: int, feishu_event_id: str | None = None) -> None:
+    def _notify_schedule_sync(
+        self,
+        *,
+        action: str,
+        schedule_id: int,
+        schedule_snapshot: ScheduleItem | None = None,
+    ) -> None:
         service = self._schedule_sync_service
         if service is None:
             return
@@ -200,10 +206,13 @@ class AssistantAgent:
         if not callable(callback):
             return
         try:
+            if action == "update":
+                callback(schedule_id=schedule_id, old_schedule=schedule_snapshot)
+                return
             if action == "delete":
-                callback(schedule_id=schedule_id, feishu_event_id=feishu_event_id)
-            else:
-                callback(schedule_id=schedule_id)
+                callback(schedule_id=schedule_id, deleted_schedule=schedule_snapshot)
+                return
+            callback(schedule_id=schedule_id)
         except Exception as exc:  # noqa: BLE001
             self._app_logger.warning(
                 "schedule sync notify failed",
@@ -212,7 +221,7 @@ class AssistantAgent:
                     "context": {
                         "action": action,
                         "schedule_id": schedule_id,
-                        "feishu_event_id": feishu_event_id or "",
+                        "has_schedule_snapshot": schedule_snapshot is not None,
                         "error": repr(exc),
                     },
                 },

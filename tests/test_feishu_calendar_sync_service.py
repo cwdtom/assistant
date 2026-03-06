@@ -20,9 +20,13 @@ class _FakeCalendarClient:
         self._created_index = 0
         self._create_event_ids: list[str] = []
         self.list_events_result: list[FeishuCalendarEvent] = []
+        self._queued_list_events_results: list[list[FeishuCalendarEvent]] = []
 
     def queue_created_event_ids(self, event_ids: list[str]) -> None:
         self._create_event_ids.extend(event_ids)
+
+    def queue_list_events_results(self, payloads: list[list[FeishuCalendarEvent]]) -> None:
+        self._queued_list_events_results.extend(payloads)
 
     def create_event(self, **kwargs):  # type: ignore[no-untyped-def]
         self.create_calls.append(kwargs)
@@ -39,6 +43,8 @@ class _FakeCalendarClient:
 
     def list_events(self, **kwargs):  # type: ignore[no-untyped-def]
         self.list_calls.append(kwargs)
+        if self._queued_list_events_results:
+            return list(self._queued_list_events_results.pop(0))
         return list(self.list_events_result)
 
 
@@ -80,49 +86,114 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
             time.sleep(0.01)
         return bool(predicate())
 
-    def test_on_local_schedule_added_creates_feishu_mapping_async(self) -> None:
+    def test_on_local_schedule_added_creates_feishu_event_async(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-03-05 13:00", tag="work")
         self.client.queue_created_event_ids(["evt_add_1"])
         self.service.start()
 
         self.service.on_local_schedule_added(schedule_id=schedule_id)
 
-        self.assertTrue(self._wait_until(lambda: self.db.get_schedule_feishu_mapping(schedule_id) is not None))
-        mapping = self.db.get_schedule_feishu_mapping(schedule_id)
-        self.assertIsNotNone(mapping)
-        assert mapping is not None
-        self.assertEqual(mapping.feishu_event_id, "evt_add_1")
-        self.assertEqual(mapping.calendar_id, "cal_1")
+        self.assertTrue(self._wait_until(lambda: len(self.client.create_calls) == 1))
+        self.assertEqual(self.client.create_calls[0].get("summary"), "项目同步")
+        self.assertEqual(self.client.create_calls[0].get("description"), "work")
 
-    def test_on_local_schedule_updated_deletes_old_event_and_creates_new_one(self) -> None:
+    def test_on_local_schedule_added_skips_when_identity_exists(self) -> None:
         schedule_id = self.db.add_schedule("项目同步", "2026-03-05 13:00", tag="work")
-        self.db.upsert_schedule_feishu_mapping(
-            schedule_id=schedule_id,
-            feishu_event_id="evt_old",
-            calendar_id="cal_1",
+        self.client.list_events_result = [
+            FeishuCalendarEvent(
+                event_id="evt_existing",
+                summary="项目同步",
+                description="work",
+                start_timestamp=int(datetime(2026, 3, 5, 13, 0).timestamp()),
+                end_timestamp=int(datetime(2026, 3, 5, 14, 0).timestamp()),
+                timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 1, 9, 0).timestamp()),
+            )
+        ]
+        self.service.start()
+
+        self.service.on_local_schedule_added(schedule_id=schedule_id)
+
+        self.assertTrue(self._wait_until(lambda: len(self.client.list_calls) >= 1))
+        self.assertEqual(self.client.create_calls, [])
+
+    def test_on_local_schedule_updated_deletes_old_identity_and_creates_new_event(self) -> None:
+        schedule_id = self.db.add_schedule("旧标题", "2026-03-05 13:00", duration_minutes=60, tag="old")
+        old_schedule = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(old_schedule)
+        assert old_schedule is not None
+
+        self.assertTrue(
+            self.db.update_schedule(
+                schedule_id,
+                title="新标题",
+                event_time="2026-03-05 13:30",
+                duration_minutes=75,
+                tag="new_tag",
+            )
+        )
+
+        self.client.queue_list_events_results(
+            [
+                [
+                    FeishuCalendarEvent(
+                        event_id="evt_old",
+                        summary="旧标题",
+                        description="old",
+                        start_timestamp=int(datetime(2026, 3, 5, 13, 0).timestamp()),
+                        end_timestamp=int(datetime(2026, 3, 5, 14, 0).timestamp()),
+                        timezone="Asia/Shanghai",
+                        create_timestamp=int(datetime(2026, 3, 1, 8, 0).timestamp()),
+                    )
+                ],
+                [],
+            ]
         )
         self.client.queue_created_event_ids(["evt_new"])
         self.service.start()
 
-        self.service.on_local_schedule_updated(schedule_id=schedule_id)
+        self.service.on_local_schedule_updated(schedule_id=schedule_id, old_schedule=old_schedule)
 
-        self.assertTrue(
-            self._wait_until(
-                lambda: (self.db.get_schedule_feishu_mapping(schedule_id) or object()).feishu_event_id == "evt_new"
-            )
-        )
+        self.assertTrue(self._wait_until(lambda: len(self.client.create_calls) == 1))
         self.assertTrue(any(call.get("event_id") == "evt_old" for call in self.client.delete_calls))
+        self.assertEqual(self.client.create_calls[0].get("summary"), "新标题")
+        self.assertEqual(self.client.create_calls[0].get("description"), "new_tag")
 
-    def test_on_local_schedule_deleted_uses_provided_event_id(self) -> None:
+    def test_on_local_schedule_deleted_uses_identity_and_picks_earliest_created(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-03-05 13:00", tag="work")
+        deleted_schedule = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(deleted_schedule)
+        assert deleted_schedule is not None
+
+        self.client.list_events_result = [
+            FeishuCalendarEvent(
+                event_id="evt_late",
+                summary="项目同步",
+                description="work",
+                start_timestamp=int(datetime(2026, 3, 5, 13, 0).timestamp()),
+                end_timestamp=int(datetime(2026, 3, 5, 14, 0).timestamp()),
+                timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 2, 10, 0).timestamp()),
+            ),
+            FeishuCalendarEvent(
+                event_id="evt_early",
+                summary="项目同步",
+                description="work",
+                start_timestamp=int(datetime(2026, 3, 5, 13, 0).timestamp()),
+                end_timestamp=int(datetime(2026, 3, 5, 14, 0).timestamp()),
+                timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 1, 10, 0).timestamp()),
+            ),
+        ]
         self.service.start()
 
-        self.service.on_local_schedule_deleted(schedule_id=42, feishu_event_id="evt_del")
+        self.service.on_local_schedule_deleted(schedule_id=schedule_id, deleted_schedule=deleted_schedule)
 
         self.assertTrue(self._wait_until(lambda: len(self.client.delete_calls) == 1))
-        self.assertEqual(self.client.delete_calls[0].get("event_id"), "evt_del")
+        self.assertEqual(self.client.delete_calls[0].get("event_id"), "evt_early")
 
     def test_run_startup_bootstrap_sync_clears_and_rebuilds_window(self) -> None:
-        schedule_id = self.db.add_schedule("本地会议", "2026-03-05 14:00", tag="work")
+        self.db.add_schedule("本地会议", "2026-03-05 14:00", tag="work")
         self.client.list_events_result = [
             FeishuCalendarEvent(
                 event_id="evt_existing",
@@ -139,10 +210,8 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
 
         self.assertEqual(len(self.client.delete_calls), 1)
         self.assertEqual(self.client.delete_calls[0].get("event_id"), "evt_existing")
-        mapping = self.db.get_schedule_feishu_mapping(schedule_id)
-        self.assertIsNotNone(mapping)
-        assert mapping is not None
-        self.assertEqual(mapping.feishu_event_id, "evt_rebuilt")
+        self.assertEqual(len(self.client.create_calls), 1)
+        self.assertEqual(self.client.create_calls[0].get("summary"), "本地会议")
 
     def test_window_bounds_are_day_aligned(self) -> None:
         start, end = self.service._window_bounds(datetime(2026, 3, 5, 12, 34, 56))
@@ -161,20 +230,17 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
         self.service.poll_scheduled_reconcile()
         self.assertEqual(len(self.client.list_calls), list_calls_after_bootstrap + 1)
 
-    def test_poll_scheduled_reconcile_converges_local_to_feishu(self) -> None:
-        keep_id = self.db.add_schedule("旧标题", "2026-03-05 13:00", duration_minutes=60, tag="old")
-        self.db.upsert_schedule_feishu_mapping(
-            schedule_id=keep_id,
-            feishu_event_id="evt_keep",
-            calendar_id="cal_1",
+    def test_poll_scheduled_reconcile_converges_local_to_feishu_by_identity(self) -> None:
+        keep_id = self.db.add_schedule(
+            "新标题",
+            "2026-03-05 13:30",
+            duration_minutes=75,
+            remind_at="2026-03-05 13:00",
+            tag="new_tag",
         )
-        delete_mapped_id = self.db.add_schedule("待删除映射", "2026-03-05 15:00", duration_minutes=30, tag="tmp")
-        self.db.upsert_schedule_feishu_mapping(
-            schedule_id=delete_mapped_id,
-            feishu_event_id="evt_gone",
-            calendar_id="cal_1",
-        )
-        delete_unmapped_id = self.db.add_schedule("待删除未映射", "2026-03-05 16:00", duration_minutes=30, tag="tmp")
+        delete_id = self.db.add_schedule("待删除未映射", "2026-03-05 16:00", duration_minutes=30, tag="tmp")
+        duplicate_keep = self.db.add_schedule("重复日程", "2026-03-06 09:00", duration_minutes=60, tag="dup")
+        duplicate_delete = self.db.add_schedule("重复日程", "2026-03-06 09:00", duration_minutes=60, tag="dup")
 
         self.client.list_events_result = [
             FeishuCalendarEvent(
@@ -184,39 +250,46 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
                 start_timestamp=int(datetime(2026, 3, 5, 13, 30).timestamp()),
                 end_timestamp=int(datetime(2026, 3, 5, 14, 45).timestamp()),
                 timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 1, 9, 0).timestamp()),
             ),
             FeishuCalendarEvent(
                 event_id="evt_new",
                 summary="飞书新增",
                 description="from_feishu",
+                start_timestamp=int(datetime(2026, 3, 6, 10, 0).timestamp()),
+                end_timestamp=int(datetime(2026, 3, 6, 11, 0).timestamp()),
+                timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 1, 10, 0).timestamp()),
+            ),
+            FeishuCalendarEvent(
+                event_id="evt_dup",
+                summary="重复日程",
+                description="dup",
                 start_timestamp=int(datetime(2026, 3, 6, 9, 0).timestamp()),
                 end_timestamp=int(datetime(2026, 3, 6, 10, 0).timestamp()),
                 timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 1, 11, 0).timestamp()),
             ),
         ]
 
         self.service.poll_scheduled_reconcile()
 
-        updated = self.db.get_schedule(keep_id)
-        self.assertIsNotNone(updated)
-        assert updated is not None
-        self.assertEqual(updated.title, "新标题")
-        self.assertEqual(updated.tag, "new_tag")
-        self.assertEqual(updated.event_time, "2026-03-05 13:30")
-        self.assertEqual(updated.duration_minutes, 75)
-        self.assertIsNone(updated.remind_at)
+        kept = self.db.get_schedule(keep_id)
+        self.assertIsNotNone(kept)
+        assert kept is not None
+        self.assertIsNone(kept.remind_at)
 
-        self.assertIsNone(self.db.get_schedule(delete_mapped_id))
-        self.assertIsNone(self.db.get_schedule(delete_unmapped_id))
+        self.assertIsNone(self.db.get_schedule(delete_id))
+        self.assertIsNotNone(self.db.get_schedule(duplicate_keep))
+        self.assertIsNone(self.db.get_schedule(duplicate_delete))
 
-        new_mapping = self.db.get_schedule_feishu_mapping_by_event_id("evt_new", calendar_id="cal_1")
-        self.assertIsNotNone(new_mapping)
-        assert new_mapping is not None
-        new_schedule = self.db.get_schedule(new_mapping.schedule_id)
-        self.assertIsNotNone(new_schedule)
-        assert new_schedule is not None
-        self.assertEqual(new_schedule.title, "飞书新增")
-        self.assertEqual(new_schedule.tag, "from_feishu")
+        all_items = self.db.list_base_schedules_in_window(
+            window_start=datetime(2026, 3, 3, 0, 0),
+            window_end=datetime(2026, 3, 10, 23, 59),
+            max_window_days=31,
+        )
+        new_items = [item for item in all_items if item.title == "飞书新增" and item.tag == "from_feishu"]
+        self.assertEqual(len(new_items), 1)
 
 
 if __name__ == "__main__":
