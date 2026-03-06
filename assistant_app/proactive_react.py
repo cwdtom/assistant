@@ -11,6 +11,7 @@ from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
 from assistant_app.schemas.planner import AssistantToolMessage, ProactiveDoneArguments, normalize_tool_call_payload
+from assistant_app.schemas.tools import parse_json_object
 
 PROACTIVE_REACT_SYSTEM_PROMPT = """
 你是“主动提醒决策器”。
@@ -244,18 +245,8 @@ def _normalize_assistant_message(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
-    if isinstance(raw_arguments, dict):
-        return dict(raw_arguments)
-    if not isinstance(raw_arguments, str):
-        return {}
-    text = raw_arguments.strip()
-    if not text:
-        return {}
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(parsed, dict):
+    parsed = parse_json_object(raw_arguments)
+    if parsed is None:
         return {}
     return parsed
 

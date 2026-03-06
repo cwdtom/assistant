@@ -18,6 +18,7 @@ from assistant_app.schemas.planner import (
     ThoughtDoneDecision,
     normalize_tool_call_payload,
 )
+from assistant_app.schemas.tools import parse_json_object, validate_thought_tool_arguments
 
 THOUGHT_PROMPT = """
 你是 CLI 助手的 thought 模块，需要基于当前计划项做一步决策。
@@ -585,8 +586,14 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
     if tool_call_model is None:
         return None
     name = tool_call_model.function.name.strip().lower()
-    arguments = _parse_tool_arguments(tool_call_model.function.arguments)
-    current_step = str(arguments.get("current_step") or "").strip()
+    parsed_arguments = parse_json_object(tool_call_model.function.arguments)
+    if parsed_arguments is None:
+        return None
+    validated_arguments = validate_thought_tool_arguments(name, parsed_arguments)
+    if validated_arguments is None:
+        return None
+    arguments = validated_arguments.model_dump(exclude_none=True)
+    current_step = validated_arguments.current_step
 
     if name in _SCHEDULE_TOOL_ACTION_BY_NAME:
         schedule_payload: dict[str, Any] = {"action": _SCHEDULE_TOOL_ACTION_BY_NAME[name]}
@@ -701,19 +708,3 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
 
     return None
 
-
-def _parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
-    if isinstance(raw_arguments, dict):
-        return raw_arguments
-    if not isinstance(raw_arguments, str):
-        return {}
-    text = raw_arguments.strip()
-    if not text:
-        return {}
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    if isinstance(payload, dict):
-        return payload
-    return {}
