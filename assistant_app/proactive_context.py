@@ -29,6 +29,7 @@ class ProactiveContextSnapshot:
         self,
         *,
         night_quiet_hint: str,
+        score_threshold: int,
         max_steps: int,
         internet_search_allowed: bool,
     ) -> dict[str, object]:
@@ -40,6 +41,7 @@ class ProactiveContextSnapshot:
                 "channel": "feishu",
                 "target_type": "fixed_open_id",
                 "night_quiet_hint": night_quiet_hint,
+                "score_threshold": score_threshold,
                 "max_steps": max_steps,
                 "internet_search_allowed": internet_search_allowed,
             },
@@ -59,10 +61,9 @@ class ProactiveContextSnapshot:
             "output_contract": {
                 "terminal_action": "done",
                 "done_schema": {
-                    "notify": "boolean",
+                    "score": "integer (0~100)",
                     "message": "string",
                     "reason": "string",
-                    "confidence": "number (0~1, optional)",
                 },
             },
         }

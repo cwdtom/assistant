@@ -55,12 +55,11 @@ def build_proactive_tool_schemas() -> list[dict[str, Any]]:
             name="done",
             description="Finish proactive decision with structured output.",
             properties={
-                "notify": {"type": "boolean"},
+                "score": {"type": "integer", "minimum": 0, "maximum": 100},
                 "message": {"type": "string"},
                 "reason": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             },
-            required=["notify", "message", "reason"],
+            required=["score", "message", "reason"],
         ),
     ]
 

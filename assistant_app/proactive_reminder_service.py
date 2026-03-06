@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
+from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.db import AssistantDB
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_context import build_proactive_context_snapshot
@@ -26,6 +27,7 @@ class ProactiveReminderService:
         lookahead_hours: int,
         interval_minutes: int,
         night_quiet_hint: str,
+        score_threshold: int,
         max_steps: int,
         user_profile_path: str,
         internet_search_top_k: int,
@@ -41,6 +43,11 @@ class ProactiveReminderService:
         self._lookahead_hours = max(lookahead_hours, 1)
         self._interval_minutes = max(interval_minutes, 60)
         self._night_quiet_hint = night_quiet_hint.strip() or "23:00-08:00"
+        self._score_threshold = (
+            score_threshold
+            if 0 <= score_threshold <= 100
+            else DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
+        )
         self._max_steps = max(max_steps, 1)
         self._user_profile_path = user_profile_path
         self._internet_search_top_k = max(internet_search_top_k, 1)
@@ -110,13 +117,29 @@ class ProactiveReminderService:
         decision = react_runner.run_once(
             context_payload=snapshot.to_prompt_payload(
                 night_quiet_hint=self._night_quiet_hint,
+                score_threshold=self._score_threshold,
                 max_steps=self._max_steps,
                 internet_search_allowed=True,
             )
         )
         if decision is None:
             return
-        if not decision.notify:
+        should_notify = decision.score >= self._score_threshold
+        self._logger.info(
+            "proactive gate decided: score=%s threshold=%s notify=%s",
+            decision.score,
+            self._score_threshold,
+            should_notify,
+            extra={
+                "event": "proactive_gate_decision",
+                "context": {
+                    "score": decision.score,
+                    "threshold": self._score_threshold,
+                    "notify": should_notify,
+                },
+            },
+        )
+        if not should_notify:
             return
         content = decision.message.strip()
         if not content:
@@ -163,7 +186,7 @@ class ProactiveReminderService:
 
         marker = (
             f"[proactive_tick] now={now.strftime('%Y-%m-%d %H:%M')} "
-            f"notify=true reason={decision.reason}"
+            f"score={decision.score} threshold={self._score_threshold} reason={decision.reason}"
         )
         try:
             self._db.save_turn(user_content=marker, assistant_content=final_content)

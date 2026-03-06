@@ -124,6 +124,7 @@ python main.py
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
   - 启动重建窗口按自然日对齐：`start=(today-past_days) 00:00:00`，`end=(today+future_days) 23:59:59`
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`：配置后自动启用主动提醒目标；需同时配置 Feishu 凭据
+- `PROACTIVE_REMINDER_SCORE_THRESHOLD`：主动提醒分数阈值（默认 `80`，范围 `0~100`；当 `score >= threshold` 时才发送）
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`：主动提醒上下文前瞻窗口小时数（默认 `24`）
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`：夜间静默软约束提示（默认 `23:00-08:00`）
@@ -159,7 +160,7 @@ python main.py
 - 若启用 Feishu，非空 plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 若启用 Feishu，ack-only 空计划分支仅发送 ACK/DONE reaction，不发送正文文本
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
-- 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估，并在 `notify=true` 时向固定 `open_id` 主动发送 Feishu 文本
+- 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估；LLM 在 `done` 中返回 `score/message/reason`，且仅当 `score >= PROACTIVE_REMINDER_SCORE_THRESHOLD` 时向固定 `open_id` 主动发送 Feishu 文本
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；首次飞书->本地对账会延后到一个 `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES` 周期后
 - Feishu 日历周期对账由 timer 驱动；当 `TIMER_ENABLED=false` 时不会执行周期对账

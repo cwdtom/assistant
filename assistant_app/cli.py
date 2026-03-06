@@ -267,6 +267,7 @@ def main() -> None:
             lookahead_hours=config.proactive_reminder_lookahead_hours,
             interval_minutes=config.proactive_reminder_interval_minutes,
             night_quiet_hint=config.proactive_reminder_night_quiet_hint,
+            score_threshold=config.proactive_reminder_score_threshold,
             max_steps=config.plan_replan_max_steps,
             user_profile_path=config.user_profile_path,
             internet_search_top_k=config.internet_search_top_k,

@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
 
@@ -21,18 +22,18 @@ PROACTIVE_REACT_SYSTEM_PROMPT = """
 - 夜间时段优先保持克制，除非事项紧急。
 
 输出要求：
-- 终态必须通过 done 输出：notify/message/reason/confidence。
-- notify=false 时 message 可以为空字符串。
+- 终态必须通过 done 输出：score/message/reason。
+- score 必须是 0~100 的整数，表示当前事项的提醒价值。
+- 当 score 大于等于当前阈值时，message 必须是非空提醒文案。
 - 不要输出额外解释性前后缀。
 """.strip()
 
 
 @dataclass(frozen=True)
 class ProactiveDecision:
-    notify: bool
+    score: int
     message: str
     reason: str
-    confidence: float | None = None
 
 
 class ProactiveReactRunner:
@@ -77,6 +78,7 @@ class ProactiveReactRunner:
                 "event": "proactive_react_start",
                 "context": {
                     "max_steps": self._max_steps,
+                    "score_threshold": _extract_score_threshold(context_payload),
                     "has_user_profile": bool(
                         isinstance(context_payload.get("user_profile"), dict)
                         and bool(context_payload["user_profile"].get("content"))
@@ -124,13 +126,16 @@ class ProactiveReactRunner:
             )
 
             if tool_name == "done":
-                decision = _normalize_done_arguments(arguments)
+                decision = _normalize_done_arguments(
+                    arguments,
+                    score_threshold=_extract_score_threshold(context_payload),
+                )
                 if decision is None:
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_id,
-                            "content": "done 参数非法：需要 notify/message/reason。",
+                            "content": "done 参数非法：需要 score/message/reason。",
                         }
                     )
                     self._logger.warning(
@@ -146,10 +151,11 @@ class ProactiveReactRunner:
                     )
                     continue
                 self._logger.info(
-                    "proactive react done",
+                    "proactive react done: score=%s",
+                    decision.score,
                     extra={
                         "event": "proactive_react_done",
-                        "context": {"notify": decision.notify, "confidence": decision.confidence},
+                        "context": {"score": decision.score},
                     },
                 )
                 return decision
@@ -243,34 +249,39 @@ def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
     return parsed
 
 
-def _normalize_done_arguments(arguments: dict[str, Any]) -> ProactiveDecision | None:
-    notify = arguments.get("notify")
+def _normalize_done_arguments(
+    arguments: dict[str, Any],
+    *,
+    score_threshold: int,
+) -> ProactiveDecision | None:
+    score = arguments.get("score")
     message = arguments.get("message")
     reason = arguments.get("reason")
-    if not isinstance(notify, bool):
+    if not isinstance(score, int) or isinstance(score, bool):
+        return None
+    if score < 0 or score > 100:
         return None
     if not isinstance(message, str):
         return None
     if not isinstance(reason, str) or not reason.strip():
         return None
-
-    confidence_value = arguments.get("confidence")
-    confidence: float | None = None
-    if isinstance(confidence_value, (int, float)) and not isinstance(confidence_value, bool):
-        numeric = float(confidence_value)
-        if 0 <= numeric <= 1:
-            confidence = numeric
     normalized_message = message.strip()
-    if notify and not normalized_message:
+    if score >= score_threshold and not normalized_message:
         return None
-    if not notify:
-        normalized_message = normalized_message
     return ProactiveDecision(
-        notify=notify,
+        score=score,
         message=normalized_message,
         reason=reason.strip(),
-        confidence=confidence,
     )
+
+
+def _extract_score_threshold(context_payload: dict[str, Any]) -> int:
+    policy = context_payload.get("policy")
+    if isinstance(policy, dict):
+        raw_value = policy.get("score_threshold")
+        if isinstance(raw_value, int) and not isinstance(raw_value, bool) and 0 <= raw_value <= 100:
+            return raw_value
+    return DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 
 
 def _extract_allowed_tool_names() -> set[str]:

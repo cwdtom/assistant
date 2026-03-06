@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 UNKNOWN_APP_VERSION = "unknown"
+DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD = 80
 _PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$""")
 
 
@@ -62,6 +63,7 @@ class AppConfig:
     proactive_reminder_interval_minutes: int
     proactive_reminder_lookahead_hours: int
     proactive_reminder_night_quiet_hint: str
+    proactive_reminder_score_threshold: int
 
 
 def load_env_file(env_path: str = ".env") -> None:
@@ -161,6 +163,12 @@ def load_config(load_dotenv: bool = True) -> AppConfig:
             "PROACTIVE_REMINDER_NIGHT_QUIET_HINT",
             default="23:00-08:00",
         ),
+        proactive_reminder_score_threshold=_read_env_int_in_range(
+            "PROACTIVE_REMINDER_SCORE_THRESHOLD",
+            default=DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
+            min_value=0,
+            max_value=100,
+        ),
     )
 
 
@@ -190,6 +198,19 @@ def _read_env_float(name: str, *, default: float, min_value: float, max_value: f
         return default
     try:
         value = float(raw.strip())
+    except ValueError:
+        return default
+    if value < min_value or value > max_value:
+        return default
+    return value
+
+
+def _read_env_int_in_range(name: str, *, default: int, min_value: int, max_value: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
     except ValueError:
         return default
     if value < min_value or value > max_value:
