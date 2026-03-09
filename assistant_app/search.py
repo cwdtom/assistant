@@ -15,7 +15,6 @@ from assistant_app.schemas.search import (
     BochaSearchRequestPayload,
     BochaSearchRequestReranker,
     BochaSearchResponsePayload,
-    BochaWebPageItem,
 )
 
 
@@ -382,14 +381,12 @@ def _extract_bocha_results(payload: object) -> list[SearchResult]:
 
     results: list[SearchResult] = []
     seen_urls: set[str] = set()
-    for raw_item in parsed.raw_items():
-        item = _build_bocha_web_page_item(raw_item)
-        if item is None:
+    for item in parsed.items():
+        if not _is_valid_result_url(item.url):
             continue
         if item.url in seen_urls:
             continue
-        snippet = _bocha_snippet(item)
-        result = _build_search_result(title=item.name, snippet=snippet, url=item.url)
+        result = _build_search_result(title=item.name, snippet=item.result_snippet(), url=item.url)
         if result is None:
             continue
         results.append(result)
@@ -421,33 +418,6 @@ def _clean_html_text(raw: str) -> str:
     return " ".join(text.split()).strip()
 
 
-def _bocha_snippet(item: BochaWebPageItem) -> str:
-    summary = item.summary
-    if isinstance(summary, str):
-        summary_text = summary.strip()
-        if summary_text:
-            return summary_text
-    if isinstance(summary, list):
-        parts = []
-        for part in summary:
-            if isinstance(part, str):
-                cleaned = part.strip()
-                if cleaned:
-                    parts.append(cleaned)
-            elif isinstance(part, dict):
-                text = str(part.get("text") or "").strip()
-                if text:
-                    parts.append(text)
-        summary_text = " ".join(parts).strip()
-        if summary_text:
-            return summary_text
-
-    snippet = item.snippet.strip()
-    if snippet:
-        return snippet
-    return ""
-
-
 def _normalize_query(query: str) -> str:
     return " ".join(query.strip().split())
 
@@ -464,18 +434,6 @@ def _parse_bocha_response(payload: object) -> BochaSearchResponsePayload | None:
         return BochaSearchResponsePayload.model_validate(payload)
     except ValidationError:
         return None
-
-
-def _build_bocha_web_page_item(payload: object) -> BochaWebPageItem | None:
-    if not isinstance(payload, dict):
-        return None
-    try:
-        item = BochaWebPageItem.model_validate(payload)
-    except ValidationError:
-        return None
-    if not _is_valid_result_url(item.url):
-        return None
-    return item
 
 
 def _load_sync_playwright() -> Any:

@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 try:
@@ -149,6 +150,38 @@ class _RecordListHandler(logging.Handler):
             return [record.getMessage() for record in self.records]
 
 
+class _FakeImMessageAPI:
+    def __init__(self, response) -> None:  # type: ignore[no-untyped-def]
+        self.response = response
+        self.requests = []
+
+    def create(self, request):  # type: ignore[no-untyped-def]
+        self.requests.append(request)
+        return self.response
+
+
+class _FakeImReactionAPI:
+    def __init__(self, response) -> None:  # type: ignore[no-untyped-def]
+        self.response = response
+        self.requests = []
+
+    def create(self, request):  # type: ignore[no-untyped-def]
+        self.requests.append(request)
+        return self.response
+
+
+class _FakeImApiClient:
+    def __init__(self, *, message_response, reaction_response=None) -> None:  # type: ignore[no-untyped-def]
+        self.im = SimpleNamespace(
+            v1=SimpleNamespace(
+                message=_FakeImMessageAPI(message_response),
+                message_reaction=_FakeImReactionAPI(
+                    reaction_response if reaction_response is not None else message_response
+                ),
+            )
+        )
+
+
 class FeishuAdapterTest(unittest.TestCase):
     def _wait_until(self, predicate, *, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
         deadline = time.monotonic() + timeout
@@ -236,6 +269,57 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(message.chat_id, "oc_root")
         self.assertEqual(message.open_id, "ou_root")
         self.assertEqual(message.text, "根级消息")
+
+    def test_send_text_message_accepts_attribute_response_without_success_method(self) -> None:
+        api_client = _FakeImApiClient(message_response=SimpleNamespace(code=0, msg="ok"))
+
+        FeishuLongConnectionRunner._send_text_message(
+            api_client=api_client,
+            chat_id="oc_1",
+            text="你好",
+        )
+
+        request = api_client.im.v1.message.requests[0]
+        self.assertEqual(request.receive_id_type, "chat_id")
+        self.assertEqual(request.request_body.receive_id, "oc_1")
+        self.assertEqual(request.request_body.content, '{"text": "你好"}')
+
+    def test_send_text_message_by_open_id_accepts_attribute_response_without_success_method(self) -> None:
+        api_client = _FakeImApiClient(message_response=SimpleNamespace(code="0", msg="ok"))
+
+        FeishuLongConnectionRunner._send_text_message_by_open_id(
+            api_client=api_client,
+            open_id="ou_1",
+            text="主动提醒",
+        )
+
+        request = api_client.im.v1.message.requests[0]
+        self.assertEqual(request.receive_id_type, "open_id")
+        self.assertEqual(request.request_body.receive_id, "ou_1")
+        self.assertEqual(request.request_body.content, '{"text": "主动提醒"}')
+
+    def test_send_text_message_raises_for_attribute_response_error_code(self) -> None:
+        api_client = _FakeImApiClient(message_response=SimpleNamespace(code="999", msg="bad request"))
+
+        with self.assertRaisesRegex(RuntimeError, "send message failed: code=999, msg=bad request"):
+            FeishuLongConnectionRunner._send_text_message(
+                api_client=api_client,
+                chat_id="oc_1",
+                text="你好",
+            )
+
+    def test_send_ack_reaction_raises_for_attribute_response_error_code(self) -> None:
+        api_client = _FakeImApiClient(
+            message_response=SimpleNamespace(code=0, msg="ok"),
+            reaction_response=SimpleNamespace(code="951", msg="rate limited"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "send reaction failed: code=951, msg=rate limited"):
+            FeishuLongConnectionRunner._send_ack_reaction(
+                api_client=api_client,
+                message_id="om_1",
+                emoji_type="DONE",
+            )
 
     def test_extract_text_message_skips_blank_json_text(self) -> None:
         payload = {

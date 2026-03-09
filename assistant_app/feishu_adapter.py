@@ -18,6 +18,7 @@ from assistant_app.schemas.feishu import (
     FeishuTextMessage,
     inspect_feishu_text_message_payload,
     parse_feishu_message_text,
+    parse_feishu_response_status,
     parse_feishu_text_message,
 )
 
@@ -625,19 +626,7 @@ class FeishuLongConnectionRunner:
             .build()
         )
         response = api_client.im.v1.message.create(request)
-
-        success = getattr(response, "success", None)
-        if callable(success):
-            if success():
-                return
-            code = getattr(response, "code", "unknown")
-            msg = getattr(response, "msg", "")
-            raise RuntimeError(f"send message failed: code={code}, msg={msg}")
-
-        code = _read_path(response, "code")
-        if code not in (None, 0):
-            msg = _read_path(response, "msg")
-            raise RuntimeError(f"send message failed: code={code}, msg={msg}")
+        FeishuLongConnectionRunner._ensure_send_response_success(response=response, action="send message")
 
     @staticmethod
     def _send_text_message_by_open_id(*, api_client: Any, open_id: str, text: str) -> None:
@@ -659,19 +648,7 @@ class FeishuLongConnectionRunner:
             .build()
         )
         response = api_client.im.v1.message.create(request)
-
-        success = getattr(response, "success", None)
-        if callable(success):
-            if success():
-                return
-            code = getattr(response, "code", "unknown")
-            msg = getattr(response, "msg", "")
-            raise RuntimeError(f"send message failed: code={code}, msg={msg}")
-
-        code = _read_path(response, "code")
-        if code not in (None, 0):
-            msg = _read_path(response, "msg")
-            raise RuntimeError(f"send message failed: code={code}, msg={msg}")
+        FeishuLongConnectionRunner._ensure_send_response_success(response=response, action="send message")
 
     @staticmethod
     def _send_ack_reaction(*, api_client: Any, message_id: str, emoji_type: str) -> None:
@@ -692,18 +669,31 @@ class FeishuLongConnectionRunner:
             .build()
         )
         response = api_client.im.v1.message_reaction.create(request)
+        FeishuLongConnectionRunner._ensure_send_response_success(response=response, action="send reaction")
+
+    @staticmethod
+    def _ensure_send_response_success(*, response: Any, action: str) -> None:
         success = getattr(response, "success", None)
         if callable(success):
             if success():
                 return
-            code = getattr(response, "code", "unknown")
-            msg = getattr(response, "msg", "")
-            raise RuntimeError(f"send reaction failed: code={code}, msg={msg}")
+            status = parse_feishu_response_status(response)
+            code = (
+                status.code
+                if status is not None and status.code is not None
+                else getattr(response, "code", "unknown")
+            )
+            msg = (
+                status.msg
+                if status is not None and status.msg is not None
+                else str(getattr(response, "msg", "") or "")
+            )
+            raise RuntimeError(f"{action} failed: code={code}, msg={msg}")
 
-        code = _read_path(response, "code")
-        if code not in (None, 0):
-            msg = _read_path(response, "msg")
-            raise RuntimeError(f"send reaction failed: code={code}, msg={msg}")
+        status = parse_feishu_response_status(response)
+        if status is None or status.is_success():
+            return
+        raise RuntimeError(f"{action} failed: code={status.code}, msg={status.msg or ''}")
 
 
 def create_feishu_runner(
@@ -742,24 +732,3 @@ def create_feishu_runner(
         event_processor=processor,
         logger=logger,
     )
-
-
-def _read_path(data: Any, path: str) -> Any:
-    current = data
-    for part in path.split("."):
-        if current is None:
-            return None
-        if isinstance(current, dict):
-            current = current.get(part)
-            continue
-        current = getattr(current, part, None)
-    return current
-
-
-def _first_non_empty(*values: Any) -> str | None:
-    for value in values:
-        if isinstance(value, str):
-            text = value.strip()
-            if text:
-                return text
-    return None

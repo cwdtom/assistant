@@ -179,6 +179,88 @@ class FeishuCalendarEventPayload(FeishuCompatModel):
         return _parse_optional_unix_seconds(value)
 
 
+class FeishuApiResponseStatus(FeishuCompatModel):
+    code: int | None = None
+    msg: str | None = None
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def normalize_code(cls, value: Any) -> int | None:
+        return _parse_optional_int(value)
+
+    @field_validator("msg", mode="before")
+    @classmethod
+    def normalize_msg(cls, value: Any) -> str | None:
+        return _normalize_optional_text(value, allow_non_string=True)
+
+    def is_success(self) -> bool:
+        return self.code in (None, 0)
+
+
+class FeishuCalendarEventIdPayload(FeishuCompatModel):
+    event_id: str | None = None
+
+    @field_validator("event_id", mode="before")
+    @classmethod
+    def normalize_event_id(cls, value: Any) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class FeishuCalendarCreateResponseData(FeishuCompatModel):
+    event: FeishuCalendarEventIdPayload | None = None
+
+
+class FeishuCalendarCreateResponse(FeishuApiResponseStatus):
+    data: FeishuCalendarCreateResponseData | None = None
+
+    def event_id_value(self) -> str | None:
+        if self.data is None or self.data.event is None:
+            return None
+        return self.data.event.event_id
+
+
+class FeishuCalendarListResponseData(FeishuCompatModel):
+    items: list[object] = Field(default_factory=list)
+    has_more: bool = False
+    page_token: str | None = None
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def normalize_items(cls, value: Any) -> list[object]:
+        if isinstance(value, list):
+            return value
+        return []
+
+    @field_validator("has_more", mode="before")
+    @classmethod
+    def normalize_has_more(cls, value: Any) -> bool:
+        return _parse_optional_bool(value)
+
+    @field_validator("page_token", mode="before")
+    @classmethod
+    def normalize_page_token(cls, value: Any) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class FeishuCalendarListResponse(FeishuApiResponseStatus):
+    data: FeishuCalendarListResponseData | None = None
+
+    def raw_items(self) -> list[object]:
+        if self.data is None:
+            return []
+        return list(self.data.items)
+
+    def has_more_items(self) -> bool:
+        if self.data is None:
+            return False
+        return self.data.has_more
+
+    def page_token_value(self) -> str | None:
+        if self.data is None:
+            return None
+        return self.data.page_token
+
+
 def parse_feishu_message_text(raw_content: str) -> str:
     content = raw_content.strip()
     if not content:
@@ -290,6 +372,27 @@ def parse_feishu_calendar_event(raw_payload: Any, *, default_timezone: str) -> F
     return parsed
 
 
+def parse_feishu_response_status(raw_payload: Any) -> FeishuApiResponseStatus | None:
+    try:
+        return FeishuApiResponseStatus.model_validate(raw_payload)
+    except ValidationError:
+        return None
+
+
+def parse_feishu_calendar_create_response(raw_payload: Any) -> FeishuCalendarCreateResponse | None:
+    try:
+        return FeishuCalendarCreateResponse.model_validate(raw_payload)
+    except ValidationError:
+        return None
+
+
+def parse_feishu_calendar_list_response(raw_payload: Any) -> FeishuCalendarListResponse | None:
+    try:
+        return FeishuCalendarListResponse.model_validate(raw_payload)
+    except ValidationError:
+        return None
+
+
 def _parse_optional_int(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -315,6 +418,33 @@ def _parse_optional_unix_seconds(value: Any) -> int | None:
     return parsed
 
 
+def _parse_optional_bool(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return False
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+    return bool(value)
+
+
+def _normalize_optional_text(value: Any, *, allow_non_string: bool = False) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if allow_non_string:
+        return str(value)
+    return None
+
+
 def _read_path(data: Any, path: str) -> Any:
     current = data
     for part in path.split("."):
@@ -332,14 +462,20 @@ def _has_non_empty_string(value: Any) -> bool:
 
 
 __all__ = [
+    "FeishuApiResponseStatus",
     "FeishuCalendarEvent",
+    "FeishuCalendarCreateResponse",
+    "FeishuCalendarListResponse",
     "FeishuPendingTaskInput",
     "FeishuProactiveTextRequest",
     "FeishuSubtaskResultUpdate",
     "FeishuTextMessage",
+    "parse_feishu_calendar_create_response",
     "inspect_feishu_calendar_event_payload",
     "inspect_feishu_text_message_payload",
     "parse_feishu_calendar_event",
+    "parse_feishu_calendar_list_response",
+    "parse_feishu_response_status",
     "parse_feishu_message_text",
     "parse_feishu_text_message",
 ]

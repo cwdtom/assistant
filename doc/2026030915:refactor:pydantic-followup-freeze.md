@@ -155,20 +155,19 @@
 
 - [x] thought tool-calling 主链路已可携带 runtime typed payload 传递到执行层。
 - [ ] `schedule/history/thoughts/internet_search` 执行器的 typed/dict 重复逻辑被进一步收敛，而不是继续扩散。
-- [ ] CLI `/schedule`、`/history`、`/thoughts` 命令解析迁移到 command-level Pydantic model。
-- [ ] Feishu calendar / message SDK 关键响应已用 schema 封装，不再在主路径大量依赖 `_read_path`。
-- [ ] Bocha search 响应结构进一步类型化，主逻辑中的 `isinstance`/`dict.get` 明显减少。
-- [ ] 全量单测通过。
+- [x] CLI `/schedule`、`/history`、`/thoughts` 命令解析迁移到 command-level Pydantic model。
+- [x] Feishu calendar / message SDK 关键响应已用 schema 封装，不再在主路径大量依赖 `_read_path`。
+- [x] Bocha search 响应结构进一步类型化，主逻辑中的 `isinstance`/`dict.get` 明显减少。
+- [x] 全量单测通过。
 - [ ] Log evidence proves the change is effective and correct.
 
 ## 9. Open Questions
 
 - None for this freeze baseline.
-- 若下一轮要进一步缩小范围，默认优先级为：
-  - CLI command models
-  - schedule 执行器去重
-  - Feishu response schema
-  - search response schema
+- 若下一轮继续推进，默认优先级为：
+  - `schedule/history/thoughts/internet_search` 执行器 typed/dict 双路径去重
+  - 日志 / trace payload schema 收敛
+  - 运行时日志证据补齐
 
 ## 10. Decision Log
 
@@ -227,3 +226,21 @@
 - Validation already completed before freezing:
   - `python -m unittest discover -s tests -p "test_*.py"`
   - 结果：382 tests, OK
+
+## 12. Progress Updates
+
+- Progress update:
+  - 2026-03-09 16:50 Asia/Shanghai
+- Completed since freeze:
+  - CLI command-level Pydantic models 已落地主路径，`/schedule`、`/history`、`/thoughts` 命令解析统一产出 typed runtime payload，再进入执行层。
+  - Feishu SDK response envelope 已补充 schema，覆盖 `code/msg`、calendar create/list 的 `data.event.event_id`、`items/has_more/page_token` 等主读路径。
+  - `assistant_app/feishu_calendar_client.py` 与 `assistant_app/feishu_adapter.py` 已切到 typed response parsing，主路径不再依赖 `_read_path` 读取上述关键字段。
+  - Bocha search response 已继续类型化，`summary` 多形态与 `webPages.value` item 解析下沉到 schema，`assistant_app/search.py` 中对应的 `isinstance`/`dict.get` 分支明显减少。
+- Verification completed after progress update:
+  - `ruff check assistant_app/feishu_adapter.py assistant_app/feishu_calendar_client.py assistant_app/schemas/__init__.py assistant_app/schemas/feishu.py assistant_app/schemas/search.py assistant_app/search.py tests/test_feishu_adapter.py tests/test_feishu_calendar_client.py tests/test_search.py`
+  - `python -m unittest discover -s tests -p "test_*.py"`
+  - 结果：399 tests, OK
+- Remaining highest-priority work:
+  - 继续收敛 `schedule/history/thoughts/internet_search` 执行器中 typed path 与 legacy dict path 的双份实现。
+  - 复查日志 / trace payload 是否仍存在宽松 `dict` 边界，并补最小必要的 schema。
+  - 如需把本冻结文档推进到“完成”状态，还需要补运行时日志证据，而不仅是单元测试验证。

@@ -54,9 +54,14 @@ class SearchProviderTest(unittest.TestCase):
                             "summary": "summary-a",
                             "snippet": "snippet-a",
                         },
-                        {"name": "B", "url": "https://example.com/b", "summary": ["x", "y"]},
+                        {"name": "B", "url": "https://example.com/b", "summary": ["x", {"text": "y"}]},
                         {"name": "C", "url": "https://example.com/c", "snippet": "snippet-c"},
-                        {"name": "D", "url": "https://example.com/d", "snippet": "snippet-d"},
+                        {
+                            "name": "D",
+                            "url": "https://example.com/d",
+                            "summary": [{"text": "z"}, {"ignored": "noop"}, 123],
+                            "snippet": "snippet-d",
+                        },
                     ]
                 }
             }
@@ -72,7 +77,7 @@ class SearchProviderTest(unittest.TestCase):
         self.assertEqual(results[2].title, "C")
         self.assertEqual(results[2].snippet, "snippet-c")
         self.assertEqual(results[3].title, "D")
-        self.assertEqual(results[3].snippet, "snippet-d")
+        self.assertEqual(results[3].snippet, "z")
 
     def test_create_search_provider_bocha_without_key_falls_back_to_bing(self) -> None:
         provider = create_search_provider(provider_name="bocha", bocha_api_key=None)

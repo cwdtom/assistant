@@ -90,6 +90,23 @@ class FeishuCalendarClientTest(unittest.TestCase):
         self.assertEqual(request.request_body.end_time.timestamp, "1700003600")
         self.assertEqual(request.request_body.end_time.timezone, "Asia/Shanghai")
 
+    def test_create_event_supports_attribute_response_envelope(self) -> None:
+        self.calendar_api.create_response = _FakeResponse(
+            ok=True,
+            data=SimpleNamespace(event=SimpleNamespace(event_id="evt_attr")),
+        )
+
+        event_id = self.client.create_event(
+            calendar_id="cal_1",
+            summary="项目同步",
+            description="work",
+            start_timestamp=1700000000,
+            end_timestamp=1700003600,
+            timezone="Asia/Shanghai",
+        )
+
+        self.assertEqual(event_id, "evt_attr")
+
     def test_delete_event_ignore_not_found_returns_false(self) -> None:
         self.calendar_api.delete_response = _FakeResponse(ok=False, code=193001, msg="event not found")
 
@@ -162,6 +179,36 @@ class FeishuCalendarClientTest(unittest.TestCase):
         self.assertEqual(len(self.calendar_api.list_requests), 2)
         self.assertIsNone(self.calendar_api.list_requests[0].page_token)
         self.assertEqual(self.calendar_api.list_requests[1].page_token, "token_1")
+
+    def test_list_events_supports_attribute_response_envelope(self) -> None:
+        self.calendar_api.list_responses = [
+            _FakeResponse(
+                ok=True,
+                data=SimpleNamespace(
+                    has_more=False,
+                    page_token="",
+                    items=[
+                        SimpleNamespace(
+                            event_id="evt_attr",
+                            summary="属性响应",
+                            description="attr",
+                            start_time=SimpleNamespace(time_stamp="1700000000", timezone="Asia/Shanghai"),
+                            end_time=SimpleNamespace(time_stamp="1700003600", timezone="Asia/Shanghai"),
+                        )
+                    ],
+                ),
+            )
+        ]
+
+        items = self.client.list_events(
+            calendar_id="cal_1",
+            start_timestamp=1699990000,
+            end_timestamp=1700100000,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].event_id, "evt_attr")
+        self.assertEqual(items[0].summary, "属性响应")
 
     def test_list_events_accepts_timestamp_alias_and_default_timezone(self) -> None:
         self.calendar_api.list_responses = [

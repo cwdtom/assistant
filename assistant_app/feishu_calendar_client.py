@@ -6,7 +6,10 @@ from typing import Any
 from assistant_app.schemas.feishu import (
     FeishuCalendarEvent,
     inspect_feishu_calendar_event_payload,
+    parse_feishu_calendar_create_response,
     parse_feishu_calendar_event,
+    parse_feishu_calendar_list_response,
+    parse_feishu_response_status,
 )
 
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -73,7 +76,8 @@ class FeishuCalendarClient:
         request = module.CreateCalendarEventRequest.builder().calendar_id(calendar_id).request_body(event).build()
         response = api_client.calendar.v4.calendar_event.create(request)
         self._ensure_success(response=response, operation="create")
-        event_id = _first_non_empty(_read_path(response, "data.event.event_id"))
+        parsed_response = parse_feishu_calendar_create_response(response)
+        event_id = parsed_response.event_id_value() if parsed_response is not None else None
         if event_id is None:
             raise FeishuCalendarClientError("create event succeeded but missing event_id")
         return event_id
@@ -98,7 +102,8 @@ class FeishuCalendarClient:
         response = api_client.calendar.v4.calendar_event.delete(request)
         if self._is_success(response):
             return True
-        code = _parse_int(_read_path(response, "code"))
+        status = parse_feishu_response_status(response)
+        code = status.code if status is not None else None
         if ignore_not_found and code in {193000, 193001, 193003}:
             return False
         self._ensure_success(response=response, operation="delete")
@@ -132,16 +137,15 @@ class FeishuCalendarClient:
             request = builder.build()
             response = api_client.calendar.v4.calendar_event.list(request)
             self._ensure_success(response=response, operation="list")
-            payload_items = _read_path(response, "data.items")
-            if isinstance(payload_items, list):
-                for raw_item in payload_items:
-                    parsed = self._parse_event(raw_item)
-                    if parsed is not None:
-                        events.append(parsed)
-            has_more = bool(_read_path(response, "data.has_more"))
-            if not has_more:
+            parsed_response = parse_feishu_calendar_list_response(response)
+            payload_items = parsed_response.raw_items() if parsed_response is not None else []
+            for raw_item in payload_items:
+                parsed = self._parse_event(raw_item)
+                if parsed is not None:
+                    events.append(parsed)
+            if parsed_response is None or not parsed_response.has_more_items():
                 break
-            next_token = _first_non_empty(_read_path(response, "data.page_token"))
+            next_token = parsed_response.page_token_value()
             if not next_token:
                 self._warn("list events has_more but missing page_token")
                 break
@@ -199,14 +203,15 @@ class FeishuCalendarClient:
                 return bool(success())
             except Exception:  # noqa: BLE001
                 return False
-        code = _parse_int(_read_path(response, "code"))
-        return code in (None, 0)
+        status = parse_feishu_response_status(response)
+        return status is None or status.is_success()
 
     def _ensure_success(self, *, response: Any, operation: str) -> None:
         if self._is_success(response):
             return
-        code = _parse_int(_read_path(response, "code"))
-        msg = str(_read_path(response, "msg") or "")
+        status = parse_feishu_response_status(response)
+        code = status.code if status is not None else None
+        msg = status.msg or "" if status is not None else ""
         raise FeishuCalendarClientError(
             f"feishu calendar {operation} failed: code={code if code is not None else 'unknown'}, msg={msg}",
             code=code,
@@ -241,50 +246,3 @@ class FeishuCalendarClient:
                 },
             },
         )
-
-
-def _read_path(data: Any, path: str) -> Any:
-    current = data
-    for part in path.split("."):
-        if current is None:
-            return None
-        if isinstance(current, dict):
-            current = current.get(part)
-            continue
-        current = getattr(current, part, None)
-    return current
-
-
-def _first_non_empty(*values: Any) -> str | None:
-    for value in values:
-        if isinstance(value, str):
-            text = value.strip()
-            if text:
-                return text
-    return None
-
-
-def _parse_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            return int(text)
-        except ValueError:
-            return None
-    return None
-
-
-def _parse_unix_seconds(value: Any) -> int | None:
-    parsed = _parse_int(value)
-    if parsed is None:
-        return None
-    # Feishu may return create_time in milliseconds.
-    if abs(parsed) >= 10**12:
-        return parsed // 1000
-    return parsed

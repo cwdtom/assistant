@@ -28,7 +28,10 @@ from assistant_app.schemas.domain import (
     WebPageFetchResult,
 )
 from assistant_app.schemas.feishu import (
+    FeishuApiResponseStatus,
+    FeishuCalendarCreateResponse,
     FeishuCalendarEvent,
+    FeishuCalendarListResponse,
     FeishuPendingTaskInput,
     FeishuProactiveTextRequest,
     FeishuSubtaskResultUpdate,
@@ -127,7 +130,10 @@ __all__ = [
     "ChatMessage",
     "ChatTurn",
     "HttpUrlValue",
+    "FeishuApiResponseStatus",
     "FeishuCalendarEvent",
+    "FeishuCalendarCreateResponse",
+    "FeishuCalendarListResponse",
     "FeishuPendingTaskInput",
     "FeishuProactiveTextRequest",
     "FeishuSubtaskResultUpdate",
