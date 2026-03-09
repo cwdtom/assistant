@@ -37,6 +37,13 @@ class CommandSchemaTest(unittest.TestCase):
         self.assertEqual(command.arguments.times, -1)
         self.assertEqual(command.arguments.tag, "default")
 
+    def test_parse_schedule_add_command_normalizes_hashtag_tag(self) -> None:
+        command = parse_schedule_add_command("/schedule add 2026-03-10 09:00 站会 --tag #Work")
+
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertEqual(command.arguments.tag, "work")
+
     def test_parse_schedule_update_command_omits_absent_optional_fields(self) -> None:
         command = parse_schedule_update_command("/schedule update 7 2026-03-10 09:00 复盘会")
 

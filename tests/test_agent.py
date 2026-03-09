@@ -19,6 +19,7 @@ from assistant_app.agent import (
     _strip_think_blocks,
     _try_parse_json,
 )
+from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.schemas.planner import ToolReplyPayload
@@ -748,6 +749,30 @@ class AssistantAgentTest(unittest.TestCase):
         merged = "\n".join(captured.output)
         self.assertIn("thoughts_command_start", merged)
         self.assertIn("thoughts_command_done", merged)
+
+    def test_thoughts_commands_delegate_to_shared_executor(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        observation = PlannerObservation(
+            tool="thoughts",
+            input_text="/thoughts add 记得买牛奶",
+            ok=True,
+            result="已记录想法 #9: 记得买牛奶",
+        )
+
+        with patch(
+            "assistant_app.agent_components.command_handlers.execute_thoughts_system_action",
+            return_value=observation,
+        ) as mocked:
+            result = agent.handle_input("/thoughts add 记得买牛奶")
+
+        self.assertEqual(result, observation.result)
+        mocked.assert_called_once()
+        call_kwargs = mocked.call_args.kwargs
+        self.assertEqual(call_kwargs["raw_input"], "/thoughts add 记得买牛奶")
+        payload = call_kwargs["payload"]
+        self.assertIsInstance(payload, RuntimePlannerActionPayload)
+        self.assertEqual(payload.tool_name, "thoughts_add")
+        self.assertEqual(payload.arguments.content, "记得买牛奶")
 
     def test_view_alias_commands_removed(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)

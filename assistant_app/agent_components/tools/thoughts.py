@@ -112,21 +112,21 @@ def _coerce_thoughts_runtime_payload(
         content = str(payload.get("content") or "").strip()
         if not content:
             return "thoughts.update content 不能为空。"
-        arguments: dict[str, Any] = {
+        update_arguments: dict[str, Any] = {
             "id": target_id,
             "content": content,
         }
         if "status" in payload:
             if payload.get("status") is None:
-                arguments["status"] = None
+                update_arguments["status"] = None
             else:
                 status = _normalize_thought_status_value(payload.get("status"))
                 if status is None:
                     return "thoughts.update status 必须为 未完成|完成|删除。"
-                arguments["status"] = status
+                update_arguments["status"] = status
         return RuntimePlannerActionPayload(
             tool_name="thoughts_update",
-            arguments=ThoughtsUpdateArgs.model_validate(arguments),
+            arguments=ThoughtsUpdateArgs.model_validate(update_arguments),
         )
 
     return RuntimePlannerActionPayload(

@@ -6,16 +6,17 @@ from pydantic import Field, field_validator, model_validator
 
 from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.schemas.base import FrozenModel
-from assistant_app.schemas.domain import (
+from assistant_app.schemas.domain import ChatTurn, ScheduleItem, SearchResult
+from assistant_app.schemas.normalization import (
     EVENT_TIME_FORMAT,
     TIMESTAMP_FORMAT,
-    ChatTurn,
-    ScheduleItem,
-    SearchResult,
-    _validate_datetime_text,
+    normalize_datetime_text,
+    normalize_optional_datetime_text,
+    normalize_repeat_times_value,
+    validate_datetime_text,
 )
-from assistant_app.schemas.values import HistoryListLimitValue, ScheduleViewAnchorValue
 from assistant_app.schemas.planner import ProactiveDoneArguments
+from assistant_app.schemas.values import HistoryListLimitValue, ScheduleViewAnchorValue
 
 
 class ProactiveDecision(ProactiveDoneArguments):
@@ -49,24 +50,22 @@ class ProactiveScheduleContextItem(FrozenModel):
             }
         )
 
-    @field_validator("event_time")
+    @field_validator("event_time", mode="before")
     @classmethod
-    def validate_event_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
+    def normalize_event_time(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
 
-    @field_validator("remind_at")
+    @field_validator("remind_at", mode="before")
     @classmethod
-    def validate_optional_remind_at(cls, value: str | None) -> str | None:
+    def normalize_remind_at(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(value, field_name="remind_at", formats=(EVENT_TIME_FORMAT,))
+
+    @field_validator("repeat_times", mode="before")
+    @classmethod
+    def normalize_repeat_times(cls, value: object) -> int | None:
         if value is None:
             return None
-        return _validate_datetime_text(value, field_name="remind_at", formats=(EVENT_TIME_FORMAT,))
-
-    @field_validator("repeat_times")
-    @classmethod
-    def validate_repeat_times(cls, value: int | None) -> int | None:
-        if value is None or value == -1 or value >= 2:
-            return value
-        raise ValueError("repeat_times must be -1 or >= 2")
+        return normalize_repeat_times_value(value, field_name="repeat_times")
 
 
 class ProactiveChatTurnContextItem(FrozenModel):
@@ -84,10 +83,10 @@ class ProactiveChatTurnContextItem(FrozenModel):
             }
         )
 
-    @field_validator("created_at")
+    @field_validator("created_at", mode="before")
     @classmethod
-    def validate_created_at(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
+    def normalize_created_at(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
 
 
 class ProactivePromptPolicy(FrozenModel):
@@ -152,7 +151,7 @@ class ProactivePromptPayload(FrozenModel):
     def validate_now(cls, value: str) -> str:
         if not value:
             return value
-        return _validate_datetime_text(value, field_name="now", formats=(EVENT_TIME_FORMAT,))
+        return validate_datetime_text(value, field_name="now", formats=(EVENT_TIME_FORMAT,))
 
 
 class ProactiveContextSnapshot(FrozenModel):

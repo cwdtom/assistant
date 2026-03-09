@@ -5,7 +5,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from assistant_app.schemas.base import FrozenModel
-from assistant_app.schemas.domain import ChatTurn, EVENT_TIME_FORMAT, _validate_datetime_text
+from assistant_app.schemas.domain import ChatTurn
+from assistant_app.schemas.normalization import EVENT_TIME_FORMAT, validate_datetime_text
 
 
 class PersonaRewriteRequestPayload(FrozenModel):
@@ -30,7 +31,7 @@ class UserProfileRefreshPromptTime(FrozenModel):
     @field_validator("now")
     @classmethod
     def validate_now(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="now", formats=(EVENT_TIME_FORMAT,))
+        return validate_datetime_text(value, field_name="now", formats=(EVENT_TIME_FORMAT,))
 
 
 class UserProfileRefreshPromptLimits(FrozenModel):

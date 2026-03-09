@@ -780,7 +780,11 @@ class AssistantDB:
 
     def _log_input_validation_failed(self, *, method: str, exc: ValidationError) -> None:
         errors = exc.errors(include_url=False)
-        first_error = errors[0] if errors else {}
+        first_error = (
+            errors[0]
+            if errors
+            else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
+        )
         location = ".".join(str(part) for part in first_error.get("loc", ())) or "unknown"
         message = str(first_error.get("msg") or "validation error").strip()
         reason = f"{location}: {message}"

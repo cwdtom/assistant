@@ -132,7 +132,12 @@ class ProactiveReminderServiceTest(unittest.TestCase):
 
         self.assertEqual(self.sent, [])
         self.assertEqual(self.db.recent_turns(limit=5), [])
-        self.assertTrue(any("proactive gate decided: score=79 threshold=80 notify=False" in item for item in captured.output))
+        self.assertTrue(
+            any(
+                "proactive gate decided: score=79 threshold=80 notify=False" in item
+                for item in captured.output
+            )
+        )
 
     def test_poll_scheduled_skips_when_not_due(self) -> None:
         llm = _FakeLLM([_done_payload(score=90, message="提醒", reason="到点")])

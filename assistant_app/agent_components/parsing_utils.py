@@ -4,6 +4,15 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from assistant_app.schemas.normalization import (
+    EVENT_TIME_FORMAT,
+    normalize_repeat_times_value,
+    normalize_tag_text,
+)
+from assistant_app.schemas.normalization import (
+    normalize_datetime_text as normalize_schedule_datetime_text,
+)
+
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
 SCHEDULE_INTERVAL_OPTION_PATTERN = re.compile(r"(^|\s)--interval\s+(\d+)")
 SCHEDULE_TIMES_OPTION_PATTERN = re.compile(r"(^|\s)--times\s+(-?\d+)")
@@ -373,15 +382,7 @@ def _parse_thoughts_update_input(raw: str) -> tuple[int, str, str | None, bool] 
 
 
 def _sanitize_tag(tag: str | None) -> str | None:
-    if tag is None:
-        return None
-    normalized = tag.strip().lower()
-    if not normalized:
-        return None
-    normalized = normalized.lstrip("#")
-    if not normalized:
-        return None
-    return re.sub(r"\s+", "-", normalized)
+    return normalize_tag_text(tag, default=None)
 
 
 def _normalize_optional_datetime_value(value: Any, *, key_present: bool) -> str | None | object:
@@ -455,28 +456,10 @@ def _normalize_schedule_view_value(value: Any) -> str | None:
 def _normalize_schedule_repeat_times_value(value: Any) -> int | None:
     if value is None or value == "":
         return None
-    if isinstance(value, bool):
+    try:
+        return normalize_repeat_times_value(value, field_name="times")
+    except ValueError:
         return None
-    if isinstance(value, int):
-        if value == -1:
-            return -1
-        return value if value >= 2 else None
-    if isinstance(value, float):
-        if not value.is_integer():
-            return None
-        parsed = int(value)
-        if parsed == -1:
-            return -1
-        return parsed if parsed >= 2 else None
-    text = str(value).strip()
-    if not re.fullmatch(r"-?\d+", text):
-        return None
-    parsed = int(text)
-    if parsed == -1:
-        return -1
-    if parsed < 2:
-        return None
-    return parsed
 
 
 def _normalize_schedule_duration_minutes_value(value: Any) -> int | None:
@@ -529,12 +512,10 @@ def _normalize_schedule_view_anchor(*, view_name: str, value: str) -> str | None
 
 
 def _normalize_datetime_text(value: str) -> str | None:
-    text = re.sub(r"\s+", " ", value).strip()
     try:
-        parsed = datetime.strptime(text, "%Y-%m-%d %H:%M")
+        return normalize_schedule_datetime_text(value, field_name="datetime", formats=(EVENT_TIME_FORMAT,))
     except ValueError:
         return None
-    return parsed.strftime("%Y-%m-%d %H:%M")
 
 
 def _filter_schedules_by_calendar_view(

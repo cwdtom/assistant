@@ -1,27 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 
 from assistant_app.schemas.base import FrozenModel
+from assistant_app.schemas.normalization import (
+    EVENT_TIME_FORMAT,
+    TIMESTAMP_FORMAT,
+    normalize_datetime_text,
+    normalize_optional_datetime_text,
+    normalize_repeat_times_value,
+    normalize_tag_text,
+    validate_datetime_text,
+)
 
-EVENT_TIME_FORMAT = "%Y-%m-%d %H:%M"
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-
-def _validate_datetime_text(value: str, *, field_name: str, formats: tuple[str, ...]) -> str:
-    for fmt in formats:
-        try:
-            datetime.strptime(value, fmt)
-            return value
-        except ValueError:
-            continue
-    format_text = " or ".join(formats)
-    raise ValueError(f"{field_name} must match {format_text}")
-    return value
+_validate_datetime_text = validate_datetime_text
 
 
 def _validate_http_url_text(value: str, *, field_name: str) -> str:
@@ -44,46 +39,33 @@ class ScheduleItem(FrozenModel):
     repeat_enabled: bool | None = None
     repeat_remind_start_time: str | None = None
 
-    @field_validator("tag")
+    @field_validator("tag", mode="before")
     @classmethod
-    def normalize_tag(cls, value: str) -> str:
-        normalized = value.lower()
-        if not normalized:
-            return "default"
-        return normalized
+    def normalize_tag(cls, value: object) -> str:
+        return normalize_tag_text(value, default="default") or "default"
 
-    @field_validator("event_time", "created_at")
+    @field_validator("event_time", mode="before")
     @classmethod
-    def validate_required_datetime_fields(cls, value: str, info: object) -> str:
+    def normalize_event_time(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def normalize_created_at(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
+
+    @field_validator("remind_at", "repeat_remind_start_time", mode="before")
+    @classmethod
+    def normalize_optional_datetime_fields(cls, value: object, info: object) -> str | None:
         field_name = getattr(info, "field_name", "datetime")
-        return _validate_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT, TIMESTAMP_FORMAT))
+        return normalize_optional_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT,))
 
-    @field_validator("remind_at", "repeat_remind_start_time")
+    @field_validator("repeat_times", mode="before")
     @classmethod
-    def validate_optional_datetime_fields(cls, value: str | None, info: object) -> str | None:
+    def normalize_repeat_times(cls, value: object) -> int | None:
         if value is None:
             return None
-        field_name = getattr(info, "field_name", "datetime")
-        return _validate_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT,))
-
-    @field_validator("event_time")
-    @classmethod
-    def validate_event_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
-
-    @field_validator("created_at")
-    @classmethod
-    def validate_created_at(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
-
-    @field_validator("repeat_times")
-    @classmethod
-    def validate_repeat_times(cls, value: int | None) -> int | None:
-        if value is None:
-            return None
-        if value == -1 or value >= 2:
-            return value
-        raise ValueError("repeat_times must be -1 or >= 2")
+        return normalize_repeat_times_value(value, field_name="repeat_times")
 
     @model_validator(mode="after")
     def validate_recurrence_fields(self) -> ScheduleItem:
@@ -108,36 +90,25 @@ class RecurringScheduleRule(FrozenModel):
     enabled: bool
     created_at: str
 
-    @field_validator("start_time", "created_at")
+    @field_validator("start_time", mode="before")
     @classmethod
-    def validate_required_datetime_fields(cls, value: str, info: object) -> str:
-        field_name = getattr(info, "field_name", "datetime")
-        return _validate_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT, TIMESTAMP_FORMAT))
+    def normalize_start_time(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="start_time", formats=(EVENT_TIME_FORMAT,))
 
-    @field_validator("remind_start_time")
+    @field_validator("created_at", mode="before")
     @classmethod
-    def validate_optional_datetime_fields(cls, value: str | None, info: object) -> str | None:
-        if value is None:
-            return None
-        field_name = getattr(info, "field_name", "datetime")
-        return _validate_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT,))
+    def normalize_created_at(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
 
-    @field_validator("start_time")
+    @field_validator("remind_start_time", mode="before")
     @classmethod
-    def validate_start_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="start_time", formats=(EVENT_TIME_FORMAT,))
+    def normalize_remind_start_time(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(value, field_name="remind_start_time", formats=(EVENT_TIME_FORMAT,))
 
-    @field_validator("created_at")
+    @field_validator("repeat_times", mode="before")
     @classmethod
-    def validate_created_at(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
-
-    @field_validator("repeat_times")
-    @classmethod
-    def validate_repeat_times(cls, value: int) -> int:
-        if value == -1 or value >= 2:
-            return value
-        raise ValueError("repeat_times must be -1 or >= 2")
+    def normalize_repeat_times(cls, value: object) -> int:
+        return normalize_repeat_times_value(value, field_name="repeat_times")
 
 
 class ChatMessage(FrozenModel):
@@ -150,10 +121,10 @@ class ChatTurn(FrozenModel):
     assistant_content: str
     created_at: str
 
-    @field_validator("created_at")
+    @field_validator("created_at", mode="before")
     @classmethod
-    def validate_created_at(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
+    def normalize_created_at(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
 
 
 class ThoughtItem(FrozenModel):
@@ -163,11 +134,11 @@ class ThoughtItem(FrozenModel):
     created_at: str
     updated_at: str
 
-    @field_validator("created_at", "updated_at")
+    @field_validator("created_at", "updated_at", mode="before")
     @classmethod
-    def validate_datetime_fields(cls, value: str, info: object) -> str:
+    def normalize_datetime_fields(cls, value: object, info: object) -> str:
         field_name = getattr(info, "field_name", "datetime")
-        return _validate_datetime_text(value, field_name=field_name, formats=(TIMESTAMP_FORMAT,))
+        return normalize_datetime_text(value, field_name=field_name, formats=(TIMESTAMP_FORMAT,))
 
 
 class ReminderDelivery(FrozenModel):
@@ -179,19 +150,17 @@ class ReminderDelivery(FrozenModel):
     delivered_at: str
     payload: str | None = None
 
-    @field_validator("remind_time", "delivered_at")
+    @field_validator("remind_time", "delivered_at", mode="before")
     @classmethod
-    def validate_required_datetime_fields(cls, value: str, info: object) -> str:
+    def normalize_required_datetime_fields(cls, value: object, info: object) -> str:
         field_name = getattr(info, "field_name", "datetime")
         formats = (TIMESTAMP_FORMAT,) if field_name == "delivered_at" else (EVENT_TIME_FORMAT,)
-        return _validate_datetime_text(value, field_name=field_name, formats=formats)
+        return normalize_datetime_text(value, field_name=field_name, formats=formats)
 
-    @field_validator("occurrence_time")
+    @field_validator("occurrence_time", mode="before")
     @classmethod
-    def validate_optional_datetime_field(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _validate_datetime_text(value, field_name="occurrence_time", formats=(EVENT_TIME_FORMAT,))
+    def normalize_occurrence_time(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(value, field_name="occurrence_time", formats=(EVENT_TIME_FORMAT,))
 
 
 class HttpUrlValue(FrozenModel):

@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from assistant_app.schemas.llm_payloads import PersonaRewriteRequestPayload
+
+PersonaRewriteScene = Literal["final_response", "reminder", "progress_update"]
 
 
 class PersonaLLMClient(Protocol):
@@ -41,7 +43,7 @@ class PersonaRewriter:
     def rewrite_progress_update(self, text: str) -> str:
         return self._rewrite_text(text=text, scene="progress_update", use_lock=False)
 
-    def _rewrite_text(self, *, text: str, scene: str, use_lock: bool) -> str:
+    def _rewrite_text(self, *, text: str, scene: PersonaRewriteScene, use_lock: bool) -> str:
         normalized_text = text.strip()
         if not normalized_text:
             return text
@@ -75,7 +77,7 @@ class PersonaRewriter:
         return normalized_rewritten
 
     @staticmethod
-    def _scene_requirements(*, scene: str) -> list[str]:
+    def _scene_requirements(*, scene: PersonaRewriteScene) -> list[str]:
         requirements = [
             "保持原文语言",
             "可润色语气与表达顺序，但不得改变事实内容",
@@ -97,7 +99,7 @@ class PersonaRewriter:
             )
         return requirements
 
-    def _log_rewrite_error(self, *, scene: str, error: Exception) -> None:
+    def _log_rewrite_error(self, *, scene: PersonaRewriteScene, error: Exception) -> None:
         logger = self.logger
         if logger is None:
             return

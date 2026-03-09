@@ -5,14 +5,13 @@ from datetime import datetime
 
 from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.schemas.domain import ChatTurn, ScheduleItem
-from pydantic import ValidationError
-
 from assistant_app.schemas.proactive import (
     ProactiveContextSnapshot,
     ProactivePromptPayload,
     ProactiveScheduleGetToolResult,
     ProactiveScheduleViewToolResult,
 )
+from pydantic import ValidationError
 
 
 class ProactiveSchemaTest(unittest.TestCase):

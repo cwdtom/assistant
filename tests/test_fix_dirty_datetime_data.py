@@ -56,7 +56,11 @@ class FixDirtyDatetimeDataScriptTest(unittest.TestCase):
     def test_script_normalizes_second_precision_values(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO schedules (title, event_time, duration_minutes, remind_at, created_at, tag) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "INSERT INTO schedules "
+                    "(title, event_time, duration_minutes, remind_at, created_at, tag) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"
+                ),
                 (
                     "周常更新",
                     "2026-03-02 10:00:00",
@@ -67,11 +71,27 @@ class FixDirtyDatetimeDataScriptTest(unittest.TestCase):
                 ),
             )
             conn.execute(
-                "INSERT INTO recurring_schedules (schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at, remind_start_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (1, "2026-03-02 10:00:00", 10080, -1, 1, "2026-02-28 15:49:00", "2026-03-02 09:45:00"),
+                (
+                    "INSERT INTO recurring_schedules "
+                    "(schedule_id, start_time, repeat_interval_minutes, repeat_times, enabled, created_at, "
+                    "remind_start_time) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    1,
+                    "2026-03-02 10:00:00",
+                    10080,
+                    -1,
+                    1,
+                    "2026-02-28 15:49:00",
+                    "2026-03-02 09:45:00",
+                ),
             )
             conn.execute(
-                "INSERT INTO reminder_deliveries (reminder_key, source_type, source_id, occurrence_time, remind_time, delivered_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "INSERT INTO reminder_deliveries "
+                    "(reminder_key, source_type, source_id, occurrence_time, remind_time, delivered_at, payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)"
+                ),
                 (
                     "schedule:1",
                     "schedule",
@@ -109,7 +129,11 @@ class FixDirtyDatetimeDataScriptTest(unittest.TestCase):
     def test_script_dry_run_leaves_database_unchanged(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO schedules (title, event_time, duration_minutes, remind_at, created_at, tag) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "INSERT INTO schedules "
+                    "(title, event_time, duration_minutes, remind_at, created_at, tag) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"
+                ),
                 (
                     "会议",
                     "2026-03-03 11:00:00",

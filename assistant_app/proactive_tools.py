@@ -81,16 +81,28 @@ class ProactiveToolExecutor:
         if validated_arguments is None:
             raise ValueError(f"invalid arguments for tool: {tool_name}")
         if tool_name == "schedule_list":
+            if not isinstance(validated_arguments, ProactiveScheduleListArgs):
+                raise ValueError(f"invalid arguments for tool: {tool_name}")
             return self._schedule_list(validated_arguments)
         if tool_name == "schedule_view":
+            if not isinstance(validated_arguments, ProactiveScheduleViewArgs):
+                raise ValueError(f"invalid arguments for tool: {tool_name}")
             return self._schedule_view(validated_arguments)
         if tool_name == "schedule_get":
+            if not isinstance(validated_arguments, ProactiveScheduleGetArgs):
+                raise ValueError(f"invalid arguments for tool: {tool_name}")
             return self._schedule_get(validated_arguments)
         if tool_name == "history_list":
+            if not isinstance(validated_arguments, ProactiveHistoryListArgs):
+                raise ValueError(f"invalid arguments for tool: {tool_name}")
             return self._history_list(validated_arguments)
         if tool_name == "history_search":
+            if not isinstance(validated_arguments, ProactiveHistorySearchArgs):
+                raise ValueError(f"invalid arguments for tool: {tool_name}")
             return self._history_search(validated_arguments)
         if tool_name == "internet_search":
+            if not isinstance(validated_arguments, ProactiveInternetSearchArgs):
+                raise ValueError(f"invalid arguments for tool: {tool_name}")
             return self._internet_search(validated_arguments)
         raise ValueError(f"unsupported tool: {tool_name}")
 
@@ -185,36 +197,39 @@ class ProactiveToolExecutor:
 def _filter_schedules_by_view(items: list[ScheduleItem], *, view: str, anchor: str | None) -> list[ScheduleItem]:
     if view == "day":
         day = _parse_date(anchor) or datetime.now().date()
-        return [
-            item
-            for item in items
-            if _parse_event_time(item.event_time) and _parse_event_time(item.event_time).date() == day
-        ]
-    if view == "week":
-        day = _parse_date(anchor) or datetime.now().date()
-        week_start = day - timedelta(days=day.weekday())
-        week_end = week_start + timedelta(days=6)
         filtered: list[ScheduleItem] = []
         for item in items:
             event = _parse_event_time(item.event_time)
             if event is None:
                 continue
-            if week_start <= event.date() <= week_end:
+            if event.date() == day:
                 filtered.append(item)
         return filtered
+    if view == "week":
+        day = _parse_date(anchor) or datetime.now().date()
+        week_start = day - timedelta(days=day.weekday())
+        week_end = week_start + timedelta(days=6)
+        week_filtered: list[ScheduleItem] = []
+        for item in items:
+            event = _parse_event_time(item.event_time)
+            if event is None:
+                continue
+            if week_start <= event.date() <= week_end:
+                week_filtered.append(item)
+        return week_filtered
     if view == "month":
         year, month = _parse_year_month(anchor)
         if year is None or month is None:
             now = datetime.now()
             year, month = now.year, now.month
-        filtered = []
+        month_filtered: list[ScheduleItem] = []
         for item in items:
             event = _parse_event_time(item.event_time)
             if event is None:
                 continue
             if event.year == year and event.month == month:
-                filtered.append(item)
-        return filtered
+                month_filtered.append(item)
+        return month_filtered
     return items
 
 

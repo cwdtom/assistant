@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from pydantic import ValidationError
-
 from assistant_app.schemas.llm_payloads import (
     PersonaRewriteRequestPayload,
     UserProfileRefreshPromptPayload,
 )
+from pydantic import ValidationError
 
 
 class LLMPayloadSchemaTest(unittest.TestCase):

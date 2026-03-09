@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, cast
 
 from pydantic import Field, ValidationError
 
@@ -40,9 +40,10 @@ from assistant_app.schemas.tools import (
 class CliCommandBase(FrozenModel):
     action_tool: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
+    arguments: Any
 
     def to_runtime_payload(self) -> RuntimePlannerActionPayload:
-        return RuntimePlannerActionPayload(tool_name=self.tool_name, arguments=getattr(self, "arguments"))
+        return RuntimePlannerActionPayload(tool_name=self.tool_name, arguments=self.arguments)
 
 
 class HistoryListCommand(CliCommandBase):
@@ -203,7 +204,8 @@ def parse_thoughts_list_command(command: str) -> ThoughtsListCommand | None:
     if parsed_status is _INVALID_OPTION_VALUE:
         return None
     if isinstance(parsed_status, str):
-        return ThoughtsListCommand(arguments=ThoughtsListArgs(status=parsed_status))
+        normalized_status = cast(Literal["未完成", "完成", "删除"], parsed_status)
+        return ThoughtsListCommand(arguments=ThoughtsListArgs(status=normalized_status))
     return ThoughtsListCommand()
 
 

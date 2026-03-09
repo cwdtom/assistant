@@ -7,6 +7,7 @@ from typing import Any
 from assistant_app.db import ChatTurn, ThoughtItem
 from assistant_app.search import SearchResult
 
+
 def _history_table_rows(turns: list[ChatTurn]) -> list[list[str]]:
     return [
         [

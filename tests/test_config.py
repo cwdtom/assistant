@@ -7,8 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pydantic import ValidationError
-
 from assistant_app.config import (
     DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
     UNKNOWN_APP_VERSION,
@@ -16,6 +14,7 @@ from assistant_app.config import (
     load_env_file,
     load_startup_app_version,
 )
+from pydantic import ValidationError
 
 
 class ConfigTest(unittest.TestCase):

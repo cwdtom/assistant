@@ -549,8 +549,8 @@ ScheduleCompatPayload = Annotated[
     Field(discriminator="action"),
 ]
 
-_HISTORY_COMPAT_ADAPTER = TypeAdapter(HistoryCompatPayload)
-_SCHEDULE_COMPAT_ADAPTER = TypeAdapter(ScheduleCompatPayload)
+_HISTORY_COMPAT_ADAPTER: TypeAdapter[HistoryCompatPayload] = TypeAdapter(HistoryCompatPayload)
+_SCHEDULE_COMPAT_ADAPTER: TypeAdapter[ScheduleCompatPayload] = TypeAdapter(ScheduleCompatPayload)
 
 
 def coerce_history_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:

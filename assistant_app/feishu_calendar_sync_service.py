@@ -309,7 +309,11 @@ class FeishuCalendarSyncService:
                     ignore_not_found=True,
                 )
 
-        new_match = self._match_feishu_event_by_identity(action="update", schedule_id=schedule_id, identity=new_identity)
+        new_match = self._match_feishu_event_by_identity(
+            action="update",
+            schedule_id=schedule_id,
+            identity=new_identity,
+        )
         if new_match.event is not None:
             self._logger.info(
                 "feishu calendar write skipped existing identity",
@@ -619,7 +623,10 @@ class FeishuCalendarSyncService:
             bucket.sort(key=self._local_schedule_order_key)
         return dict(grouped)
 
-    def _group_feishu_by_identity(self, items: list[FeishuCalendarEvent]) -> dict[_IdentityKey, list[FeishuCalendarEvent]]:
+    def _group_feishu_by_identity(
+        self,
+        items: list[FeishuCalendarEvent],
+    ) -> dict[_IdentityKey, list[FeishuCalendarEvent]]:
         grouped: dict[_IdentityKey, list[FeishuCalendarEvent]] = defaultdict(list)
         for item in items:
             grouped[self._identity_from_event(item)].append(item)

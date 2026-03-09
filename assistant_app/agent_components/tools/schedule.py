@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.parsing_utils import (
     _default_schedule_list_window,
@@ -18,8 +20,6 @@ from assistant_app.agent_components.render_helpers import (
     _schedule_table_rows,
     _schedule_view_title,
 )
-from pydantic import ValidationError
-
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
     ScheduleAddArgs,
@@ -467,7 +467,12 @@ def _execute_typed_schedule_system_action(
 
 def _schedule_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
     action = str(payload.get("action") or "").strip().lower()
-    first_error = exc.errors()[0] if exc.errors() else {}
+    errors = exc.errors(include_url=False)
+    first_error = (
+        errors[0]
+        if errors
+        else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
+    )
     location = first_error.get("loc", ())
     field_names = {str(item) for item in location}
     message = str(first_error.get("msg") or "").removeprefix("Value error, ").strip()

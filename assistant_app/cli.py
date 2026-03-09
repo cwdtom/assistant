@@ -9,8 +9,8 @@ from typing import Any, Protocol, TextIO
 from assistant_app.agent import AssistantAgent
 from assistant_app.config import load_config, load_startup_app_version
 from assistant_app.db import AssistantDB
-from assistant_app.feishu_calendar_client import FeishuCalendarClient
 from assistant_app.feishu_adapter import create_feishu_runner
+from assistant_app.feishu_calendar_client import FeishuCalendarClient
 from assistant_app.feishu_calendar_sync_service import FeishuCalendarSyncService
 from assistant_app.llm import OpenAICompatibleClient
 from assistant_app.logging_setup import (
@@ -36,6 +36,10 @@ class _AgentLike(Protocol):
 
     def handle_input(self, user_input: str) -> str: ...
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None: ...
+
+
+class _ProactiveTextSender(Protocol):
+    def __call__(self, *, open_id: str, text: str) -> None: ...
 
 
 def _should_show_waiting(agent: _AgentLike, user_input: str) -> bool:
@@ -198,7 +202,7 @@ def main() -> None:
             max_turns=config.user_profile_refresh_max_turns,
         )
         agent.set_user_profile_refresh_runner(user_profile_refresh_service.run_manual_refresh)
-    proactive_sender_holder: dict[str, Callable[[str, str], None] | None] = {"send": None}
+    proactive_sender_holder: dict[str, _ProactiveTextSender | None] = {"send": None}
     feishu_configured = _is_feishu_configured(config.feishu_app_id, config.feishu_app_secret)
     calendar_sync_configured = _is_feishu_calendar_sync_configured(config.feishu_calendar_id)
     calendar_sync_service: FeishuCalendarSyncService | None = None

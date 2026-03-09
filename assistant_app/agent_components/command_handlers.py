@@ -3,14 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 from assistant_app.agent_components.render_helpers import (
-    _format_thought_detail_result,
-    _format_thoughts_list_result,
     _is_planner_command_success,
 )
 from assistant_app.agent_components.tools.history import execute_history_system_action
 from assistant_app.agent_components.tools.schedule import execute_schedule_system_action
+from assistant_app.agent_components.tools.thoughts import execute_thoughts_system_action
 from assistant_app.schemas.commands import (
     CliCommandBase,
+    ThoughtsAddCommand,
+    ThoughtsDeleteCommand,
+    ThoughtsGetCommand,
+    ThoughtsListCommand,
+    ThoughtsUpdateCommand,
     parse_history_list_command,
     parse_history_search_command,
     parse_schedule_add_command,
@@ -91,200 +95,118 @@ def handle_command(agent: Any, command: str) -> str:
             return f"刷新 user_profile 失败: {exc}"
 
     if command == "/history list" or command.startswith("/history list "):
-        parsed_command = parse_history_list_command(command)
-        if parsed_command is None:
+        history_list_command = parse_history_list_command(command)
+        if history_list_command is None:
             return "用法: /history list [--limit <>=1>]"
-        return _execute_history_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_history_cli_command(agent, parsed_command=history_list_command, raw_input=command)
 
     if command.startswith("/history search "):
-        parsed_command = parse_history_search_command(command)
-        if parsed_command is None:
+        history_search_command = parse_history_search_command(command)
+        if history_search_command is None:
             return "用法: /history search <关键词> [--limit <>=1>]"
-        return _execute_history_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_history_cli_command(agent, parsed_command=history_search_command, raw_input=command)
 
     if command == "/thoughts add" or command.startswith("/thoughts add "):
-        action = "add"
-        _log_thoughts_command_start(agent, action=action)
-        try:
-            parsed_command = parse_thoughts_add_command(command)
-            if parsed_command is None:
-                return _finalize_thoughts_command(agent, action=action, result="用法: /thoughts add <内容>")
-            thought_id = agent.db.add_thought(content=parsed_command.arguments.content)
-            return _finalize_thoughts_command(
-                agent,
-                action=action,
-                result=f"已记录想法 #{thought_id}: {parsed_command.arguments.content}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _fail_thoughts_command(agent, action=action, exc=exc)
+        thoughts_add_command = parse_thoughts_add_command(command)
+        return _execute_thoughts_cli_command(
+            agent,
+            action="add",
+            parsed_command=thoughts_add_command,
+            raw_input=command,
+            usage_text="用法: /thoughts add <内容>",
+        )
 
     if command == "/thoughts list" or command.startswith("/thoughts list "):
-        action = "list"
-        _log_thoughts_command_start(agent, action=action)
-        try:
-            parsed_command = parse_thoughts_list_command(command)
-            if parsed_command is None:
-                return _finalize_thoughts_command(
-                    agent,
-                    action=action,
-                    result="用法: /thoughts list [--status <未完成|完成|删除>]",
-                )
-            list_status = parsed_command.arguments.status
-            items = agent.db.list_thoughts(status=list_status)
-            if not items:
-                if list_status:
-                    return _finalize_thoughts_command(
-                        agent,
-                        action=action,
-                        result=f"暂无状态为“{list_status}”的想法。",
-                    )
-                return _finalize_thoughts_command(agent, action=action, result="暂无想法记录。")
-            return _finalize_thoughts_command(
-                agent,
-                action=action,
-                result=_format_thoughts_list_result(items=items, status=list_status),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _fail_thoughts_command(agent, action=action, exc=exc)
+        thoughts_list_command = parse_thoughts_list_command(command)
+        return _execute_thoughts_cli_command(
+            agent,
+            action="list",
+            parsed_command=thoughts_list_command,
+            raw_input=command,
+            usage_text="用法: /thoughts list [--status <未完成|完成|删除>]",
+        )
 
     if command.startswith("/thoughts get "):
-        action = "get"
-        _log_thoughts_command_start(agent, action=action)
-        try:
-            parsed_command = parse_thoughts_get_command(command)
-            if parsed_command is None:
-                return _finalize_thoughts_command(agent, action=action, result="用法: /thoughts get <id>")
-            item = agent.db.get_thought(parsed_command.arguments.id)
-            if item is None:
-                return _finalize_thoughts_command(
-                    agent,
-                    action=action,
-                    result=f"未找到想法 #{parsed_command.arguments.id}",
-                )
-            return _finalize_thoughts_command(
-                agent,
-                action=action,
-                result=_format_thought_detail_result(item),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _fail_thoughts_command(agent, action=action, exc=exc)
+        thoughts_get_command = parse_thoughts_get_command(command)
+        return _execute_thoughts_cli_command(
+            agent,
+            action="get",
+            parsed_command=thoughts_get_command,
+            raw_input=command,
+            usage_text="用法: /thoughts get <id>",
+        )
 
     if command.startswith("/thoughts update "):
-        action = "update"
-        _log_thoughts_command_start(agent, action=action)
-        try:
-            parsed_command = parse_thoughts_update_command(command)
-            if parsed_command is None:
-                return _finalize_thoughts_command(
-                    agent,
-                    action=action,
-                    result="用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]",
-                )
-            if "status" in parsed_command.arguments.model_fields_set:
-                updated = agent.db.update_thought(
-                    parsed_command.arguments.id,
-                    content=parsed_command.arguments.content,
-                    status=parsed_command.arguments.status,
-                )
-            else:
-                updated = agent.db.update_thought(
-                    parsed_command.arguments.id,
-                    content=parsed_command.arguments.content,
-                )
-            if not updated:
-                return _finalize_thoughts_command(
-                    agent,
-                    action=action,
-                    result=f"未找到想法 #{parsed_command.arguments.id}",
-                )
-            item = agent.db.get_thought(parsed_command.arguments.id)
-            if item is None:
-                return _finalize_thoughts_command(
-                    agent,
-                    action=action,
-                    result=f"未找到想法 #{parsed_command.arguments.id}",
-                )
-            return _finalize_thoughts_command(
-                agent,
-                action=action,
-                result=f"已更新想法 #{parsed_command.arguments.id}: {item.content} [状态:{item.status}]",
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _fail_thoughts_command(agent, action=action, exc=exc)
+        thoughts_update_command = parse_thoughts_update_command(command)
+        return _execute_thoughts_cli_command(
+            agent,
+            action="update",
+            parsed_command=thoughts_update_command,
+            raw_input=command,
+            usage_text="用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]",
+        )
 
     if command.startswith("/thoughts delete "):
-        action = "delete"
-        _log_thoughts_command_start(agent, action=action)
-        try:
-            parsed_command = parse_thoughts_delete_command(command)
-            if parsed_command is None:
-                return _finalize_thoughts_command(agent, action=action, result="用法: /thoughts delete <id>")
-            deleted = agent.db.soft_delete_thought(parsed_command.arguments.id)
-            if not deleted:
-                return _finalize_thoughts_command(
-                    agent,
-                    action=action,
-                    result=f"未找到想法 #{parsed_command.arguments.id}",
-                )
-            return _finalize_thoughts_command(
-                agent,
-                action=action,
-                result=f"想法 #{parsed_command.arguments.id} 已删除。",
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _fail_thoughts_command(agent, action=action, exc=exc)
+        thoughts_delete_command = parse_thoughts_delete_command(command)
+        return _execute_thoughts_cli_command(
+            agent,
+            action="delete",
+            parsed_command=thoughts_delete_command,
+            raw_input=command,
+            usage_text="用法: /thoughts delete <id>",
+        )
 
     if command == "/schedule list" or command.startswith("/schedule list "):
-        parsed_command = parse_schedule_list_command(command)
-        if parsed_command is None:
+        schedule_list_command = parse_schedule_list_command(command)
+        if schedule_list_command is None:
             return "用法: /schedule list [--tag <标签>]"
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_list_command, raw_input=command)
 
     if command.startswith("/schedule view "):
-        parsed_command = parse_schedule_view_command(command)
-        if parsed_command is None:
+        schedule_view_command = parse_schedule_view_command(command)
+        if schedule_view_command is None:
             return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_view_command, raw_input=command)
 
     if command.startswith("/schedule get "):
-        parsed_command = parse_schedule_get_command(command)
-        if parsed_command is None:
+        schedule_get_command = parse_schedule_get_command(command)
+        if schedule_get_command is None:
             return "用法: /schedule get <id>"
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_get_command, raw_input=command)
 
     if command.startswith("/schedule add"):
-        parsed_command = parse_schedule_add_command(command)
-        if parsed_command is None:
+        schedule_add_command = parse_schedule_add_command(command)
+        if schedule_add_command is None:
             return (
                 "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
                 "[--tag <标签>] "
                 "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
                 "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
             )
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_add_command, raw_input=command)
 
     if command.startswith("/schedule update "):
-        parsed_command = parse_schedule_update_command(command)
-        if parsed_command is None:
+        schedule_update_command = parse_schedule_update_command(command)
+        if schedule_update_command is None:
             return (
                 "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
                 "[--tag <标签>] "
                 "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
                 "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
             )
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_update_command, raw_input=command)
 
     if command.startswith("/schedule delete "):
-        parsed_command = parse_schedule_delete_command(command)
-        if parsed_command is None:
+        schedule_delete_command = parse_schedule_delete_command(command)
+        if schedule_delete_command is None:
             return "用法: /schedule delete <id>"
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_delete_command, raw_input=command)
 
     if command.startswith("/schedule repeat "):
-        parsed_command = parse_schedule_repeat_command(command)
-        if parsed_command is None:
+        schedule_repeat_command = parse_schedule_repeat_command(command)
+        if schedule_repeat_command is None:
             return "用法: /schedule repeat <id> <on|off>"
-        return _execute_schedule_cli_command(agent, parsed_command=parsed_command, raw_input=command)
+        return _execute_schedule_cli_command(agent, parsed_command=schedule_repeat_command, raw_input=command)
 
     return "未知命令。输入 /help 查看可用命令。"
 
@@ -303,6 +225,35 @@ def _execute_schedule_cli_command(agent: Any, *, parsed_command: CliCommandBase,
         payload=parsed_command.to_runtime_payload(),
         raw_input=raw_input,
     ).result
+
+
+def _execute_thoughts_cli_command(
+    agent: Any,
+    *,
+    action: str,
+    parsed_command: (
+        ThoughtsAddCommand
+        | ThoughtsListCommand
+        | ThoughtsGetCommand
+        | ThoughtsUpdateCommand
+        | ThoughtsDeleteCommand
+        | None
+    ),
+    raw_input: str,
+    usage_text: str,
+) -> str:
+    _log_thoughts_command_start(agent, action=action)
+    try:
+        if parsed_command is None:
+            return _finalize_thoughts_command(agent, action=action, result=usage_text)
+        result = execute_thoughts_system_action(
+            agent,
+            payload=parsed_command.to_runtime_payload(),
+            raw_input=raw_input,
+        ).result
+        return _finalize_thoughts_command(agent, action=action, result=result)
+    except Exception as exc:  # noqa: BLE001
+        return _fail_thoughts_command(agent, action=action, exc=exc)
 
 
 def _log_thoughts_command_start(agent: Any, *, action: str) -> None:

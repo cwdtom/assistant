@@ -533,7 +533,12 @@ class FeishuLongConnectionRunner:
                 }
             )
         except ValidationError as exc:
-            first_error = exc.errors()[0] if exc.errors() else {}
+            errors = exc.errors(include_url=False)
+            first_error = (
+                errors[0]
+                if errors
+                else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
+            )
             field_name = str(first_error.get("loc", [""])[0])
             if field_name == "open_id":
                 raise ValueError("open_id is required") from exc
@@ -630,7 +635,7 @@ class FeishuLongConnectionRunner:
 
     @staticmethod
     def _send_text_message_by_open_id(*, api_client: Any, open_id: str, text: str) -> None:
-        from lark_oapi.api.im.v1 import (  # type: ignore[import-untyped]
+        from lark_oapi.api.im.v1 import (
             CreateMessageRequest,
             CreateMessageRequestBody,
         )
@@ -678,11 +683,12 @@ class FeishuLongConnectionRunner:
             if success():
                 return
             status = parse_feishu_response_status(response)
-            code = (
+            raw_code = (
                 status.code
                 if status is not None and status.code is not None
-                else getattr(response, "code", "unknown")
+                else getattr(response, "code", None)
             )
+            code = raw_code if raw_code is not None else "unknown"
             msg = (
                 status.msg
                 if status is not None and status.msg is not None

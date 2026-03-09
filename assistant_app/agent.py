@@ -7,7 +7,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from assistant_app.agent_components.command_handlers import (
     handle_command as _handle_command_impl,
@@ -93,6 +93,8 @@ from assistant_app.schemas.planner import (
     PlanPromptPayload,
     PlanResponsePayload,
     PlanStepPayload,
+    ReplanDoneDecision,
+    ReplannedDecision,
     ReplanPromptPayload,
     ReplanResponsePayload,
     ThoughtAskUserDecision,
@@ -132,7 +134,6 @@ PLAN_HISTORY_LOOKBACK_HOURS = 24
 PLAN_HISTORY_MAX_TURNS = 50
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DecisionT = TypeVar("DecisionT")
 PayloadT = TypeVar("PayloadT")
 
 class AssistantAgent:
@@ -427,13 +428,20 @@ class AssistantAgent:
             return None
 
         planner_messages = self._build_replan_messages(task)
+        def _build_replan_response(
+            decision: ReplannedDecision | ReplanDoneDecision,
+            raw_response: str,
+        ) -> ReplanResponsePayload:
+            return ReplanResponsePayload(decision=decision, raw_response=raw_response)
+
+        replan_normalizer = cast(
+            Callable[[dict[str, Any]], ReplannedDecision | ReplanDoneDecision | None],
+            normalize_replan_decision,
+        )
         payload = self._request_payload_with_retry(
             planner_messages,
-            normalize_replan_decision,
-            lambda decision, raw_response: ReplanResponsePayload(
-                decision=decision,
-                raw_response=raw_response,
-            ),
+            replan_normalizer,
+            _build_replan_response,
         )
         if payload is None:
             return None
@@ -449,8 +457,8 @@ class AssistantAgent:
     def _request_payload_with_retry(
         self,
         messages: list[dict[str, Any]],
-        normalizer: Callable[[dict[str, Any]], DecisionT | None],
-        payload_builder: Callable[[DecisionT, str], PayloadT],
+        normalizer: Callable[[dict[str, Any]], Any | None],
+        payload_builder: Callable[[Any, str], PayloadT],
     ) -> PayloadT | None:
         max_attempts = 1 + self._plan_replan_retry_count
         phase = self._llm_trace_phase(messages)
@@ -1137,14 +1145,19 @@ class AssistantAgent:
             name: build_json_planner_tool_executor(route=route, command_executor=self._handle_command)
             for name, route in json_routes.items()
         }
-        routes["internet_search"] = (
-            lambda action_input, action_payload=None: _execute_internet_search_planner_action_impl(
-            self,
-            action_input=action_input,
-            action_payload=action_payload,
-            fetch_main_text=fetch_webpage_main_text,
-        )
-        )
+
+        def _execute_internet_search_route(
+            action_input: str,
+            action_payload: RuntimePlannerActionPayload | None = None,
+        ) -> PlannerObservation:
+            return _execute_internet_search_planner_action_impl(
+                self,
+                action_input=action_input,
+                action_payload=action_payload,
+                fetch_main_text=fetch_webpage_main_text,
+            )
+
+        routes["internet_search"] = _execute_internet_search_route
         return routes
 
     def _execute_schedule_system_action(

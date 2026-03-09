@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.parsing_utils import (
     DEFAULT_HISTORY_LIST_LIMIT,
@@ -12,8 +14,6 @@ from assistant_app.agent_components.render_helpers import (
     _format_history_search_result,
     _is_planner_command_success,
 )
-from pydantic import ValidationError
-
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
     HistoryListArgs,
@@ -115,7 +115,12 @@ def _normalized_history_limit(limit: int | None) -> int:
 
 def _history_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
     action = str(payload.get("action") or "").strip().lower()
-    first_error = exc.errors()[0] if exc.errors() else {}
+    errors = exc.errors(include_url=False)
+    first_error = (
+        errors[0]
+        if errors
+        else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
+    )
     location = first_error.get("loc", ())
     field_names = {str(item) for item in location}
     if action not in {"list", "search"}:

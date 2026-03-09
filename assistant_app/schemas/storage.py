@@ -5,35 +5,15 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from assistant_app.schemas.base import FrozenModel
-from assistant_app.schemas.domain import EVENT_TIME_FORMAT, _validate_datetime_text
+from assistant_app.schemas.normalization import (
+    EVENT_TIME_FORMAT,
+    normalize_datetime_text,
+    normalize_optional_datetime_text,
+    normalize_repeat_times_value,
+    normalize_tag_text,
+)
 
-THOUGHT_STATUS_TODO = "未完成"
-
-
-def _normalize_tag_value(value: object) -> str:
-    if value is None:
-        return "default"
-    if not isinstance(value, str):
-        raise TypeError("tag must be a string")
-    normalized = value.strip().lower()
-    if not normalized:
-        return "default"
-    return normalized
-
-
-def _validate_schedule_datetime_text(value: str, *, field_name: str) -> str:
-    return _validate_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT,))
-
-
-def _normalize_clearable_datetime_value(value: object) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError("datetime field must be a string")
-    normalized = value.strip()
-    if not normalized:
-        return None
-    return normalized
+THOUGHT_STATUS_TODO: Literal["未完成"] = "未完成"
 
 
 class NormalizedTagValue(FrozenModel):
@@ -42,7 +22,7 @@ class NormalizedTagValue(FrozenModel):
     @field_validator("tag", mode="before")
     @classmethod
     def normalize_tag(cls, value: object) -> str:
-        return _normalize_tag_value(value)
+        return normalize_tag_text(value, default="default") or "default"
 
 
 class ScheduleDurationValue(FrozenModel):
@@ -67,19 +47,17 @@ class ScheduleCreateInput(FrozenModel):
     @field_validator("tag", mode="before")
     @classmethod
     def normalize_tag(cls, value: object) -> str:
-        return _normalize_tag_value(value)
+        return normalize_tag_text(value, default="default") or "default"
 
-    @field_validator("event_time")
+    @field_validator("event_time", mode="before")
     @classmethod
-    def validate_event_time(cls, value: str) -> str:
-        return _validate_schedule_datetime_text(value, field_name="event_time")
+    def normalize_event_time(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
 
-    @field_validator("remind_at")
+    @field_validator("remind_at", mode="before")
     @classmethod
-    def validate_remind_at(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _validate_schedule_datetime_text(value, field_name="remind_at")
+    def normalize_remind_at(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(value, field_name="remind_at", formats=(EVENT_TIME_FORMAT,))
 
 
 class ScheduleBatchCreateInput(FrozenModel):
@@ -92,19 +70,22 @@ class ScheduleBatchCreateInput(FrozenModel):
     @field_validator("tag", mode="before")
     @classmethod
     def normalize_tag(cls, value: object) -> str:
-        return _normalize_tag_value(value)
+        return normalize_tag_text(value, default="default") or "default"
 
-    @field_validator("event_times")
+    @field_validator("event_times", mode="before")
     @classmethod
-    def validate_event_times(cls, value: list[str]) -> list[str]:
-        return [_validate_schedule_datetime_text(item, field_name="event_times") for item in value]
+    def normalize_event_times(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [
+            normalize_datetime_text(item, field_name="event_times", formats=(EVENT_TIME_FORMAT,))
+            for item in value
+        ]
 
-    @field_validator("remind_at")
+    @field_validator("remind_at", mode="before")
     @classmethod
-    def validate_remind_at(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _validate_schedule_datetime_text(value, field_name="remind_at")
+    def normalize_remind_at(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(value, field_name="remind_at", formats=(EVENT_TIME_FORMAT,))
 
 
 class ScheduleRecurrenceInput(FrozenModel):
@@ -115,24 +96,24 @@ class ScheduleRecurrenceInput(FrozenModel):
     remind_start_time: str | None = None
     enabled: bool = True
 
-    @field_validator("start_time")
+    @field_validator("start_time", mode="before")
     @classmethod
-    def validate_start_time(cls, value: str) -> str:
-        return _validate_schedule_datetime_text(value, field_name="start_time")
+    def normalize_start_time(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="start_time", formats=(EVENT_TIME_FORMAT,))
 
-    @field_validator("remind_start_time")
+    @field_validator("remind_start_time", mode="before")
     @classmethod
-    def validate_remind_start_time(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _validate_schedule_datetime_text(value, field_name="remind_start_time")
+    def normalize_remind_start_time(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(
+            value,
+            field_name="remind_start_time",
+            formats=(EVENT_TIME_FORMAT,),
+        )
 
-    @field_validator("repeat_times")
+    @field_validator("repeat_times", mode="before")
     @classmethod
-    def validate_repeat_times(cls, value: int) -> int:
-        if value == -1 or value >= 2:
-            return value
-        raise ValueError("repeat_times must be -1 or >= 2")
+    def normalize_repeat_times(cls, value: object) -> int:
+        return normalize_repeat_times_value(value, field_name="repeat_times")
 
 
 class ScheduleUpdateInput(FrozenModel):
@@ -147,25 +128,18 @@ class ScheduleUpdateInput(FrozenModel):
     @field_validator("tag", mode="before")
     @classmethod
     def normalize_tag(cls, value: object) -> str:
-        return _normalize_tag_value(value)
+        return normalize_tag_text(value, default="default") or "default"
 
-    @field_validator("event_time")
+    @field_validator("event_time", mode="before")
     @classmethod
-    def validate_event_time(cls, value: str) -> str:
-        return _validate_schedule_datetime_text(value, field_name="event_time")
+    def normalize_event_time(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
 
     @field_validator("remind_at", "repeat_remind_start_time", mode="before")
     @classmethod
-    def normalize_clearable_datetime(cls, value: object) -> str | None:
-        return _normalize_clearable_datetime_value(value)
-
-    @field_validator("remind_at", "repeat_remind_start_time")
-    @classmethod
-    def validate_optional_datetime(cls, value: str | None, info: object) -> str | None:
-        if value is None:
-            return None
+    def normalize_clearable_datetime(cls, value: object, info: object) -> str | None:
         field_name = getattr(info, "field_name", "datetime")
-        return _validate_schedule_datetime_text(value, field_name=field_name)
+        return normalize_optional_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT,))
 
     @model_validator(mode="after")
     def validate_optional_updates(self) -> ScheduleUpdateInput:

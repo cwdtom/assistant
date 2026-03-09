@@ -7,7 +7,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_vali
 
 from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_plan_items, normalize_tool_names
 from assistant_app.schemas.base import FrozenModel
-from assistant_app.schemas.domain import EVENT_TIME_FORMAT, _validate_datetime_text
+from assistant_app.schemas.normalization import EVENT_TIME_FORMAT, validate_datetime_text
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
 
 
@@ -184,7 +184,7 @@ class PlannerContextPayload(FrozenModel):
     @field_validator("time")
     @classmethod
     def validate_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+        return validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
 
 
 class ThoughtCurrentSubtaskPayload(FrozenModel):
@@ -219,7 +219,7 @@ class ThoughtContextPayload(FrozenModel):
     @field_validator("time")
     @classmethod
     def validate_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+        return validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
 
 
 class PlanPromptPayload(FrozenModel):
@@ -237,12 +237,26 @@ class PlanPromptPayload(FrozenModel):
     @field_validator("time")
     @classmethod
     def validate_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+        return validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
 
 
-class ReplanPromptPayload(PlanPromptPayload):
+class ReplanPromptPayload(FrozenModel):
     phase: Literal["replan"]
+    goal: str = Field(min_length=1)
+    clarification_history: list[ClarificationTurnPayload] = Field(default_factory=list)
+    step_count: int = Field(ge=0)
+    max_steps: int = Field(ge=1)
+    latest_plan: list[PlanStepPayload] = Field(default_factory=list)
+    current_plan_index: int = Field(ge=0)
+    completed_subtasks: list[CompletedSubtaskPayload] = Field(default_factory=list)
+    user_profile: str | None = None
+    time: str
     current_plan_item: str = ""
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
 
 
 class ThoughtPromptPayload(FrozenModel):
@@ -260,7 +274,7 @@ class ThoughtPromptPayload(FrozenModel):
     @field_validator("time")
     @classmethod
     def validate_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+        return validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
 
 
 class ThoughtDecisionMessagePayload(FrozenModel):
@@ -368,8 +382,8 @@ class ThoughtDecisionCompatPayload(_CompatPayloadModel, FrozenModel):
         }
 
 
-_TOOL_CALL_LIST_ADAPTER = TypeAdapter(list[ToolCallPayload])
-_THOUGHT_DECISION_ADAPTER = TypeAdapter(ThoughtDecision)
+_TOOL_CALL_LIST_ADAPTER: TypeAdapter[list[ToolCallPayload]] = TypeAdapter(list[ToolCallPayload])
+_THOUGHT_DECISION_ADAPTER: TypeAdapter[ThoughtDecision] = TypeAdapter(ThoughtDecision)
 
 
 def _to_plain_mapping(value: Any) -> dict[str, Any] | None:

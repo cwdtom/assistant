@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Any, Optional, Tuple
+from typing import Annotated, Any, cast
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -25,7 +25,7 @@ class AppConfig(BaseSettings):
         str_strip_whitespace=True,
     )
 
-    api_key: Optional[str] = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
+    api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
     base_url: str = Field(default="https://api.deepseek.com", validation_alias="DEEPSEEK_BASE_URL")
     model: str = Field(default="deepseek-chat", validation_alias="DEEPSEEK_MODEL")
     llm_temperature: float = Field(default=1.3, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
@@ -58,7 +58,7 @@ class AppConfig(BaseSettings):
     task_cancel_command: str = Field(default=DEFAULT_TASK_CANCEL_COMMAND, validation_alias="TASK_CANCEL_COMMAND")
     internet_search_top_k: int = Field(default=3, ge=1, validation_alias="INTERNET_SEARCH_TOP_K")
     search_provider: str = Field(default="bocha", validation_alias="SEARCH_PROVIDER")
-    bocha_api_key: Optional[str] = Field(default=None, validation_alias="BOCHA_API_KEY")
+    bocha_api_key: str | None = Field(default=None, validation_alias="BOCHA_API_KEY")
     bocha_search_summary: bool = Field(default=True, validation_alias="BOCHA_SEARCH_SUMMARY")
     schedule_max_window_days: int = Field(default=31, ge=1, validation_alias="SCHEDULE_MAX_WINDOW_DAYS")
     cli_progress_color: str = Field(default="gray", validation_alias="CLI_PROGRESS_COLOR")
@@ -70,7 +70,10 @@ class AppConfig(BaseSettings):
     assistant_persona: str = Field(default="", validation_alias="ASSISTANT_PERSONA")
     feishu_app_id: str = Field(default="", validation_alias="FEISHU_APP_ID")
     feishu_app_secret: str = Field(default="", validation_alias="FEISHU_APP_SECRET")
-    feishu_allowed_open_ids: Annotated[Tuple[str, ...], NoDecode] = Field(default=(), validation_alias="FEISHU_ALLOWED_OPEN_IDS")
+    feishu_allowed_open_ids: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=(),
+        validation_alias="FEISHU_ALLOWED_OPEN_IDS",
+    )
     feishu_send_retry_count: int = Field(default=3, ge=0, validation_alias="FEISHU_SEND_RETRY_COUNT")
     feishu_text_chunk_size: int = Field(default=5000, ge=1, validation_alias="FEISHU_TEXT_CHUNK_SIZE")
     feishu_dedup_ttl_seconds: int = Field(default=600, ge=1, validation_alias="FEISHU_DEDUP_TTL_SECONDS")
@@ -207,7 +210,7 @@ class AppConfig(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def _inherit_log_paths(self) -> "AppConfig":
+    def _inherit_log_paths(self) -> AppConfig:
         if "llm_trace_log_path" not in self.model_fields_set:
             object.__setattr__(self, "llm_trace_log_path", self.app_log_path)
         if "feishu_log_path" not in self.model_fields_set:
@@ -237,13 +240,14 @@ def load_env_file(env_path: str = ".env") -> None:
 
 
 def load_config(load_dotenv: bool = True) -> AppConfig:
-    return AppConfig(_env_file=None if not load_dotenv else ".env")
+    settings_factory = cast(Any, AppConfig)
+    return settings_factory(_env_file=None if not load_dotenv else ".env")
 
 
 def load_startup_app_version(
     *,
     pyproject_path: Any,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> str:
     path = Path(pyproject_path)
     try:
