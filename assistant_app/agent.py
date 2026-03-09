@@ -7,7 +7,9 @@ from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import ValidationError
 
 from assistant_app.agent_components.command_handlers import (
     handle_command as _handle_command_impl,
@@ -84,7 +86,16 @@ from assistant_app.planner_thought import (
     normalize_thought_tool_call,
     resolve_current_subtask_tool_names,
 )
-from assistant_app.schemas.planner import AssistantToolMessage
+from assistant_app.schemas.planner import (
+    AssistantToolMessage,
+    PlanResponsePayload,
+    ReplanResponsePayload,
+    ThoughtAskUserDecision,
+    ThoughtContinueDecision,
+    ThoughtDecision,
+    ThoughtDoneDecision,
+    ThoughtResponsePayload,
+)
 from assistant_app.search import BingSearchProvider, SearchProvider, fetch_webpage_main_text
 
 __all__ = [
@@ -108,6 +119,8 @@ PLAN_HISTORY_LOOKBACK_HOURS = 24
 PLAN_HISTORY_MAX_TURNS = 50
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DecisionT = TypeVar("DecisionT")
+PayloadT = TypeVar("PayloadT")
 
 class AssistantAgent:
     def __init__(
@@ -345,26 +358,31 @@ class AssistantAgent:
     def _run_inner_react_loop(self, task: PendingPlanTask) -> tuple[str, str | None]:
         return _run_inner_react_loop_impl(self, task)
 
-    def _request_plan_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
+    def _request_plan_payload(self, task: PendingPlanTask) -> PlanResponsePayload | None:
         if not self.llm_client:
             return None
 
         planner_messages = self._build_plan_messages(task)
-        payload = self._request_payload_with_retry(planner_messages, normalize_plan_decision)
+        payload = self._request_payload_with_retry(
+            planner_messages,
+            normalize_plan_decision,
+            lambda decision, raw_response: PlanResponsePayload(
+                decision=decision,
+                raw_response=raw_response,
+            ),
+        )
         if payload is None:
             return None
-        decision = payload.get("decision")
-        raw_response = payload.get("raw_response")
         raw_user_message = planner_messages[-1].get("content")
-        if isinstance(decision, dict) and isinstance(raw_user_message, str) and isinstance(raw_response, str):
+        if isinstance(raw_user_message, str):
             self._append_outer_message_turn(
                 task=task,
                 user_message_content=raw_user_message,
-                assistant_response=raw_response,
+                assistant_response=payload.raw_response,
             )
         return payload
 
-    def _request_thought_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
+    def _request_thought_payload(self, task: PendingPlanTask) -> ThoughtResponsePayload | None:
         if not self.llm_client:
             return None
 
@@ -379,39 +397,43 @@ class AssistantAgent:
         payload = self._request_thought_payload_with_retry(task, request_messages)
         if payload is None:
             return None
-        decision = payload.get("decision")
-        assistant_message = payload.get("assistant_message")
-        if isinstance(assistant_message, dict):
-            self._append_thought_assistant_message(task, assistant_message)
-        elif isinstance(decision, dict):
+        if payload.assistant_message is not None:
+            self._append_thought_assistant_message(task, payload.assistant_message)
+        else:
             # Backward-compatible path for clients without tool-calling support.
-            self._append_thought_decision_message(task, decision)
+            self._append_thought_decision_message(task, payload.decision)
         return payload
 
-    def _request_replan_payload(self, task: PendingPlanTask) -> dict[str, Any] | None:
+    def _request_replan_payload(self, task: PendingPlanTask) -> ReplanResponsePayload | None:
         if not self.llm_client:
             return None
 
         planner_messages = self._build_replan_messages(task)
-        payload = self._request_payload_with_retry(planner_messages, normalize_replan_decision)
+        payload = self._request_payload_with_retry(
+            planner_messages,
+            normalize_replan_decision,
+            lambda decision, raw_response: ReplanResponsePayload(
+                decision=decision,
+                raw_response=raw_response,
+            ),
+        )
         if payload is None:
             return None
-        decision = payload.get("decision")
-        raw_response = payload.get("raw_response")
         raw_user_message = planner_messages[-1].get("content")
-        if isinstance(decision, dict) and isinstance(raw_user_message, str) and isinstance(raw_response, str):
+        if isinstance(raw_user_message, str):
             self._append_outer_message_turn(
                 task=task,
                 user_message_content=raw_user_message,
-                assistant_response=raw_response,
+                assistant_response=payload.raw_response,
             )
         return payload
 
     def _request_payload_with_retry(
         self,
         messages: list[dict[str, Any]],
-        normalizer: Callable[[dict[str, Any]], dict[str, Any] | None],
-    ) -> dict[str, Any] | None:
+        normalizer: Callable[[dict[str, Any]], DecisionT | None],
+        payload_builder: Callable[[DecisionT, str], PayloadT],
+    ) -> PayloadT | None:
         max_attempts = 1 + self._plan_replan_retry_count
         phase = self._llm_trace_phase(messages)
         for attempt in range(1, max_attempts + 1):
@@ -456,14 +478,14 @@ class AssistantAgent:
 
             decision = normalizer(payload)
             if decision is not None:
-                return {"decision": decision, "raw_response": raw}
+                return payload_builder(decision, raw)
         return None
 
     def _request_thought_payload_with_retry(
         self,
         task: PendingPlanTask,
         messages: list[dict[str, Any]],
-    ) -> dict[str, Any] | None:
+    ) -> ThoughtResponsePayload | None:
         max_attempts = 1 + self._plan_replan_retry_count
         phase = self._llm_trace_phase(messages)
         thought_tool_names = self._current_thought_tool_names(task)
@@ -515,7 +537,7 @@ class AssistantAgent:
             )
 
             decision = response.get("decision")
-            if not isinstance(decision, dict):
+            if decision is None:
                 continue
 
             payload: dict[str, Any] = {"decision": decision}
@@ -525,7 +547,10 @@ class AssistantAgent:
             tool_call_id = response.get("tool_call_id")
             if isinstance(tool_call_id, str) and tool_call_id.strip():
                 payload["tool_call_id"] = tool_call_id.strip()
-            return payload
+            try:
+                return ThoughtResponsePayload.model_validate(payload)
+            except ValidationError:
+                continue
         return None
 
     def _build_plan_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
@@ -544,22 +569,19 @@ class AssistantAgent:
         inner.thought_messages = [PlannerTextMessage(role="system", content=THOUGHT_PROMPT), *outer_messages]
         return inner.thought_messages
 
-    def _append_thought_assistant_message(self, task: PendingPlanTask, assistant_message: dict[str, Any]) -> None:
+    def _append_thought_assistant_message(
+        self,
+        task: PendingPlanTask,
+        assistant_message: AssistantToolMessage,
+    ) -> None:
         messages = self._ensure_thought_messages(task)
-        content = assistant_message.get("content")
-        if content is not None and not isinstance(content, str):
-            content = str(content)
-        payload: dict[str, Any] = {"role": "assistant", "content": content}
-        tool_calls = assistant_message.get("tool_calls")
-        if isinstance(tool_calls, list) and tool_calls:
-            payload["tool_calls"] = deepcopy(tool_calls)
-        messages.append(AssistantToolMessage.model_validate(payload))
+        messages.append(assistant_message.model_copy(deep=True))
 
-    def _append_thought_decision_message(self, task: PendingPlanTask, decision: dict[str, Any]) -> None:
+    def _append_thought_decision_message(self, task: PendingPlanTask, decision: ThoughtDecision) -> None:
         messages = self._ensure_thought_messages(task)
         decision_payload = {
             "phase": "thought_decision",
-            "decision": decision,
+            "decision": decision.model_dump(exclude_none=True),
         }
         messages.append(PlannerTextMessage(role="assistant", content=json.dumps(decision_payload, ensure_ascii=False)))
 
@@ -912,17 +934,12 @@ class AssistantAgent:
         return response_payload
 
     @staticmethod
-    def _is_thought_decision_tool_allowed(decision: dict[str, Any], allowed_tool_names: set[str]) -> bool:
-        status = str(decision.get("status") or "").strip().lower()
-        if status == "continue":
-            next_action = decision.get("next_action")
-            if not isinstance(next_action, dict):
-                return False
-            tool = str(next_action.get("tool") or "").strip().lower()
-            return tool in allowed_tool_names
-        if status == "ask_user":
+    def _is_thought_decision_tool_allowed(decision: ThoughtDecision, allowed_tool_names: set[str]) -> bool:
+        if isinstance(decision, ThoughtContinueDecision):
+            return decision.next_action.tool in allowed_tool_names
+        if isinstance(decision, ThoughtAskUserDecision):
             return "ask_user" in allowed_tool_names
-        if status == "done":
+        if isinstance(decision, ThoughtDoneDecision):
             return "done" in allowed_tool_names
         return False
 
@@ -1050,16 +1067,24 @@ class AssistantAgent:
         task: PendingPlanTask,
         *,
         phase: str,
-        decision: dict[str, Any],
+        decision: Any,
     ) -> None:
         normalized_phase = phase.strip().lower()
         if normalized_phase not in {"plan", "thought", "replan"}:
             normalized_phase = "planner"
+        if hasattr(decision, "model_dump"):
+            serialized = decision.model_dump(exclude_none=True)
+        elif isinstance(decision, dict):
+            serialized = decision
+        else:
+            serialized = {"value": str(decision)}
         result = _truncate_text(
-            json.dumps(decision, ensure_ascii=False, separators=(",", ":")),
+            json.dumps(serialized, ensure_ascii=False, separators=(",", ":")),
             self._plan_observation_char_limit,
         )
-        status = str(decision.get("status") or normalized_phase).strip() or normalized_phase
+        status = normalized_phase
+        if isinstance(serialized, dict):
+            status = str(serialized.get("status") or normalized_phase).strip() or normalized_phase
         self._append_observation(
             task,
             PlannerObservation(

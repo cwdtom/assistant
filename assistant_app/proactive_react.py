@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
-from assistant_app.schemas.planner import AssistantToolMessage, normalize_tool_call_payload
+from assistant_app.schemas.planner import normalize_assistant_tool_message
 from assistant_app.schemas.proactive import ProactiveDecision, ProactivePromptPayload
 from assistant_app.schemas.tools import parse_json_object
 
@@ -216,25 +216,10 @@ class ProactiveReactRunner:
 
 def _normalize_assistant_message(payload: dict[str, Any]) -> dict[str, Any]:
     assistant_message = payload.get("assistant_message") if isinstance(payload, dict) else None
-    if not isinstance(assistant_message, dict):
+    normalized_message = normalize_assistant_tool_message(assistant_message)
+    if normalized_message is None:
         return {"role": "assistant", "content": "", "tool_calls": []}
-    raw_tool_calls = assistant_message.get("tool_calls")
-    tool_calls: list[dict[str, Any]] = []
-    if isinstance(raw_tool_calls, list):
-        for item in raw_tool_calls:
-            tool_call = normalize_tool_call_payload(item)
-            if tool_call is not None:
-                tool_calls.append(tool_call.model_dump())
-    try:
-        normalized = AssistantToolMessage.model_validate(
-            {
-                "role": str(assistant_message.get("role") or "assistant"),
-                "content": assistant_message.get("content"),
-                "tool_calls": tool_calls,
-            }
-        ).model_dump()
-    except ValidationError:
-        return {"role": "assistant", "content": "", "tool_calls": []}
+    normalized = normalized_message.model_dump()
     content = normalized.get("content")
     normalized["content"] = "" if content is None else str(content)
     return normalized

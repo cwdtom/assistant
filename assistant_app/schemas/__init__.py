@@ -30,6 +30,8 @@ from assistant_app.schemas.planner import (
     ToolCallPayload,
     ToolFunctionPayload,
     ToolReplyPayload,
+    normalize_assistant_tool_message,
+    normalize_tool_call_payloads,
 )
 from assistant_app.schemas.proactive import (
     ProactiveContextSnapshot,
@@ -112,6 +114,8 @@ __all__ = [
     "ThoughtDoneDecision",
     "ThoughtNextAction",
     "ThoughtItem",
+    "normalize_assistant_tool_message",
+    "normalize_tool_call_payloads",
     "ToolCallPayload",
     "ToolFunctionPayload",
     "ToolReplyPayload",

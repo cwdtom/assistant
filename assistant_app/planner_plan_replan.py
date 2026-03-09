@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from assistant_app.schemas.planner import PlannedDecision, ReplanDoneDecision, ReplannedDecision
+from assistant_app.schemas.planner import PlannedDecision, ReplanDecision, ReplanDoneDecision, ReplannedDecision
 
 PLANNER_CAPABILITIES_TEXT = """
 可用执行能力（用于规划步骤，不要求你输出工具命令）：
@@ -102,7 +102,7 @@ REPLAN_PROMPT = f"""
 """.strip()
 
 
-def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_plan_decision(payload: dict[str, Any]) -> PlannedDecision | None:
     if not isinstance(payload, dict):
         return None
     normalized_payload = {
@@ -111,12 +111,12 @@ def normalize_plan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
         "plan": [] if payload.get("plan") is None else payload.get("plan"),
     }
     try:
-        return PlannedDecision.model_validate(normalized_payload).model_dump()
+        return PlannedDecision.model_validate(normalized_payload)
     except ValidationError:
         return None
 
 
-def normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_replan_decision(payload: dict[str, Any]) -> ReplanDecision | None:
     if not isinstance(payload, dict):
         return None
     status = str(payload.get("status") or "").strip().lower()
@@ -126,7 +126,7 @@ def normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             "response": str(payload.get("response") or "").strip(),
         }
         try:
-            return ReplanDoneDecision.model_validate(normalized_payload).model_dump()
+            return ReplanDoneDecision.model_validate(normalized_payload)
         except ValidationError:
             return None
     normalized_payload = {
@@ -134,6 +134,6 @@ def normalize_replan_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
         "plan": payload.get("plan"),
     }
     try:
-        return ReplannedDecision.model_validate(normalized_payload).model_dump()
+        return ReplannedDecision.model_validate(normalized_payload)
     except ValidationError:
         return None

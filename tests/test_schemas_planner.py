@@ -6,9 +6,13 @@ from assistant_app.planner_plan_replan import normalize_plan_decision, normalize
 from assistant_app.proactive_react import _normalize_done_arguments
 from assistant_app.schemas.planner import (
     PlannedDecision,
+    PlanResponsePayload,
     ProactiveDoneArguments,
+    ReplanDoneDecision,
     ReplannedDecision,
+    ReplanResponsePayload,
     ThoughtContinueDecision,
+    ThoughtResponsePayload,
     ToolReplyPayload,
 )
 from pydantic import ValidationError
@@ -91,6 +95,50 @@ class PlannerSchemaTest(unittest.TestCase):
         self.assertIsNone(payload.assistant_message.content)
         self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "schedule_list")
 
+    def test_plan_response_payload_wraps_decision_model(self) -> None:
+        payload = PlanResponsePayload.model_validate(
+            {
+                "decision": {
+                    "status": "planned",
+                    "goal": "查询最近历史",
+                    "plan": [{"task": "检索历史", "completed": False, "tools": ["history"]}],
+                },
+                "raw_response": '{"status":"planned"}',
+            }
+        )
+
+        self.assertIsInstance(payload.decision, PlannedDecision)
+        self.assertEqual(payload.decision.goal, "查询最近历史")
+
+    def test_replan_response_payload_accepts_done_union(self) -> None:
+        payload = ReplanResponsePayload.model_validate(
+            {
+                "decision": {
+                    "status": "done",
+                    "response": "已完成。",
+                },
+                "raw_response": '{"status":"done"}',
+            }
+        )
+
+        self.assertIsInstance(payload.decision, ReplanDoneDecision)
+        self.assertEqual(payload.decision.response, "已完成。")
+
+    def test_thought_response_payload_requires_assistant_message_for_tool_call_id(self) -> None:
+        with self.assertRaises(ValidationError):
+            ThoughtResponsePayload.model_validate(
+                {
+                    "decision": {
+                        "status": "continue",
+                        "current_step": "检索历史",
+                        "next_action": {"tool": "history", "input": "/history list"},
+                        "question": None,
+                        "response": None,
+                    },
+                    "tool_call_id": "call_1",
+                }
+            )
+
     def test_proactive_done_arguments_reject_bool_score(self) -> None:
         with self.assertRaises(ValidationError):
             ProactiveDoneArguments.model_validate(
@@ -107,7 +155,7 @@ class PlannerSchemaTest(unittest.TestCase):
             }
         )
 
-        self.assertIsNotNone(decision)
+        self.assertIsInstance(decision, PlannedDecision)
 
     def test_normalize_replan_decision_rejects_completed_only_plan(self) -> None:
         decision = normalize_replan_decision(

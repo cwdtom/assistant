@@ -16,8 +16,6 @@ from unittest.mock import patch
 
 from assistant_app.agent import (
     AssistantAgent,
-    _parse_history_list_limit,
-    _parse_history_search_input,
     _strip_think_blocks,
     _try_parse_json,
 )
@@ -178,6 +176,13 @@ def _extract_plan_items_from_latest_plan(raw_plan: Any) -> list[str]:
         if step:
             extracted.append(step)
     return extracted
+
+
+def _legacy_command_to_tool_arguments(_tool: str, action_input: str) -> dict[str, Any] | None:
+    parsed = _try_parse_json(action_input)
+    if isinstance(parsed, dict):
+        return dict(parsed)
+    return None
 
 
 def _fallback_replan_from_messages(messages: list[dict[str, str]]) -> str:
@@ -1914,6 +1919,8 @@ class AssistantAgentTest(unittest.TestCase):
             }
         )
         self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.model_dump()["next_action"]["tool"], "history")
 
     def test_thought_tool_call_contract_maps_internet_search_tool(self) -> None:
         decision = normalize_thought_tool_call(
@@ -1927,7 +1934,7 @@ class AssistantAgentTest(unittest.TestCase):
             }
         )
         self.assertEqual(
-            decision,
+            decision.model_dump(),
             {
                 "status": "continue",
                 "current_step": "",
@@ -1949,7 +1956,7 @@ class AssistantAgentTest(unittest.TestCase):
             }
         )
         self.assertEqual(
-            decision,
+            decision.model_dump(),
             {
                 "status": "continue",
                 "current_step": "",
@@ -1991,7 +1998,7 @@ class AssistantAgentTest(unittest.TestCase):
             }
         )
         self.assertEqual(
-            decision,
+            decision.model_dump(),
             {
                 "status": "done",
                 "current_step": "总结",
@@ -2016,11 +2023,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "history")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "history")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "list", "limit": 5})
 
     def test_thought_tool_call_contract_maps_history_search_tool(self) -> None:
@@ -2036,11 +2041,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "history")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "history")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "search", "keyword": "牛奶", "limit": 3})
 
     def test_thought_tool_call_contract_rejects_legacy_history_tool(self) -> None:
@@ -2069,11 +2072,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "thoughts")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "thoughts")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "add", "content": "记得补充周报"})
 
     def test_thought_tool_call_contract_maps_thoughts_update_tool(self) -> None:
@@ -2092,11 +2093,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "thoughts")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "thoughts")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(
             input_payload,
             {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
@@ -2137,11 +2136,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "schedule")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "schedule")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(
             input_payload,
             {
@@ -2169,11 +2166,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "schedule")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "schedule")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "view", "view": "week", "anchor": "2026-03-02", "tag": "work"})
 
     def test_thought_tool_call_contract_maps_schedule_list_tool(self) -> None:
@@ -2189,11 +2184,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "schedule")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "schedule")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "list", "tag": "work"})
 
     def test_thought_tool_call_contract_maps_schedule_repeat_tool(self) -> None:
@@ -2209,11 +2202,9 @@ class AssistantAgentTest(unittest.TestCase):
         )
         self.assertIsNotNone(decision)
         assert decision is not None
-        next_action = decision.get("next_action")
-        self.assertIsInstance(next_action, dict)
-        assert isinstance(next_action, dict)
-        self.assertEqual(next_action.get("tool"), "schedule")
-        input_payload = _try_parse_json(str(next_action.get("input") or ""))
+        next_action = decision.model_dump()["next_action"]
+        self.assertEqual(next_action["tool"], "schedule")
+        input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "repeat", "id": 3, "enabled": False})
 
     def test_thought_tool_call_contract_rejects_legacy_schedule_tool(self) -> None:

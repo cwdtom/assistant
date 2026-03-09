@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Callable
+from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_tool_names
 from assistant_app.schemas.base import FrozenModel
@@ -87,6 +88,16 @@ class ThoughtDoneDecision(FrozenModel):
     response: str | None = None
 
 
+ThoughtDecision: TypeAlias = Annotated[
+    ThoughtContinueDecision | ThoughtAskUserDecision | ThoughtDoneDecision,
+    Field(discriminator="status"),
+]
+ReplanDecision: TypeAlias = Annotated[
+    ReplannedDecision | ReplanDoneDecision,
+    Field(discriminator="status"),
+]
+
+
 class ToolFunctionPayload(FrozenModel):
     name: str = Field(min_length=1)
     arguments: str = "{}"
@@ -109,10 +120,43 @@ class ToolReplyPayload(FrozenModel):
     reasoning_content: str | None = None
 
 
+class PlanResponsePayload(FrozenModel):
+    decision: PlannedDecision
+    raw_response: str
+
+
+class ReplanResponsePayload(FrozenModel):
+    decision: ReplanDecision
+    raw_response: str
+
+
+class ThoughtResponsePayload(FrozenModel):
+    decision: ThoughtDecision
+    assistant_message: AssistantToolMessage | None = None
+    tool_call_id: str | None = None
+
+    @field_validator("tool_call_id")
+    @classmethod
+    def normalize_tool_call_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_tool_message(self) -> ThoughtResponsePayload:
+        if self.tool_call_id and self.assistant_message is None:
+            raise ValueError("tool_call_id requires assistant_message")
+        return self
+
+
 class ProactiveDoneArguments(FrozenModel):
     score: int = Field(ge=0, le=100)
     message: str
     reason: str = Field(min_length=1)
+
+
+_TOOL_CALL_LIST_ADAPTER = TypeAdapter(list[ToolCallPayload])
 
 
 def normalize_tool_call_payload(raw_tool_call: Any) -> ToolCallPayload | None:
@@ -143,19 +187,75 @@ def normalize_tool_call_payload(raw_tool_call: Any) -> ToolCallPayload | None:
         return None
 
 
+def normalize_tool_call_payloads(
+    raw_tool_calls: Any,
+    *,
+    plain_converter: Callable[[Any], Any] | None = None,
+) -> list[ToolCallPayload]:
+    if not isinstance(raw_tool_calls, list):
+        return []
+    normalized_payloads: list[dict[str, Any]] = []
+    for raw_item in raw_tool_calls:
+        candidate = plain_converter(raw_item) if plain_converter is not None else raw_item
+        tool_call = normalize_tool_call_payload(candidate)
+        if tool_call is not None:
+            normalized_payloads.append(tool_call.model_dump())
+    try:
+        return _TOOL_CALL_LIST_ADAPTER.validate_python(normalized_payloads)
+    except ValidationError:
+        return []
+
+
+def normalize_assistant_tool_message(
+    raw_message: Any,
+    *,
+    plain_tool_call_converter: Callable[[Any], Any] | None = None,
+    default_role: str = "assistant",
+) -> AssistantToolMessage | None:
+    if not isinstance(raw_message, dict):
+        return None
+    content = raw_message.get("content")
+    if content is None:
+        content_text: str | None = None
+    elif isinstance(content, str):
+        content_text = content
+    else:
+        content_text = str(content)
+    try:
+        return AssistantToolMessage.model_validate(
+            {
+                "role": str(raw_message.get("role") or default_role),
+                "content": content_text,
+                "tool_calls": normalize_tool_call_payloads(
+                    raw_message.get("tool_calls"),
+                    plain_converter=plain_tool_call_converter,
+                ),
+            }
+        )
+    except ValidationError:
+        return None
+
+
 __all__ = [
     "AssistantToolMessage",
+    "normalize_assistant_tool_message",
+    "PlanResponsePayload",
     "PlanStepPayload",
     "PlannedDecision",
     "ProactiveDoneArguments",
+    "ReplanDecision",
     "ReplanDoneDecision",
+    "ReplanResponsePayload",
     "ReplannedDecision",
     "ThoughtAskUserDecision",
     "ThoughtContinueDecision",
+    "ThoughtDecision",
     "ThoughtDoneDecision",
     "ThoughtNextAction",
+    "ThoughtResponsePayload",
     "ToolCallPayload",
     "ToolFunctionPayload",
     "ToolReplyPayload",
     "normalize_tool_call_payload",
+    "normalize_tool_call_payloads",
 ]

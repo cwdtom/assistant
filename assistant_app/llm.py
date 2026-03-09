@@ -4,7 +4,10 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from assistant_app.schemas.planner import ToolReplyPayload, normalize_tool_call_payload
+from assistant_app.schemas.planner import (
+    ToolReplyPayload,
+    normalize_assistant_tool_message,
+)
 
 warnings.filterwarnings(
     "ignore",
@@ -168,15 +171,6 @@ class OpenAICompatibleClient:
     @staticmethod
     def _build_tool_reply_payload(message: Any) -> dict[str, Any]:
         message_payload = OpenAICompatibleClient._to_plain_message(message)
-        content = message_payload.get("content")
-        content_text: str | None
-        if content is None:
-            content_text = None
-        elif isinstance(content, str):
-            content_text = content
-        else:
-            content_text = str(content)
-
         reasoning = message_payload.get("reasoning_content")
         reasoning_text: str | None
         if reasoning is None:
@@ -186,13 +180,18 @@ class OpenAICompatibleClient:
         else:
             reasoning_text = str(reasoning)
 
+        assistant_message = normalize_assistant_tool_message(
+            message_payload,
+            plain_tool_call_converter=OpenAICompatibleClient._to_plain_tool_call,
+        )
+        if assistant_message is None:
+            assistant_message = normalize_assistant_tool_message(
+                {"role": "assistant", "content": None, "tool_calls": []}
+            )
+            assert assistant_message is not None
         payload = ToolReplyPayload.model_validate(
             {
-                "assistant_message": {
-                    "role": "assistant",
-                    "content": content_text,
-                    "tool_calls": OpenAICompatibleClient._normalize_tool_calls(message_payload.get("tool_calls")),
-                },
+                "assistant_message": assistant_message,
                 "reasoning_content": reasoning_text,
             }
         )
@@ -213,19 +212,6 @@ class OpenAICompatibleClient:
             "tool_calls": getattr(message, "tool_calls", None),
             "reasoning_content": getattr(message, "reasoning_content", None),
         }
-
-    @staticmethod
-    def _normalize_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]]:
-        if not isinstance(raw_tool_calls, list):
-            return []
-        normalized: list[dict[str, Any]] = []
-        for raw in raw_tool_calls:
-            payload = OpenAICompatibleClient._to_plain_tool_call(raw)
-            tool_call = normalize_tool_call_payload(payload)
-            if tool_call is None:
-                continue
-            normalized.append(tool_call.model_dump())
-        return normalized
 
     @staticmethod
     def _to_plain_tool_call(tool_call: Any) -> dict[str, Any]:

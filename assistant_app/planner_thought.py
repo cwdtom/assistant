@@ -15,6 +15,7 @@ from assistant_app.planner_common import (
 from assistant_app.schemas.planner import (
     ThoughtAskUserDecision,
     ThoughtContinueDecision,
+    ThoughtDecision,
     ThoughtDoneDecision,
     normalize_tool_call_payload,
 )
@@ -511,7 +512,7 @@ def build_thought_tool_schemas(raw_tools: Any) -> list[dict[str, Any]]:
     return schemas
 
 
-def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_thought_decision(payload: dict[str, Any]) -> ThoughtDecision | None:
     if not isinstance(payload, dict):
         return None
     status = str(payload.get("status") or "").strip().lower()
@@ -540,7 +541,7 @@ def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None
                     "question": None,
                     "response": None,
                 }
-            ).model_dump()
+            )
         except ValidationError:
             return None
 
@@ -554,7 +555,7 @@ def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None
                     "question": str(payload.get("question") or "").strip(),
                     "response": None,
                 }
-            ).model_dump()
+            )
         except ValidationError:
             return None
 
@@ -575,13 +576,13 @@ def normalize_thought_decision(payload: dict[str, Any]) -> dict[str, Any] | None
                     "question": None,
                     "response": response_text,
                 }
-            ).model_dump()
+            )
         except ValidationError:
             return None
     return None
 
 
-def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | None:
     tool_call_model = normalize_tool_call_payload(tool_call)
     if tool_call_model is None:
         return None
@@ -601,16 +602,21 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
         for key in fields:
             if key in arguments:
                 schedule_payload[key] = arguments.get(key)
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {
-                "tool": "schedule",
-                "input": json.dumps(schedule_payload, ensure_ascii=False, separators=(",", ":")),
-            },
-            "question": None,
-            "response": None,
-        }
+        try:
+            return ThoughtContinueDecision.model_validate(
+                {
+                    "status": "continue",
+                    "current_step": current_step,
+                    "next_action": {
+                        "tool": "schedule",
+                        "input": json.dumps(schedule_payload, ensure_ascii=False, separators=(",", ":")),
+                    },
+                    "question": None,
+                    "response": None,
+                }
+            )
+        except ValidationError:
+            return None
 
     if name in _HISTORY_TOOL_ACTION_BY_NAME:
         if name == "history_search":
@@ -622,16 +628,21 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
         for key in fields:
             if key in arguments:
                 history_payload[key] = arguments.get(key)
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {
-                "tool": "history",
-                "input": json.dumps(history_payload, ensure_ascii=False, separators=(",", ":")),
-            },
-            "question": None,
-            "response": None,
-        }
+        try:
+            return ThoughtContinueDecision.model_validate(
+                {
+                    "status": "continue",
+                    "current_step": current_step,
+                    "next_action": {
+                        "tool": "history",
+                        "input": json.dumps(history_payload, ensure_ascii=False, separators=(",", ":")),
+                    },
+                    "question": None,
+                    "response": None,
+                }
+            )
+        except ValidationError:
+            return None
 
     if name in _THOUGHTS_TOOL_ACTION_BY_NAME:
         if name in {"thoughts_add", "thoughts_update"}:
@@ -643,68 +654,92 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> dict[str, Any] | N
         for key in fields:
             if key in arguments:
                 thoughts_payload[key] = arguments.get(key)
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {
-                "tool": "thoughts",
-                "input": json.dumps(thoughts_payload, ensure_ascii=False, separators=(",", ":")),
-            },
-            "question": None,
-            "response": None,
-        }
+        try:
+            return ThoughtContinueDecision.model_validate(
+                {
+                    "status": "continue",
+                    "current_step": current_step,
+                    "next_action": {
+                        "tool": "thoughts",
+                        "input": json.dumps(thoughts_payload, ensure_ascii=False, separators=(",", ":")),
+                    },
+                    "question": None,
+                    "response": None,
+                }
+            )
+        except ValidationError:
+            return None
 
     if name == "internet_search_tool":
         query = str(arguments.get("query") or "").strip()
         if not query:
             return None
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {"tool": "internet_search", "input": query},
-            "question": None,
-            "response": None,
-        }
+        try:
+            return ThoughtContinueDecision.model_validate(
+                {
+                    "status": "continue",
+                    "current_step": current_step,
+                    "next_action": {"tool": "internet_search", "input": query},
+                    "question": None,
+                    "response": None,
+                }
+            )
+        except ValidationError:
+            return None
 
     if name == "internet_search_fetch_url":
         url = str(arguments.get("url") or "").strip()
         if not url:
             return None
         fetch_payload = {"action": "fetch_url", "url": url}
-        return {
-            "status": "continue",
-            "current_step": current_step,
-            "next_action": {
-                "tool": "internet_search",
-                "input": json.dumps(fetch_payload, ensure_ascii=False, separators=(",", ":")),
-            },
-            "question": None,
-            "response": None,
-        }
+        try:
+            return ThoughtContinueDecision.model_validate(
+                {
+                    "status": "continue",
+                    "current_step": current_step,
+                    "next_action": {
+                        "tool": "internet_search",
+                        "input": json.dumps(fetch_payload, ensure_ascii=False, separators=(",", ":")),
+                    },
+                    "question": None,
+                    "response": None,
+                }
+            )
+        except ValidationError:
+            return None
 
     if name == "ask_user":
         question = str(arguments.get("question") or "").strip()
         if not question:
             return None
-        return {
-            "status": "ask_user",
-            "current_step": current_step,
-            "next_action": None,
-            "question": question,
-            "response": None,
-        }
+        try:
+            return ThoughtAskUserDecision.model_validate(
+                {
+                    "status": "ask_user",
+                    "current_step": current_step,
+                    "next_action": None,
+                    "question": question,
+                    "response": None,
+                }
+            )
+        except ValidationError:
+            return None
 
     if name == "done":
         response = str(arguments.get("response") or "").strip()
         if not response:
             return None
-        return {
-            "status": "done",
-            "current_step": current_step,
-            "next_action": None,
-            "question": None,
-            "response": response,
-        }
+        try:
+            return ThoughtDoneDecision.model_validate(
+                {
+                    "status": "done",
+                    "current_step": current_step,
+                    "next_action": None,
+                    "question": None,
+                    "response": response,
+                }
+            )
+        except ValidationError:
+            return None
 
     return None
-

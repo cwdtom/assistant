@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from assistant_app.llm import OpenAICompatibleClient
@@ -119,6 +120,48 @@ class OpenAICompatibleClientTest(unittest.TestCase):
         self.assertIsInstance(tool_calls, list)
         self.assertEqual(tool_calls[0]["function"]["name"], "schedule")
         self.assertIsNone(payload.get("reasoning_content"))
+
+    def test_build_tool_reply_payload_accepts_object_tool_calls(self) -> None:
+        payload = OpenAICompatibleClient._build_tool_reply_payload(
+            SimpleNamespace(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_2",
+                        type="function",
+                        function=SimpleNamespace(name="history_list", arguments='{"limit":5}'),
+                    )
+                ],
+                reasoning_content=None,
+            )
+        )
+
+        assistant_message = payload["assistant_message"]
+        tool_calls = assistant_message["tool_calls"]
+        self.assertEqual(tool_calls[0]["function"]["name"], "history_list")
+        self.assertEqual(tool_calls[0]["function"]["arguments"], '{"limit":5}')
+
+    def test_build_tool_reply_payload_filters_invalid_tool_calls(self) -> None:
+        payload = OpenAICompatibleClient._build_tool_reply_payload(
+            {
+                "role": "assistant",
+                "content": "ok",
+                "tool_calls": [
+                    {"id": "broken", "type": "function"},
+                    {
+                        "id": "call_3",
+                        "type": "function",
+                        "function": {"name": "done", "arguments": '{"response":"完成"}'},
+                    },
+                ],
+                "reasoning_content": None,
+            }
+        )
+
+        assistant_message = payload["assistant_message"]
+        self.assertEqual(len(assistant_message["tool_calls"]), 1)
+        self.assertEqual(assistant_message["tool_calls"][0]["function"]["name"], "done")
 
 
 if __name__ == "__main__":

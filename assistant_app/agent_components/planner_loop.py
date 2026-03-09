@@ -80,33 +80,21 @@ def emit_decision_progress(agent: Any, task: Any) -> None:
 
 def initialize_plan_once(agent: Any, task: Any) -> bool:
     from assistant_app.agent_components.models import PlanStep
-    from assistant_app.planner_common import normalize_tool_names
 
     outer = agent._outer_context(task)
     plan_payload = agent._request_plan_payload(task)
     if plan_payload is None:
         return False
-    plan_decision = plan_payload.get("decision")
-    if not isinstance(plan_decision, dict):
-        return False
-    expanded_goal = str(plan_decision.get("goal") or "").strip()
+    plan_decision = plan_payload.decision
+    expanded_goal = plan_decision.goal.strip()
     if expanded_goal:
         outer.goal = expanded_goal
         task.goal = expanded_goal
     agent._append_planner_decision_observation(task, phase="plan", decision=plan_decision)
-    raw_plan_items = plan_decision.get("plan")
-    if not isinstance(raw_plan_items, list):
-        return False
-    latest_plan: list[PlanStep] = []
-    for item in raw_plan_items:
-        if not isinstance(item, dict):
-            return False
-        step_text = str(item.get("task") or "").strip()
-        completed = item.get("completed")
-        tools = normalize_tool_names(item.get("tools"))
-        if not step_text or not isinstance(completed, bool) or tools is None:
-            return False
-        latest_plan.append(PlanStep(item=step_text, completed=completed, tools=tools))
+    latest_plan = [
+        PlanStep(item=item.task, completed=item.completed, tools=item.tools)
+        for item in plan_decision.plan
+    ]
     if not latest_plan:
         task.plan_ack_only = True
         outer.latest_plan = []
@@ -127,7 +115,7 @@ def initialize_plan_once(agent: Any, task: Any) -> bool:
 
 def run_replan_gate(agent: Any, task: Any) -> tuple[str, str | None]:
     from assistant_app.agent_components.models import PlannerObservation, PlanStep
-    from assistant_app.planner_common import normalize_tool_names
+    from assistant_app.schemas.planner import ReplanDoneDecision
 
     outer = agent._outer_context(task)
     if not task.needs_replan:
@@ -152,12 +140,9 @@ def run_replan_gate(agent: Any, task: Any) -> tuple[str, str | None]:
         return "retry", None
 
     task.planner_failure_rounds = 0
-    replan_decision = replan_payload.get("decision")
-    if not isinstance(replan_decision, dict):
-        return "unavailable", None
+    replan_decision = replan_payload.decision
     agent._append_planner_decision_observation(task, phase="replan", decision=replan_decision)
-    status = str(replan_decision.get("status") or "").strip().lower()
-    if status == "done":
+    if isinstance(replan_decision, ReplanDoneDecision):
         remaining_items = _remaining_pending_plan_items(outer)
         if remaining_items:
             task.needs_replan = False
@@ -174,22 +159,13 @@ def run_replan_gate(agent: Any, task: Any) -> tuple[str, str | None]:
                 "重规划返回 done，但仍存在未完成步骤；已忽略该结果并继续执行剩余计划。"
             )
             return "ok", None
-        response = str(replan_decision.get("response") or "").strip()
+        response = replan_decision.response.strip()
         task.needs_replan = False
         return "done", response or None
-    raw_plan = replan_decision.get("plan")
-    if not isinstance(raw_plan, list):
-        return "unavailable", None
-    updated_plan: list[PlanStep] = []
-    for step in raw_plan:
-        if not isinstance(step, dict):
-            return "unavailable", None
-        item = str(step.get("task") or "").strip()
-        completed = step.get("completed")
-        tools = normalize_tool_names(step.get("tools"))
-        if not item or not isinstance(completed, bool) or tools is None:
-            return "unavailable", None
-        updated_plan.append(PlanStep(item=item, completed=completed, tools=tools))
+    updated_plan = [
+        PlanStep(item=step.task, completed=step.completed, tools=step.tools)
+        for step in replan_decision.plan
+    ]
     outer.latest_plan = updated_plan
     if not outer.latest_plan:
         return "unavailable", None
@@ -206,6 +182,7 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
     from assistant_app.agent_components.models import ClarificationTurn, PlannerObservation
     from assistant_app.agent_components.parsing_utils import _is_same_question_text
     from assistant_app.agent_components.render_helpers import _truncate_text
+    from assistant_app.schemas.planner import ThoughtAskUserDecision, ThoughtDoneDecision
 
     outer = agent._outer_context(task)
     emit_progress = False
@@ -237,14 +214,11 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
             agent._emit_progress("思考失败：模型输出不符合契约，准备重试。")
             continue
 
-        thought_decision = thought_payload.get("decision")
-        if not isinstance(thought_decision, dict):
-            return "unavailable", None
-
-        status = str(thought_decision.get("status") or "").strip().lower()
-        current_step = str(thought_decision.get("current_step") or "").strip()
-        if status == "done":
-            response_text = str(thought_decision.get("response") or "").strip()
+        thought_decision = thought_payload.decision
+        status = thought_decision.status
+        current_step = thought_decision.current_step.strip()
+        if isinstance(thought_decision, ThoughtDoneDecision):
+            response_text = str(thought_decision.response or "").strip()
             if not response_text:
                 task.planner_failure_rounds += 1
                 agent._append_observation(
@@ -264,8 +238,8 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
         agent._append_planner_decision_observation(task, phase="thought", decision=thought_decision)
         agent._emit_progress(f"思考决策：{status} | {current_step or '（未提供步骤）'}")
 
-        if status == "done":
-            response = str(thought_decision.get("response") or "").strip()
+        if isinstance(thought_decision, ThoughtDoneDecision):
+            response = str(thought_decision.response or "").strip()
             inner_context = agent._ensure_inner_context(task)
             inner_context.response = response
             completed_item = agent._current_plan_item_text(task) or current_step or "当前子任务"
@@ -290,8 +264,8 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
             task.needs_replan = True
             return "replan", None
 
-        if status == "ask_user":
-            question = str(thought_decision.get("question") or "").strip()
+        if isinstance(thought_decision, ThoughtAskUserDecision):
+            question = thought_decision.question.strip()
             if not question:
                 agent._append_observation(
                     task,
@@ -336,21 +310,10 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
             agent._emit_progress(f"步骤动作：ask_user -> {question}")
             return "ask_user", f"请确认：{question}"
 
-        next_action = thought_decision.get("next_action")
-        if not isinstance(next_action, dict):
-            agent._append_observation(
-                task,
-                PlannerObservation(
-                    tool="thought",
-                    input_text="next_action",
-                    ok=False,
-                    result="status=continue 但 next_action 为空。",
-                ),
-            )
-            continue
-        action_tool = str(next_action.get("tool") or "").strip().lower()
-        action_input = str(next_action.get("input") or "").strip()
-        tool_call_id = str(thought_payload.get("tool_call_id") or "").strip() or None
+        next_action = thought_decision.next_action
+        action_tool = next_action.tool.strip().lower()
+        action_input = next_action.input.strip()
+        tool_call_id = thought_payload.tool_call_id
         agent._emit_progress(f"步骤动作：{action_tool} -> {action_input}")
         agent._raise_if_task_interrupted()
         task.step_count += 1
