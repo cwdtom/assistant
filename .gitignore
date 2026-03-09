@@ -14,3 +14,4 @@ doc
 user_profile.md
 skills
 *.egg-info
+.idea
