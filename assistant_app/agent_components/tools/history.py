@@ -24,16 +24,39 @@ def execute_history_system_action(
     raw_input: str,
     observation_tool: str = "history",
 ) -> Any:
+    runtime_payload = _coerce_history_runtime_payload(
+        payload=payload,
+        raw_input=raw_input,
+        observation_tool=observation_tool,
+    )
+    if isinstance(runtime_payload, PlannerObservation):
+        return runtime_payload
+
     typed_observation = _execute_typed_history_system_action(
         agent,
-        payload=payload,
+        payload=runtime_payload,
         raw_input=raw_input,
         observation_tool=observation_tool,
     )
     if typed_observation is not None:
         return typed_observation
+    return PlannerObservation(
+        tool=observation_tool,
+        input_text=raw_input,
+        ok=False,
+        result="history.action 非法。",
+    )
 
-    assert isinstance(payload, dict)
+
+def _coerce_history_runtime_payload(
+    *,
+    payload: dict[str, Any] | RuntimePlannerActionPayload,
+    raw_input: str,
+    observation_tool: str,
+) -> RuntimePlannerActionPayload | PlannerObservation:
+    if isinstance(payload, RuntimePlannerActionPayload):
+        return payload
+
     action = str(payload.get("action") or "").strip().lower()
     if action not in {"list", "search"}:
         return PlannerObservation(
@@ -43,7 +66,7 @@ def execute_history_system_action(
             result="history.action 非法。",
         )
 
-    history_limit = DEFAULT_HISTORY_LIST_LIMIT
+    arguments: dict[str, Any] = {}
     if "limit" in payload and payload.get("limit") is not None:
         limit = _normalize_positive_int_value(payload.get("limit"))
         if limit is None:
@@ -57,17 +80,13 @@ def execute_history_system_action(
                 ok=False,
                 result=limit_error,
             )
-        history_limit = min(limit, MAX_HISTORY_LIST_LIMIT)
+        arguments["limit"] = limit
 
     if action == "list":
-        turns = agent.db.recent_turns(limit=history_limit)
-        if not turns:
-            result = "暂无历史会话。"
-            ok = _is_planner_command_success(result, tool=observation_tool)
-            return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
-        result = _format_history_list_result(turns)
-        ok = _is_planner_command_success(result, tool=observation_tool)
-        return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
+        return RuntimePlannerActionPayload(
+            tool_name="history_list",
+            arguments=HistoryListArgs.model_validate(arguments),
+        )
 
     keyword = str(payload.get("keyword") or "").strip()
     if not keyword:
@@ -77,26 +96,20 @@ def execute_history_system_action(
             ok=False,
             result="history.search keyword 不能为空。",
         )
-    turns = agent.db.search_turns(keyword, limit=history_limit)
-    if not turns:
-        result = f"未找到包含“{keyword}”的历史会话。"
-        ok = _is_planner_command_success(result, tool=observation_tool)
-        return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
-    result = _format_history_search_result(keyword=keyword, turns=turns)
-    ok = _is_planner_command_success(result, tool=observation_tool)
-    return PlannerObservation(tool=observation_tool, input_text=raw_input, ok=ok, result=result)
+    arguments["keyword"] = keyword
+    return RuntimePlannerActionPayload(
+        tool_name="history_search",
+        arguments=HistorySearchArgs.model_validate(arguments),
+    )
 
 
 def _execute_typed_history_system_action(
     agent: Any,
     *,
-    payload: dict[str, Any] | RuntimePlannerActionPayload,
+    payload: RuntimePlannerActionPayload,
     raw_input: str,
     observation_tool: str,
 ) -> PlannerObservation | None:
-    if not isinstance(payload, RuntimePlannerActionPayload):
-        return None
-
     tool_name = payload.tool_name
     arguments = payload.arguments
     if tool_name == "history_list" and isinstance(arguments, HistoryListArgs):

@@ -154,20 +154,19 @@
 ## 8. Acceptance Criteria
 
 - [x] thought tool-calling 主链路已可携带 runtime typed payload 传递到执行层。
-- [ ] `schedule/history/thoughts/internet_search` 执行器的 typed/dict 重复逻辑被进一步收敛，而不是继续扩散。
+- [x] `schedule/history/thoughts/internet_search` 执行器的 typed/dict 重复逻辑被进一步收敛，而不是继续扩散。
 - [x] CLI `/schedule`、`/history`、`/thoughts` 命令解析迁移到 command-level Pydantic model。
 - [x] Feishu calendar / message SDK 关键响应已用 schema 封装，不再在主路径大量依赖 `_read_path`。
 - [x] Bocha search 响应结构进一步类型化，主逻辑中的 `isinstance`/`dict.get` 明显减少。
 - [x] 全量单测通过。
-- [ ] Log evidence proves the change is effective and correct.
+- [x] Log evidence proves the change is effective and correct.
 
 ## 9. Open Questions
 
 - None for this freeze baseline.
 - 若下一轮继续推进，默认优先级为：
-  - `schedule/history/thoughts/internet_search` 执行器 typed/dict 双路径去重
   - 日志 / trace payload schema 收敛
-  - 运行时日志证据补齐
+  - 评估 `schedule.py` 是否继续拆分 runtime helper，避免单文件继续膨胀
 
 ## 10. Decision Log
 
@@ -238,9 +237,17 @@
   - Bocha search response 已继续类型化，`summary` 多形态与 `webPages.value` item 解析下沉到 schema，`assistant_app/search.py` 中对应的 `isinstance`/`dict.get` 分支明显减少。
 - Verification completed after progress update:
   - `ruff check assistant_app/feishu_adapter.py assistant_app/feishu_calendar_client.py assistant_app/schemas/__init__.py assistant_app/schemas/feishu.py assistant_app/schemas/search.py assistant_app/search.py tests/test_feishu_adapter.py tests/test_feishu_calendar_client.py tests/test_search.py`
+
+- Progress update:
+  - 2026-03-09 17:07 Asia/Shanghai
+- Completed since freeze:
+  - `history`、`thoughts`、`schedule` 的兼容 `dict` payload 已在边界收敛为 `RuntimePlannerActionPayload`，执行层主路径不再保留独立的 dict 业务实现。
+  - `internet_search` 的 `fetch_url` 兼容 JSON/URL 输入已统一收敛到 `InternetSearchFetchUrlArgs`，URL 校验与 typed path 共享同一份参数模型。
+  - `tests/test_agent.py` 已补充 typed payload 路径下 `planner_tool_thoughts_start/done`、`planner_tool_internet_search_fetch_url_start/done` 的日志断言，验证收敛后日志证据仍然成立。
+- Verification completed after progress update:
+  - `ruff check assistant_app/agent_components/tools/history.py assistant_app/agent_components/tools/internet_search.py assistant_app/agent_components/tools/schedule.py assistant_app/agent_components/tools/thoughts.py tests/test_agent.py`
   - `python -m unittest discover -s tests -p "test_*.py"`
   - 结果：399 tests, OK
 - Remaining highest-priority work:
-  - 继续收敛 `schedule/history/thoughts/internet_search` 执行器中 typed path 与 legacy dict path 的双份实现。
   - 复查日志 / trace payload 是否仍存在宽松 `dict` 边界，并补最小必要的 schema。
-  - 如需把本冻结文档推进到“完成”状态，还需要补运行时日志证据，而不仅是单元测试验证。
+  - 评估是否将 `schedule.py` 的 runtime payload 归一化 helper 进一步拆分，降低单文件复杂度。

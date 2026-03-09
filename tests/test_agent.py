@@ -2390,6 +2390,24 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(fake_search.queries, [])
         mocked_fetch.assert_called_once_with("https://example.com")
 
+    def test_internet_search_url_input_rejects_malformed_direct_url(self) -> None:
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=FakeSearchProvider(),
+        )
+
+        observation = agent._execute_planner_tool(
+            action_tool="internet_search",
+            action_input="http://",
+        )
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(
+            observation.result,
+            "internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
+        )
+
     def test_internet_search_fetch_url_observation_success(self) -> None:
         agent = AssistantAgent(
             db=self.db,
@@ -2459,19 +2477,23 @@ class AssistantAgentTest(unittest.TestCase):
         )
         with patch("assistant_app.agent.fetch_webpage_main_text") as mocked_fetch:
             mocked_fetch.return_value = SimpleNamespace(url="https://example.com", main_text="网页正文")
-            observation = agent._execute_planner_tool(
-                action_tool="internet_search",
-                action_input="not-json",
-                action_payload=RuntimePlannerActionPayload(
-                    tool_name="internet_search_fetch_url",
-                    arguments=InternetSearchFetchUrlArgs(url="https://example.com"),
-                ),
-            )
+            with self.assertLogs("assistant_app.app", level="INFO") as captured:
+                observation = agent._execute_planner_tool(
+                    action_tool="internet_search",
+                    action_input="not-json",
+                    action_payload=RuntimePlannerActionPayload(
+                        tool_name="internet_search_fetch_url",
+                        arguments=InternetSearchFetchUrlArgs(url="https://example.com"),
+                    ),
+                )
 
         self.assertTrue(observation.ok)
         result_payload = _try_parse_json(observation.result)
         self.assertEqual(result_payload, {"url": "https://example.com", "main_text": "网页正文"})
         mocked_fetch.assert_called_once_with("https://example.com")
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_internet_search_fetch_url_start", merged)
+        self.assertIn("planner_tool_internet_search_fetch_url_done", merged)
 
     def test_plan_replan_history_tool(self) -> None:
         fake_llm = FakeLLMClient(
@@ -2673,14 +2695,15 @@ class AssistantAgentTest(unittest.TestCase):
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
         thought_id = self.db.add_thought("记得买牛奶")
 
-        observation = agent._execute_planner_tool(
-            action_tool="thoughts",
-            action_input="not-json",
-            action_payload=RuntimePlannerActionPayload(
-                tool_name="thoughts_update",
-                arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="完成"),
-            ),
-        )
+        with self.assertLogs("assistant_app.app", level="INFO") as captured:
+            observation = agent._execute_planner_tool(
+                action_tool="thoughts",
+                action_input="not-json",
+                action_payload=RuntimePlannerActionPayload(
+                    tool_name="thoughts_update",
+                    arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="完成"),
+                ),
+            )
 
         self.assertTrue(observation.ok)
         self.assertIn("[状态:完成]", observation.result)
@@ -2689,6 +2712,9 @@ class AssistantAgentTest(unittest.TestCase):
         assert item is not None
         self.assertEqual(item.content, "记得买牛奶和鸡蛋")
         self.assertEqual(item.status, "完成")
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_thoughts_start", merged)
+        self.assertIn("planner_tool_thoughts_done", merged)
 
     def test_schedule_tool_supports_runtime_typed_payload(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

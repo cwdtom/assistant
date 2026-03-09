@@ -39,12 +39,20 @@ def execute_internet_search_planner_action(
     if isinstance(payload, dict):
         action = str(payload.get("action") or "").strip().lower()
         if action == "fetch_url":
-            return _execute_internet_search_fetch_url_action(
-                agent,
+            runtime_payload_or_observation = _coerce_fetch_url_runtime_payload(
                 payload,
+                raw_input=normalized_input,
+            )
+            if isinstance(runtime_payload_or_observation, PlannerObservation):
+                return runtime_payload_or_observation
+            typed_observation = _execute_typed_internet_search_action(
+                agent,
+                action_payload=runtime_payload_or_observation,
                 raw_input=normalized_input,
                 fetch_main_text=fetch_main_text,
             )
+            if typed_observation is not None:
+                return typed_observation
         if action:
             return PlannerObservation(
                 tool="internet_search",
@@ -53,12 +61,26 @@ def execute_internet_search_planner_action(
                 result="internet_search.action 非法。",
             )
     elif _is_direct_http_url(normalized_input):
-        return _execute_internet_search_fetch_url_action(
+        try:
+            runtime_payload = RuntimePlannerActionPayload(
+                tool_name="internet_search_fetch_url",
+                arguments=InternetSearchFetchUrlArgs(url=normalized_input),
+            )
+        except ValidationError:
+            return PlannerObservation(
+                tool="internet_search",
+                input_text=normalized_input,
+                ok=False,
+                result="internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
+            )
+        typed_observation = _execute_typed_internet_search_action(
             agent,
-            {"action": "fetch_url", "url": normalized_input},
+            action_payload=runtime_payload,
             raw_input=normalized_input,
             fetch_main_text=fetch_main_text,
         )
+        if typed_observation is not None:
+            return typed_observation
 
     return _execute_internet_search_query_action(
         agent,
@@ -153,13 +175,11 @@ def _execute_internet_search_query_action(
     return PlannerObservation(tool="internet_search", input_text=normalized_query, ok=True, result=formatted)
 
 
-def _execute_internet_search_fetch_url_action(
-    agent: Any,
+def _coerce_fetch_url_runtime_payload(
     payload: dict[str, Any],
     *,
     raw_input: str,
-    fetch_main_text: Callable[[str], Any],
-) -> PlannerObservation:
+) -> RuntimePlannerActionPayload | PlannerObservation:
     raw_url = str(payload.get("url") or "").strip()
     if not raw_url:
         return PlannerObservation(
@@ -177,11 +197,9 @@ def _execute_internet_search_fetch_url_action(
             ok=False,
             result="internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
         )
-    return _execute_internet_search_fetch_url(
-        agent,
-        url=url,
-        raw_input=raw_input,
-        fetch_main_text=fetch_main_text,
+    return RuntimePlannerActionPayload(
+        tool_name="internet_search_fetch_url",
+        arguments=InternetSearchFetchUrlArgs(url=url),
     )
 
 
