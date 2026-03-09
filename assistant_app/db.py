@@ -14,6 +14,12 @@ from assistant_app.schemas.domain import (
     ScheduleItem,
     ThoughtItem,
 )
+from assistant_app.schemas.storage import (
+    NormalizedTagValue,
+    ScheduleDurationValue,
+    ThoughtContentValue,
+    ThoughtStatusValue,
+)
 
 _UNSET = object()
 THOUGHT_STATUS_TODO = "未完成"
@@ -560,13 +566,10 @@ class AssistantDB:
             fields.append("tag = ?")
             values.append(_normalize_tag(str(tag) if tag is not None else None))
         if duration_minutes is not _UNSET:
-            if (
-                not isinstance(duration_minutes, int)
-                or isinstance(duration_minutes, bool)
-                or duration_minutes < 1
-            ):
+            try:
+                normalized_duration = _normalize_duration_minutes(duration_minutes)
+            except ValueError:
                 return False
-            normalized_duration = _normalize_duration_minutes(duration_minutes)
             fields.append("duration_minutes = ?")
             values.append(normalized_duration)
         if remind_at is not _UNSET:
@@ -905,34 +908,19 @@ def _now_iso() -> str:
 
 
 def _normalize_tag(tag: str | None) -> str:
-    if tag is None:
-        return "default"
-    normalized = tag.strip().lower()
-    if not normalized:
-        return "default"
-    return normalized
+    return NormalizedTagValue.model_validate({"tag": tag}).tag
 
 
 def _normalize_duration_minutes(duration_minutes: int) -> int:
-    if not isinstance(duration_minutes, int) or isinstance(duration_minutes, bool):
-        raise ValueError("duration_minutes must be an integer >= 1")
-    if duration_minutes < 1:
-        raise ValueError("duration_minutes must be >= 1")
-    return duration_minutes
+    return ScheduleDurationValue.model_validate({"duration_minutes": duration_minutes}).duration_minutes
 
 
 def _normalize_thought_content(content: str) -> str:
-    normalized = content.strip()
-    if not normalized:
-        raise ValueError("thought content cannot be empty")
-    return normalized
+    return ThoughtContentValue.model_validate({"content": content}).content
 
 
 def _normalize_thought_status(status: str) -> str:
-    normalized = status.strip()
-    if normalized not in THOUGHT_STATUS_VALUES:
-        raise ValueError("thought status must be one of 未完成|完成|删除")
-    return normalized
+    return ThoughtStatusValue.model_validate({"status": status}).status
 
 
 def _schedule_item_from_row(row: sqlite3.Row) -> ScheduleItem:

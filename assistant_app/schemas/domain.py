@@ -194,22 +194,19 @@ class ReminderDelivery(FrozenModel):
         return _validate_datetime_text(value, field_name="occurrence_time", formats=(EVENT_TIME_FORMAT,))
 
 
-class SearchResult(FrozenModel):
+class HttpUrlValue(FrozenModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return _validate_http_url_text(value, field_name="url")
+
+
+class SearchResult(HttpUrlValue):
     title: str = Field(min_length=1)
     snippet: str = ""
-    url: str
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, value: str) -> str:
-        return _validate_http_url_text(value, field_name="url")
 
 
-class WebPageFetchResult(FrozenModel):
-    url: str
+class WebPageFetchResult(HttpUrlValue):
     main_text: str
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, value: str) -> str:
-        return _validate_http_url_text(value, field_name="url")

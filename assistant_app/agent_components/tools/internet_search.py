@@ -4,6 +4,8 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from pydantic import ValidationError
+
 from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.parsing_utils import _is_direct_http_url
 from assistant_app.agent_components.render_helpers import (
@@ -11,6 +13,7 @@ from assistant_app.agent_components.render_helpers import (
     _truncate_text,
     _try_parse_json,
 )
+from assistant_app.schemas.domain import HttpUrlValue
 
 
 def execute_internet_search_planner_action(
@@ -107,15 +110,17 @@ def _execute_internet_search_fetch_url_action(
     raw_input: str,
     fetch_main_text: Callable[[str], Any],
 ) -> PlannerObservation:
-    url = str(payload.get("url") or "").strip()
-    if not url:
+    raw_url = str(payload.get("url") or "").strip()
+    if not raw_url:
         return PlannerObservation(
             tool="internet_search",
             input_text=raw_input,
             ok=False,
             result="internet_search.fetch_url 缺少 url。",
         )
-    if not url.lower().startswith(("http://", "https://")):
+    try:
+        url = HttpUrlValue.model_validate({"url": raw_url}).url
+    except ValidationError:
         return PlannerObservation(
             tool="internet_search",
             input_text=raw_input,

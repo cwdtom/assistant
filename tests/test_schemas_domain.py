@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from assistant_app.db import AssistantDB
-from assistant_app.schemas.domain import ScheduleItem, SearchResult, ThoughtItem, WebPageFetchResult
+from assistant_app.schemas.domain import HttpUrlValue, ScheduleItem, SearchResult, ThoughtItem, WebPageFetchResult
 from assistant_app.search import _extract_bing_results, _extract_bocha_results
 from pydantic import ValidationError
 
@@ -63,6 +63,9 @@ class DomainSchemaTest(unittest.TestCase):
             )
 
     def test_search_models_reject_invalid_http_url(self) -> None:
+        with self.assertRaises(ValidationError):
+            HttpUrlValue.model_validate({"url": "https://"})
+
         with self.assertRaises(ValidationError):
             SearchResult.model_validate({"title": "Title", "snippet": "Snippet", "url": "https://"})
 

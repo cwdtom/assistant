@@ -1,20 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
 
 from assistant_app.agent_components.models import PlannerObservation
-from assistant_app.agent_components.render_helpers import _is_planner_command_success, _try_parse_json
-
-
-@dataclass(frozen=True)
-class JsonPlannerToolRoute:
-    tool: str
-    invalid_json_result: str
-    payload_executor: Callable[[dict[str, Any], str], PlannerObservation]
-    legacy_command_prefix: str | None = None
-    compat_action: str | None = None
+from assistant_app.agent_components.render_helpers import _is_planner_command_success
+from assistant_app.schemas.routing import JsonPlannerToolRoute
+from assistant_app.schemas.tools import parse_json_object
 
 
 def build_json_planner_tool_executor(
@@ -33,8 +24,8 @@ def build_json_planner_tool_executor(
             )
             if legacy_observation is not None:
                 return legacy_observation
-        payload = _try_parse_json(normalized_input)
-        if not isinstance(payload, dict):
+        payload = parse_json_object(normalized_input)
+        if payload is None:
             return PlannerObservation(
                 tool=route.tool,
                 input_text=action_input,

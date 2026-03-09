@@ -8,6 +8,7 @@ from assistant_app.agent_components.tools.planner_tool_routing import (
     JsonPlannerToolRoute,
     build_json_planner_tool_executor,
 )
+from pydantic import ValidationError
 
 
 class PlannerToolRoutingTest(unittest.TestCase):
@@ -88,6 +89,19 @@ class PlannerToolRoutingTest(unittest.TestCase):
         self.assertTrue(observation.ok)
         self.assertEqual(observation.tool, "thoughts")
         self.assertIn("想法列表", observation.result)
+
+    def test_json_route_rejects_blank_tool_name(self) -> None:
+        with self.assertRaises(ValidationError):
+            JsonPlannerToolRoute(
+                tool=" ",
+                invalid_json_result="invalid",
+                payload_executor=lambda _payload, _raw_input: PlannerObservation(
+                    tool="history",
+                    input_text="",
+                    ok=True,
+                    result="ok",
+                ),
+            )
 
 
 if __name__ == "__main__":

@@ -10,7 +10,13 @@ from urllib import request as urllib_request
 
 from pydantic import ValidationError
 
-from assistant_app.schemas.domain import SearchResult, WebPageFetchResult
+from assistant_app.schemas.domain import HttpUrlValue, SearchResult, WebPageFetchResult
+from assistant_app.schemas.search import (
+    BochaSearchRequestPayload,
+    BochaSearchRequestReranker,
+    BochaSearchResponsePayload,
+    BochaWebPageItem,
+)
 
 
 class SearchProvider(Protocol):
@@ -81,8 +87,8 @@ class BochaSearchProvider:
                 top_k=top_k,
                 use_reranker=True,
             )
-            if not isinstance(parsed, dict):
-                raise ValueError("bocha rerank response is not a JSON object")
+            if parsed is None:
+                raise ValueError("bocha rerank response does not match schema")
             rerank_results = _extract_bocha_results(parsed)
             _SEARCH_LOGGER.info(
                 "internet_search_rerank_done",
@@ -121,12 +127,12 @@ class BochaSearchProvider:
             )
             raise
 
-        if not isinstance(parsed, dict):
+        if parsed is None:
             _SEARCH_LOGGER.warning(
                 "internet_search_fallback_invalid_response",
                 extra={
                     "event": "internet_search_fallback_invalid_response",
-                    "context": {**log_context, "response_type": type(parsed).__name__},
+                    "context": {**log_context, "response_type": "schema_invalid"},
                 },
             )
             return []
@@ -141,7 +147,13 @@ class BochaSearchProvider:
         )
         return fallback_results
 
-    def _request_search(self, *, query: str, top_k: int, use_reranker: bool) -> object:
+    def _request_search(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        use_reranker: bool,
+    ) -> BochaSearchResponsePayload | None:
         request_context = {
             "query_preview": _text_preview(query),
             "query_length": len(query),
@@ -190,22 +202,28 @@ class BochaSearchProvider:
                 },
             },
         )
-        return json.loads(body)
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            return None
+        return _parse_bocha_response(parsed)
 
     def _build_payload(self, *, query: str, top_k: int, use_reranker: bool) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "query": query,
-            "summary": self.summary,
-            "count": BOCHA_MAX_COUNT,
-        }
+        reranker = None
         if use_reranker:
-            payload["reranker"] = {
-                "enable": True,
-                "apiKey": self.api_key,
-                "rerankTopK": max(top_k, 1),
-                "rerankModel": BOCHA_RERANK_MODEL,
-            }
-        return payload
+            reranker = BochaSearchRequestReranker(
+                enable=True,
+                apiKey=self.api_key,
+                rerankTopK=max(top_k, 1),
+                rerankModel=BOCHA_RERANK_MODEL,
+            )
+        payload = BochaSearchRequestPayload(
+            query=query,
+            summary=self.summary,
+            count=BOCHA_MAX_COUNT,
+            reranker=reranker,
+        )
+        return payload.model_dump(mode="python", exclude_none=True)
 
 
 def create_search_provider(
@@ -357,34 +375,25 @@ def _extract_bing_results(html_text: str, top_k: int = 3) -> list[SearchResult]:
     return results
 
 
-def _extract_bocha_results(payload: dict[str, object]) -> list[SearchResult]:
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return []
-    web_pages = data.get("webPages")
-    if not isinstance(web_pages, dict):
-        return []
-    raw_values = web_pages.get("value")
-    if not isinstance(raw_values, list):
+def _extract_bocha_results(payload: object) -> list[SearchResult]:
+    parsed = _parse_bocha_response(payload)
+    if parsed is None:
         return []
 
     results: list[SearchResult] = []
     seen_urls: set[str] = set()
-    for item in raw_values:
-        if not isinstance(item, dict):
+    for raw_item in parsed.raw_items():
+        item = _build_bocha_web_page_item(raw_item)
+        if item is None:
             continue
-        url = str(item.get("url") or "").strip()
-        if not _is_valid_result_url(url) or url in seen_urls:
-            continue
-        title = str(item.get("name") or "").strip()
-        if not title:
+        if item.url in seen_urls:
             continue
         snippet = _bocha_snippet(item)
-        result = _build_search_result(title=title, snippet=snippet, url=url)
+        result = _build_search_result(title=item.name, snippet=snippet, url=item.url)
         if result is None:
             continue
         results.append(result)
-        seen_urls.add(url)
+        seen_urls.add(item.url)
     return results
 
 
@@ -396,9 +405,11 @@ def _build_search_result(*, title: str, snippet: str, url: str) -> SearchResult 
 
 
 def _is_valid_result_url(url: str) -> bool:
-    lower = url.lower()
-    if not lower.startswith(("http://", "https://")):
+    try:
+        normalized = HttpUrlValue.model_validate({"url": url}).url
+    except ValidationError:
         return False
+    lower = normalized.lower()
     if "bing.com/search" in lower:
         return False
     return True
@@ -410,8 +421,8 @@ def _clean_html_text(raw: str) -> str:
     return " ".join(text.split()).strip()
 
 
-def _bocha_snippet(item: dict[str, object]) -> str:
-    summary = item.get("summary")
+def _bocha_snippet(item: BochaWebPageItem) -> str:
+    summary = item.summary
     if isinstance(summary, str):
         summary_text = summary.strip()
         if summary_text:
@@ -431,7 +442,7 @@ def _bocha_snippet(item: dict[str, object]) -> str:
         if summary_text:
             return summary_text
 
-    snippet = str(item.get("snippet") or "").strip()
+    snippet = item.snippet.strip()
     if snippet:
         return snippet
     return ""
@@ -442,15 +453,29 @@ def _normalize_query(query: str) -> str:
 
 
 def _normalize_fetch_url(url: str) -> str:
-    candidate = str(url or "").strip()
-    if not candidate:
+    try:
+        return HttpUrlValue.model_validate({"url": url}).url
+    except ValidationError:
         return ""
-    parsed = urllib_parse.urlparse(candidate)
-    if parsed.scheme not in {"http", "https"}:
-        return ""
-    if not parsed.netloc:
-        return ""
-    return candidate
+
+
+def _parse_bocha_response(payload: object) -> BochaSearchResponsePayload | None:
+    try:
+        return BochaSearchResponsePayload.model_validate(payload)
+    except ValidationError:
+        return None
+
+
+def _build_bocha_web_page_item(payload: object) -> BochaWebPageItem | None:
+    if not isinstance(payload, dict):
+        return None
+    try:
+        item = BochaWebPageItem.model_validate(payload)
+    except ValidationError:
+        return None
+    if not _is_valid_result_url(item.url):
+        return None
+    return item
 
 
 def _load_sync_playwright() -> Any:

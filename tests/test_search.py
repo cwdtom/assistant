@@ -210,6 +210,15 @@ class SearchProviderTest(unittest.TestCase):
         self.assertIn("internet_search_fallback_start", merged)
         self.assertIn("internet_search_fallback_done", merged)
 
+    def test_bocha_provider_returns_empty_when_fallback_response_shape_is_invalid(self) -> None:
+        provider = BochaSearchProvider(api_key="demo-key")
+        payload = {"data": {"webPages": {"value": "invalid"}}}
+
+        with patch("assistant_app.search.urllib_request.urlopen", return_value=_FakeHTTPResponse(payload)):
+            results = provider.search("bocha api", top_k=3)
+
+        self.assertEqual(results, [])
+
     def test_fetch_webpage_main_text_falls_back_to_requests_when_playwright_fails(self) -> None:
         expected = WebPageFetchResult(url="https://example.com/final", main_text="fallback body")
         with patch(
@@ -272,6 +281,10 @@ class SearchProviderTest(unittest.TestCase):
         self.assertIn("第二段", result.main_text)
         self.assertIn("第三行", result.main_text)
         self.assertNotIn("var a = 1", result.main_text)
+
+    def test_fetch_webpage_main_text_rejects_invalid_url_via_schema(self) -> None:
+        with self.assertRaises(ValueError):
+            fetch_webpage_main_text("ftp://example.com/resource")
 
     def test_extract_text_from_html_removes_script_style_and_keeps_visible_text(self) -> None:
         text = _extract_text_from_html(

@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import Field, TypeAdapter, ValidationError, field_validator
 
 from assistant_app.schemas.base import FrozenModel
-from assistant_app.schemas.domain import EVENT_TIME_FORMAT, _validate_datetime_text, _validate_http_url_text
+from assistant_app.schemas.domain import EVENT_TIME_FORMAT, HttpUrlValue, _validate_datetime_text
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, Any])
 _THOUGHT_STATUS_VALUES = ("未完成", "完成", "删除")
@@ -124,7 +124,7 @@ class InternetSearchFetchUrlArgs(ThoughtToolArgsBase):
     @field_validator("url")
     @classmethod
     def validate_url(cls, value: str) -> str:
-        return _validate_http_url_text(value, field_name="url")
+        return HttpUrlValue.model_validate({"url": value}).url
 
 
 class AskUserArgs(ThoughtToolArgsBase):
