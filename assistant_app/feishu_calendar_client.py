@@ -3,7 +3,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from assistant_app.schemas.feishu import FeishuCalendarEvent, parse_feishu_calendar_event
+from assistant_app.schemas.feishu import (
+    FeishuCalendarEvent,
+    inspect_feishu_calendar_event_payload,
+    parse_feishu_calendar_event,
+)
 
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
 _DEFAULT_LIST_PAGE_SIZE = 1000
@@ -152,20 +156,16 @@ class FeishuCalendarClient:
         parsed = parse_feishu_calendar_event(payload, default_timezone=self._default_timezone)
         if parsed is not None:
             return parsed
-        event_id = _first_non_empty(_read_path(payload, "event_id"))
-        if event_id is None:
-            self._warn("skip event without event_id")
-            return None
-        start_timestamp = _parse_int(_read_path(payload, "start_time.time_stamp"))
-        if start_timestamp is None:
-            start_timestamp = _parse_int(_read_path(payload, "start_time.timestamp"))
-        end_timestamp = _parse_int(_read_path(payload, "end_time.time_stamp"))
-        if end_timestamp is None:
-            end_timestamp = _parse_int(_read_path(payload, "end_time.timestamp"))
-        if start_timestamp is None or end_timestamp is None:
-            self._warn("skip event without timestamp range")
-            return None
-        self._warn("skip event with invalid schema")
+        _, reason, has_event_id, has_start, has_end = inspect_feishu_calendar_event_payload(
+            payload,
+            default_timezone=self._default_timezone,
+        )
+        self._log_event_schema_invalid(
+            reason=reason or "unknown",
+            has_event_id=has_event_id,
+            has_start=has_start,
+            has_end=has_end,
+        )
         return None
 
     def _ensure_api_client(self) -> Any:
@@ -217,6 +217,30 @@ class FeishuCalendarClient:
         if logger is None:
             return
         logger.warning(message, extra={"event": "feishu_calendar_client_warning"})
+
+    def _log_event_schema_invalid(
+        self,
+        *,
+        reason: str,
+        has_event_id: bool,
+        has_start: bool,
+        has_end: bool,
+    ) -> None:
+        logger = self._logger
+        if logger is None:
+            return
+        logger.warning(
+            "feishu calendar event schema invalid",
+            extra={
+                "event": "feishu_calendar_event_schema_invalid",
+                "context": {
+                    "reason": reason,
+                    "has_event_id": has_event_id,
+                    "has_start": has_start,
+                    "has_end": has_end,
+                },
+            },
+        )
 
 
 def _read_path(data: Any, path: str) -> Any:

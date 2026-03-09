@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 import logging
 import threading
 import time
@@ -15,6 +17,7 @@ from assistant_app.feishu_adapter import (
     split_semantic_messages,
     split_text_chunks,
 )
+from assistant_app.logging_setup import JsonLinesFormatter
 
 
 class _FakeAgent:
@@ -273,6 +276,106 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self.assertIsNone(extract_text_message(non_text))
         self.assertIsNone(extract_text_message(group))
+
+    def test_handle_event_logs_invalid_payload_reason(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.feishu_adapter.invalid_payload")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+            processor = FeishuEventProcessor(
+                agent=_FakeAgent(),
+                send_text=lambda _chat_id, _text: None,
+                send_reaction=lambda _message_id, _emoji_type: None,
+                logger=logger,
+            )
+
+            processor.handle_event(
+                {
+                    "event": {
+                        "sender": {"sender_type": "user"},
+                        "message": {
+                            "message_type": "text",
+                            "chat_type": "group",
+                            "message_id": "om_group",
+                            "chat_id": "oc_group",
+                            "content": '{"text":"你好"}',
+                        },
+                    }
+                }
+            )
+
+            records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+            invalid_events = [item for item in records if item.get("event") == "feishu_event_payload_invalid"]
+            self.assertEqual(len(invalid_events), 1)
+            self.assertEqual(
+                invalid_events[0].get("context"),
+                {
+                    "reason": "unsupported_chat_type",
+                    "message_type": "text",
+                    "chat_type": "group",
+                },
+            )
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_handle_event_valid_payload_does_not_log_invalid_event(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.feishu_adapter.valid_payload")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+            agent = _FakeAgent(response="ok")
+            processor = FeishuEventProcessor(
+                agent=agent,
+                send_text=lambda _chat_id, _text: None,
+                send_reaction=lambda _message_id, _emoji_type: None,
+                logger=logger,
+            )
+
+            processor.handle_event(
+                {
+                    "event": {
+                        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_valid"}},
+                        "message": {
+                            "message_type": "text",
+                            "chat_type": "p2p",
+                            "message_id": "om_valid",
+                            "chat_id": "oc_valid",
+                            "content": '{"text":"你好"}',
+                        },
+                    }
+                }
+            )
+
+            self._wait_until(lambda: len(agent.inputs) == 1)
+            records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+            events = [item.get("event") for item in records]
+            self.assertNotIn("feishu_event_payload_invalid", events)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
 
     def test_message_deduplicator_respects_ttl(self) -> None:
         deduper = MessageDeduplicator(ttl_seconds=10)

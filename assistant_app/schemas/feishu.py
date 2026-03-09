@@ -184,33 +184,37 @@ def parse_feishu_message_text(raw_content: str) -> str:
         return content
 
 
-def parse_feishu_text_message(raw_payload: Any) -> FeishuTextMessage | None:
+def inspect_feishu_text_message_payload(
+    raw_payload: Any,
+) -> tuple[FeishuTextMessage | None, str | None, str | None, str | None]:
     try:
         envelope = FeishuInboundEventEnvelope.model_validate(raw_payload)
     except ValidationError:
-        return None
+        return None, "invalid_event_envelope", None, None
 
     message = envelope.message_payload()
     sender = envelope.sender_payload()
+    message_type = message.message_type if message is not None else None
+    chat_type = message.chat_type if message is not None else None
     if message is None:
-        return None
+        return None, "missing_message_payload", message_type, chat_type
     if message.message_type not in {"text", "post"}:
-        return None
+        return None, "unsupported_message_type", message_type, chat_type
     if message.chat_type and message.chat_type != "p2p":
-        return None
+        return None, "unsupported_chat_type", message_type, chat_type
     if sender is not None and sender.sender_type and sender.sender_type != "user":
-        return None
+        return None, "unsupported_sender_type", message_type, chat_type
     if message.message_id is None or message.chat_id is None or message.content is None:
-        return None
+        return None, "missing_required_fields", message_type, chat_type
 
     text = message.content.strip()
     if message.message_type == "text":
         text = parse_feishu_message_text(message.content).strip()
     if not text:
-        return None
+        return None, "blank_text", message_type, chat_type
 
     try:
-        return FeishuTextMessage.model_validate(
+        parsed = FeishuTextMessage.model_validate(
             {
                 "message_id": message.message_id,
                 "chat_id": message.chat_id,
@@ -219,28 +223,44 @@ def parse_feishu_text_message(raw_payload: Any) -> FeishuTextMessage | None:
             }
         )
     except ValidationError:
-        return None
+        return None, "message_schema_invalid", message_type, chat_type
+    return parsed, None, message_type, chat_type
 
 
-def parse_feishu_calendar_event(raw_payload: Any, *, default_timezone: str) -> FeishuCalendarEvent | None:
+def parse_feishu_text_message(raw_payload: Any) -> FeishuTextMessage | None:
+    parsed, _, _, _ = inspect_feishu_text_message_payload(raw_payload)
+    return parsed
+
+
+def inspect_feishu_calendar_event_payload(
+    raw_payload: Any,
+    *,
+    default_timezone: str,
+) -> tuple[FeishuCalendarEvent | None, str | None, bool, bool, bool]:
+    has_event_id = _has_non_empty_string(_read_path(raw_payload, "event_id"))
+    has_start = _read_path(raw_payload, "start_time") is not None
+    has_end = _read_path(raw_payload, "end_time") is not None
     try:
         payload = FeishuCalendarEventPayload.model_validate(raw_payload)
     except ValidationError:
-        return None
+        return None, "invalid_calendar_event_payload", has_event_id, has_start, has_end
 
+    has_event_id = payload.event_id is not None
+    has_start = payload.start_time is not None
+    has_end = payload.end_time is not None
     if payload.event_id is None:
-        return None
+        return None, "missing_event_id", has_event_id, has_start, has_end
     start_timestamp = payload.start_time.resolved_timestamp() if payload.start_time is not None else None
     end_timestamp = payload.end_time.resolved_timestamp() if payload.end_time is not None else None
     if start_timestamp is None or end_timestamp is None:
-        return None
+        return None, "missing_timestamp_range", has_event_id, has_start, has_end
     timezone = (
         payload.start_time.timezone if payload.start_time and payload.start_time.timezone
         else payload.end_time.timezone if payload.end_time and payload.end_time.timezone
         else default_timezone.strip() or "Asia/Shanghai"
     )
     try:
-        return FeishuCalendarEvent.model_validate(
+        parsed = FeishuCalendarEvent.model_validate(
             {
                 "event_id": payload.event_id,
                 "summary": payload.summary,
@@ -252,7 +272,16 @@ def parse_feishu_calendar_event(raw_payload: Any, *, default_timezone: str) -> F
             }
         )
     except ValidationError:
-        return None
+        return None, "calendar_event_schema_invalid", has_event_id, has_start, has_end
+    return parsed, None, has_event_id, has_start, has_end
+
+
+def parse_feishu_calendar_event(raw_payload: Any, *, default_timezone: str) -> FeishuCalendarEvent | None:
+    parsed, _, _, _, _ = inspect_feishu_calendar_event_payload(
+        raw_payload,
+        default_timezone=default_timezone,
+    )
+    return parsed
 
 
 def _parse_optional_int(value: Any) -> int | None:
@@ -280,12 +309,30 @@ def _parse_optional_unix_seconds(value: Any) -> int | None:
     return parsed
 
 
+def _read_path(data: Any, path: str) -> Any:
+    current = data
+    for part in path.split("."):
+        if current is None:
+            return None
+        if isinstance(current, dict):
+            current = current.get(part)
+            continue
+        current = getattr(current, part, None)
+    return current
+
+
+def _has_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 __all__ = [
     "FeishuCalendarEvent",
     "FeishuPendingTaskInput",
     "FeishuProactiveTextRequest",
     "FeishuSubtaskResultUpdate",
     "FeishuTextMessage",
+    "inspect_feishu_calendar_event_payload",
+    "inspect_feishu_text_message_payload",
     "parse_feishu_calendar_event",
     "parse_feishu_message_text",
     "parse_feishu_text_message",

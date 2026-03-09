@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import json
+import logging
 import sqlite3
 import tempfile
 import unittest
@@ -7,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from assistant_app.db import AssistantDB
+from assistant_app.logging_setup import JsonLinesFormatter
 
 
 class AssistantDBTest(unittest.TestCase):
@@ -536,6 +540,74 @@ class AssistantDBTest(unittest.TestCase):
                 event_time="bad-time",
             )
         )
+
+    def test_db_logs_input_validation_failure_for_invalid_update_schedule(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.db.validation_failure")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+            db = AssistantDB(self.db_path, logger=logger)
+            schedule_id = db.add_schedule("正常日程", "2026-02-20 10:00")
+
+            self.assertFalse(
+                db.update_schedule(
+                    schedule_id,
+                    title="正常日程",
+                    event_time="2026-02-20 10:30",
+                    duration_minutes=0,
+                )
+            )
+
+            records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+            invalid_events = [item for item in records if item.get("event") == "db_input_validation_failed"]
+            self.assertEqual(len(invalid_events), 1)
+            context = invalid_events[0].get("context")
+            self.assertIsInstance(context, dict)
+            assert isinstance(context, dict)
+            self.assertEqual(context.get("method"), "update_schedule")
+            self.assertIn("duration_minutes", str(context.get("reason")))
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    def test_db_valid_write_does_not_log_input_validation_failure(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.db.valid_write")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+            db = AssistantDB(self.db_path, logger=logger)
+
+            schedule_id = db.add_schedule("正常日程", "2026-02-20 10:00")
+            self.assertGreater(schedule_id, 0)
+
+            records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+            events = [item.get("event") for item in records]
+            self.assertNotIn("db_input_validation_failed", events)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
 
     def test_thought_crud_and_soft_delete(self) -> None:
         thought_id = self.db.add_thought("记得买咖啡豆")

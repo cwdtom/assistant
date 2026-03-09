@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import json
+import logging
 import unittest
 from types import SimpleNamespace
 
@@ -8,6 +11,7 @@ from assistant_app.feishu_calendar_client import (
     FeishuCalendarClient,
     FeishuCalendarClientError,
 )
+from assistant_app.logging_setup import JsonLinesFormatter
 from assistant_app.schemas.feishu import FeishuCalendarEvent
 from pydantic import ValidationError
 
@@ -191,6 +195,23 @@ class FeishuCalendarClientTest(unittest.TestCase):
         self.assertEqual(items[0].timezone, "Asia/Shanghai")
 
     def test_list_events_skips_invalid_item_schema(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.feishu_calendar_client.invalid_item")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        logger.handlers.clear()
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(JsonLinesFormatter())
+        logger.addHandler(handler)
+        client = FeishuCalendarClient(
+            app_id="app_id",
+            app_secret="app_secret",
+            api_client=_FakeApiClient(self.calendar_api),
+            calendar_module=calendar_v4,
+            logger=logger,
+        )
         self.calendar_api.list_responses = [
             _FakeResponse(
                 ok=True,
@@ -207,13 +228,85 @@ class FeishuCalendarClientTest(unittest.TestCase):
             )
         ]
 
-        items = self.client.list_events(
-            calendar_id="cal_1",
-            start_timestamp=1699990000,
-            end_timestamp=1700100000,
-        )
+        try:
+            items = client.list_events(
+                calendar_id="cal_1",
+                start_timestamp=1699990000,
+                end_timestamp=1700100000,
+            )
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+            for original in original_handlers:
+                logger.addHandler(original)
+            logger.propagate = original_propagate
 
         self.assertEqual(items, [])
+        records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+        invalid_events = [item for item in records if item.get("event") == "feishu_calendar_event_schema_invalid"]
+        self.assertEqual(len(invalid_events), 1)
+        self.assertEqual(
+            invalid_events[0].get("context"),
+            {
+                "reason": "missing_timestamp_range",
+                "has_event_id": True,
+                "has_start": True,
+                "has_end": True,
+            },
+        )
+
+    def test_list_events_valid_item_does_not_log_invalid_schema_event(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.feishu_calendar_client.valid_item")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        logger.handlers.clear()
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(JsonLinesFormatter())
+        logger.addHandler(handler)
+        client = FeishuCalendarClient(
+            app_id="app_id",
+            app_secret="app_secret",
+            api_client=_FakeApiClient(self.calendar_api),
+            calendar_module=calendar_v4,
+            logger=logger,
+        )
+        self.calendar_api.list_responses = [
+            _FakeResponse(
+                ok=True,
+                data={
+                    "has_more": False,
+                    "items": [
+                        {
+                            "event_id": "evt_ok",
+                            "summary": "正常事件",
+                            "start_time": {"time_stamp": "1700000000", "timezone": "Asia/Shanghai"},
+                            "end_time": {"time_stamp": "1700003600", "timezone": "Asia/Shanghai"},
+                        }
+                    ],
+                },
+            )
+        ]
+
+        try:
+            items = client.list_events(
+                calendar_id="cal_1",
+                start_timestamp=1699990000,
+                end_timestamp=1700100000,
+            )
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+            for original in original_handlers:
+                logger.addHandler(original)
+            logger.propagate = original_propagate
+
+        self.assertEqual(len(items), 1)
+        records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+        events = [item.get("event") for item in records]
+        self.assertNotIn("feishu_calendar_event_schema_invalid", events)
 
     def test_feishu_calendar_event_requires_non_empty_identity_fields(self) -> None:
         with self.assertRaises(ValidationError):

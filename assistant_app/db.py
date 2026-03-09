@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -40,8 +41,12 @@ THOUGHT_STATUS_VALUES = (
 )
 
 class AssistantDB:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, logger: logging.Logger | None = None) -> None:
         self.db_path = db_path
+        self._logger = logger or logging.getLogger("assistant_app.app")
+        self._logger.propagate = False
+        if not self._logger.handlers:
+            self._logger.addHandler(logging.NullHandler())
         self._ensure_parent_dir()
         self._init_schema()
 
@@ -369,6 +374,7 @@ class AssistantDB:
                 }
             )
         except ValidationError as exc:
+            self._log_input_validation_failed(method="add_schedule", exc=exc)
             raise ValueError(str(exc)) from exc
 
         timestamp = _now_iso()
@@ -410,6 +416,7 @@ class AssistantDB:
                 }
             )
         except ValidationError as exc:
+            self._log_input_validation_failed(method="add_schedules", exc=exc)
             raise ValueError(str(exc)) from exc
 
         timestamp = _now_iso()
@@ -456,7 +463,8 @@ class AssistantDB:
                     "enabled": enabled,
                 }
             )
-        except ValidationError:
+        except ValidationError as exc:
+            self._log_input_validation_failed(method="set_schedule_recurrence", exc=exc)
             return False
 
         timestamp = _now_iso()
@@ -625,7 +633,8 @@ class AssistantDB:
 
         try:
             payload = ScheduleUpdateInput.model_validate(raw_payload)
-        except ValidationError:
+        except ValidationError as exc:
+            self._log_input_validation_failed(method="update_schedule", exc=exc)
             return False
 
         fields = ["title = ?", "event_time = ?"]
@@ -700,6 +709,7 @@ class AssistantDB:
         try:
             payload = ThoughtCreateInput.model_validate({"content": content, "status": status})
         except ValidationError as exc:
+            self._log_input_validation_failed(method="add_thought", exc=exc)
             raise ValueError(str(exc)) from exc
 
         timestamp = _now_iso()
@@ -750,6 +760,7 @@ class AssistantDB:
         try:
             payload = ThoughtUpdateInput.model_validate(raw_payload)
         except ValidationError as exc:
+            self._log_input_validation_failed(method="update_thought", exc=exc)
             raise ValueError(str(exc)) from exc
 
         fields = ["content = ?"]
@@ -766,6 +777,23 @@ class AssistantDB:
                 values,
             )
             return cur.rowcount > 0
+
+    def _log_input_validation_failed(self, *, method: str, exc: ValidationError) -> None:
+        errors = exc.errors(include_url=False)
+        first_error = errors[0] if errors else {}
+        location = ".".join(str(part) for part in first_error.get("loc", ())) or "unknown"
+        message = str(first_error.get("msg") or "validation error").strip()
+        reason = f"{location}: {message}"
+        self._logger.warning(
+            "db input validation failed",
+            extra={
+                "event": "db_input_validation_failed",
+                "context": {
+                    "method": method,
+                    "reason": reason,
+                },
+            },
+        )
 
     def soft_delete_thought(self, thought_id: int) -> bool:
         timestamp = _now_iso()

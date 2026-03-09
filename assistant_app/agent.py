@@ -107,6 +107,7 @@ from assistant_app.schemas.planner import (
     ThoughtResponsePayload,
     parse_tool_reply_payload,
 )
+from assistant_app.schemas.tools import parse_json_object, validate_thought_tool_arguments
 from assistant_app.search import BingSearchProvider, SearchProvider, fetch_webpage_main_text
 
 __all__ = [
@@ -490,11 +491,23 @@ class AssistantAgent:
             )
             payload = _try_parse_json(_strip_think_blocks(raw).strip())
             if not isinstance(payload, dict):
+                self._log_planner_payload_validation_failure(
+                    phase=phase,
+                    reason="response_not_json_object",
+                    payload_type=self._classify_json_text_payload(raw),
+                    attempt=attempt,
+                )
                 continue
 
             decision = normalizer(payload)
             if decision is not None:
                 return payload_builder(decision, raw)
+            self._log_planner_payload_validation_failure(
+                phase=phase,
+                reason="schema_validation_failed",
+                payload_type="dict",
+                attempt=attempt,
+            )
         return None
 
     def _request_thought_payload_with_retry(
@@ -863,11 +876,26 @@ class AssistantAgent:
             raw = self._llm_reply_for_planner(messages)
             parsed_response = _try_parse_json(_strip_think_blocks(raw).strip())
             if not isinstance(parsed_response, dict):
+                self._log_planner_payload_validation_failure(
+                    phase="thought",
+                    reason="response_not_json_object",
+                    payload_type=self._classify_json_text_payload(raw),
+                )
                 return None
             decision = normalize_thought_decision(parsed_response)
             if decision is None:
+                self._log_planner_payload_validation_failure(
+                    phase="thought",
+                    reason="schema_validation_failed",
+                    payload_type="dict",
+                )
                 return None
             if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
+                self._log_planner_payload_validation_failure(
+                    phase="thought",
+                    reason="tool_not_allowed",
+                    payload_type="dict",
+                )
                 return None
             return ThoughtResponsePayload(decision=decision)
 
@@ -882,6 +910,11 @@ class AssistantAgent:
 
         tool_response = parse_tool_reply_payload(raw_tool_response)
         if tool_response is None:
+            self._log_planner_payload_validation_failure(
+                phase="thought",
+                reason="tool_reply_payload_invalid",
+                payload_type=type(raw_tool_response).__name__,
+            )
             return None
 
         reasoning_content = str(tool_response.reasoning_content or "").strip()
@@ -899,10 +932,34 @@ class AssistantAgent:
                     f"thought 阶段每轮最多调用 1 个工具（本轮收到 {len(tool_calls)} 个），请重试。"
                 )
             first_tool_call = tool_calls[0]
+            tool_name = first_tool_call.function.name.strip().lower()
+            parsed_arguments = parse_json_object(first_tool_call.function.arguments)
+            if parsed_arguments is None:
+                self._log_thought_tool_arguments_validation_failure(
+                    tool_name=tool_name,
+                    reason="arguments_not_json_object",
+                )
+                return None
+            validated_arguments = validate_thought_tool_arguments(tool_name, parsed_arguments)
+            if validated_arguments is None:
+                self._log_thought_tool_arguments_validation_failure(
+                    tool_name=tool_name,
+                    reason="arguments_schema_invalid_or_unknown_tool",
+                )
+                return None
             decision = normalize_thought_tool_call(first_tool_call.model_dump())
             if decision is None:
+                self._log_thought_tool_arguments_validation_failure(
+                    tool_name=tool_name,
+                    reason="decision_mapping_failed",
+                )
                 return None
             if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
+                self._log_planner_payload_validation_failure(
+                    phase="thought",
+                    reason="tool_not_allowed",
+                    payload_type="tool_call",
+                )
                 return None
             call_id = first_tool_call.id.strip() or None
             return ThoughtResponsePayload(
@@ -914,11 +971,26 @@ class AssistantAgent:
         content = str(assistant_message.content or "").strip()
         parsed_content = _try_parse_json(_strip_think_blocks(content))
         if not isinstance(parsed_content, dict):
+            self._log_planner_payload_validation_failure(
+                phase="thought",
+                reason="response_not_json_object",
+                payload_type=self._classify_json_text_payload(content),
+            )
             return None
         decision = normalize_thought_decision(parsed_content)
         if decision is None:
+            self._log_planner_payload_validation_failure(
+                phase="thought",
+                reason="schema_validation_failed",
+                payload_type="dict",
+            )
             return None
         if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
+            self._log_planner_payload_validation_failure(
+                phase="thought",
+                reason="tool_not_allowed",
+                payload_type="dict",
+            )
             return None
         return ThoughtResponsePayload(
             decision=decision,
@@ -947,6 +1019,45 @@ class AssistantAgent:
             return "unknown"
         phase = str(payload.get("phase") or "").strip().lower()
         return phase or "unknown"
+
+    @staticmethod
+    def _classify_json_text_payload(raw_text: str) -> str:
+        text = raw_text.strip()
+        if not text:
+            return "empty"
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return "invalid_json"
+        return type(parsed).__name__
+
+    def _log_planner_payload_validation_failure(
+        self,
+        *,
+        phase: str,
+        reason: str,
+        payload_type: str,
+        attempt: int | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "event": "planner_payload_validation_failed",
+            "phase": phase,
+            "reason": reason,
+            "payload_type": payload_type,
+        }
+        if attempt is not None:
+            payload["attempt"] = attempt
+        self._log_llm_trace_event(payload)
+
+    def _log_thought_tool_arguments_validation_failure(self, *, tool_name: str, reason: str) -> None:
+        self._log_llm_trace_event(
+            {
+                "event": "thought_tool_arguments_validation_failed",
+                "phase": "thought",
+                "tool_name": tool_name,
+                "reason": reason,
+            }
+        )
 
     def _log_llm_trace_event(self, payload: dict[str, Any]) -> None:
         try:

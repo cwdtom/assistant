@@ -16,6 +16,7 @@ from assistant_app.schemas.feishu import (
     FeishuProactiveTextRequest,
     FeishuSubtaskResultUpdate,
     FeishuTextMessage,
+    inspect_feishu_text_message_payload,
     parse_feishu_message_text,
     parse_feishu_text_message,
 )
@@ -211,8 +212,19 @@ class FeishuEventProcessor:
                 )
 
     def handle_event(self, event_payload: Any) -> None:
-        message = extract_text_message(event_payload)
+        message, invalid_reason, message_type, chat_type = inspect_feishu_text_message_payload(event_payload)
         if message is None:
+            self._logger.warning(
+                "feishu event payload invalid",
+                extra={
+                    "event": "feishu_event_payload_invalid",
+                    "context": {
+                        "reason": invalid_reason or "unknown",
+                        "message_type": message_type,
+                        "chat_type": chat_type,
+                    },
+                },
+            )
             return
         self._logger.info(
             "feishu inbound message received: message_id=%s chat_id=%s open_id=%s text=%s",

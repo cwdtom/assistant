@@ -124,6 +124,10 @@ def _extract_phase_from_messages(messages: list[dict[str, str]]) -> str:
     return str(payload.get("phase") or "").strip().lower()
 
 
+def _parse_json_lines(text: str) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 def _extract_payload_from_messages(messages: list[dict[str, str]]) -> dict[str, Any]:
     parsed = _try_parse_json(messages[-1].get("content", ""))
     if isinstance(parsed, dict):
@@ -1844,15 +1848,109 @@ class AssistantAgentTest(unittest.TestCase):
             logger.removeHandler(handler)
             handler.close()
 
-        lines = [line for line in stream.getvalue().splitlines() if line.strip()]
-        records = [json.loads(line) for line in lines]
+        records = _parse_json_lines(stream.getvalue())
         events = [item.get("event") for item in records]
         self.assertIn("llm_request", events)
         self.assertIn("llm_response", events)
+        self.assertNotIn("planner_payload_validation_failed", events)
+        self.assertNotIn("thought_tool_arguments_validation_failed", events)
         phases = [str(item.get("phase")) for item in records if item.get("event") == "llm_request"]
         self.assertIn("plan", phases)
         self.assertIn("thought", phases)
         self.assertIn("replan", phases)
+
+    def test_planner_payload_validation_failure_is_logged_for_invalid_json_response(self) -> None:
+        fake_llm = FakeLLMClient(responses=["not-json"])
+        stream = io.StringIO()
+        logger = logging.getLogger("tests.llm_trace.invalid_plan")
+        logger.handlers.clear()
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        try:
+            agent = AssistantAgent(
+                db=self.db,
+                llm_client=fake_llm,
+                search_provider=FakeSearchProvider(),
+                llm_trace_logger=logger,
+                plan_replan_retry_count=0,
+            )
+            agent.handle_input("测试 planner 非法响应")
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+
+        records = _parse_json_lines(stream.getvalue())
+        failure_events = [item for item in records if item.get("event") == "planner_payload_validation_failed"]
+        self.assertEqual(len(failure_events), 1)
+        self.assertEqual(failure_events[0].get("phase"), "plan")
+        self.assertEqual(failure_events[0].get("reason"), "response_not_json_object")
+        self.assertEqual(failure_events[0].get("payload_type"), "invalid_json")
+
+    def test_thought_tool_argument_validation_failure_is_logged(self) -> None:
+        class _InvalidThoughtToolArgsLLM(FakeToolCallingLLMClient):
+            def reply_with_tools(
+                self,
+                messages: list[dict[str, Any]],
+                *,
+                tools: list[dict[str, Any]],
+                tool_choice: str = "auto",
+            ) -> dict[str, Any]:
+                phase = _extract_phase_from_messages(messages)
+                if phase != "thought":
+                    return super().reply_with_tools(messages, tools=tools, tool_choice=tool_choice)
+                self.calls.append(messages)
+                self.tool_schema_calls.append(deepcopy(tools))
+                self.model_call_count += 1
+                return {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_invalid",
+                                "type": "function",
+                                "function": {
+                                    "name": "internet_search_fetch_url",
+                                    "arguments": json.dumps({"url": "ftp://example.com"}, ensure_ascii=False),
+                                },
+                            }
+                        ],
+                    },
+                    "reasoning_content": None,
+                }
+
+        fake_llm = _InvalidThoughtToolArgsLLM(responses=[_planner_planned(["抓取网页"])])
+        stream = io.StringIO()
+        logger = logging.getLogger("tests.llm_trace.invalid_thought_args")
+        logger.handlers.clear()
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        try:
+            agent = AssistantAgent(
+                db=self.db,
+                llm_client=fake_llm,
+                search_provider=FakeSearchProvider(),
+                llm_trace_logger=logger,
+                plan_replan_retry_count=0,
+                plan_replan_max_steps=1,
+            )
+            agent.handle_input("测试 thought 工具参数非法")
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+
+        records = _parse_json_lines(stream.getvalue())
+        failure_events = [
+            item for item in records if item.get("event") == "thought_tool_arguments_validation_failed"
+        ]
+        self.assertEqual(len(failure_events), 1)
+        self.assertEqual(failure_events[0].get("phase"), "thought")
+        self.assertEqual(failure_events[0].get("tool_name"), "internet_search_fetch_url")
+        self.assertEqual(failure_events[0].get("reason"), "arguments_schema_invalid_or_unknown_tool")
 
     def test_agent_default_trace_logger_uses_null_handler_without_propagation(self) -> None:
         logger = logging.getLogger("assistant_app.llm_trace")
