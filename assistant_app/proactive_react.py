@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
 
-from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
-from assistant_app.schemas.planner import AssistantToolMessage, ProactiveDoneArguments, normalize_tool_call_payload
+from assistant_app.schemas.planner import AssistantToolMessage, normalize_tool_call_payload
+from assistant_app.schemas.proactive import ProactiveDecision, ProactivePromptPayload
 from assistant_app.schemas.tools import parse_json_object
 
 PROACTIVE_REACT_SYSTEM_PROMPT = """
@@ -32,14 +31,6 @@ PROACTIVE_REACT_SYSTEM_PROMPT = """
 - 不要输出额外解释性前后缀。
 """.strip()
 
-
-@dataclass(frozen=True)
-class ProactiveDecision:
-    score: int
-    message: str
-    reason: str
-
-
 class ProactiveReactRunner:
     def __init__(
         self,
@@ -55,7 +46,7 @@ class ProactiveReactRunner:
         self._logger = logger
         self._allowed_tool_names = _extract_allowed_tool_names()
 
-    def run_once(self, *, context_payload: dict[str, Any]) -> ProactiveDecision | None:
+    def run_once(self, *, context_payload: ProactivePromptPayload | dict[str, Any]) -> ProactiveDecision | None:
         llm_client = self._llm_client
         if llm_client is None:
             self._logger.warning(
@@ -71,10 +62,18 @@ class ProactiveReactRunner:
             )
             return None
 
+        normalized_context = _normalize_context_payload(context_payload)
+        if normalized_context is None:
+            self._logger.warning(
+                "proactive context payload invalid",
+                extra={"event": "proactive_context_payload_invalid"},
+            )
+            return None
+
         tools = build_proactive_tool_schemas()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": PROACTIVE_REACT_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(normalized_context.model_dump(mode="json"), ensure_ascii=False)},
         ]
         self._logger.info(
             "proactive react started",
@@ -82,11 +81,8 @@ class ProactiveReactRunner:
                 "event": "proactive_react_start",
                 "context": {
                     "max_steps": self._max_steps,
-                    "score_threshold": _extract_score_threshold(context_payload),
-                    "has_user_profile": bool(
-                        isinstance(context_payload.get("user_profile"), dict)
-                        and bool(context_payload["user_profile"].get("content"))
-                    ),
+                    "score_threshold": normalized_context.score_threshold,
+                    "has_user_profile": bool(normalized_context.user_profile.content),
                 },
             },
         )
@@ -132,7 +128,7 @@ class ProactiveReactRunner:
             if tool_name == "done":
                 decision = _normalize_done_arguments(
                     arguments,
-                    score_threshold=_extract_score_threshold(context_payload),
+                    score_threshold=normalized_context.score_threshold,
                 )
                 if decision is None:
                     messages.append(
@@ -251,32 +247,29 @@ def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
     return parsed
 
 
+def _normalize_context_payload(
+    context_payload: ProactivePromptPayload | dict[str, Any],
+) -> ProactivePromptPayload | None:
+    if isinstance(context_payload, ProactivePromptPayload):
+        return context_payload
+    try:
+        return ProactivePromptPayload.model_validate(context_payload)
+    except ValidationError:
+        return None
+
+
 def _normalize_done_arguments(
     arguments: dict[str, Any],
     *,
     score_threshold: int,
 ) -> ProactiveDecision | None:
     try:
-        parsed = ProactiveDoneArguments.model_validate(arguments)
+        parsed = ProactiveDecision.model_validate(arguments)
     except ValidationError:
         return None
-    normalized_message = parsed.message.strip()
-    if parsed.score >= score_threshold and not normalized_message:
+    if parsed.score >= score_threshold and not parsed.message:
         return None
-    return ProactiveDecision(
-        score=parsed.score,
-        message=normalized_message,
-        reason=parsed.reason.strip(),
-    )
-
-
-def _extract_score_threshold(context_payload: dict[str, Any]) -> int:
-    policy = context_payload.get("policy")
-    if isinstance(policy, dict):
-        raw_value = policy.get("score_threshold")
-        if isinstance(raw_value, int) and not isinstance(raw_value, bool) and 0 <= raw_value <= 100:
-            return raw_value
-    return DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
+    return parsed
 
 
 def _extract_allowed_tool_names() -> set[str]:

@@ -7,8 +7,16 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any, Protocol
+
+from pydantic import ValidationError
+
+from assistant_app.schemas.feishu import (
+    FeishuPendingTaskInput,
+    FeishuProactiveTextRequest,
+    FeishuSubtaskResultUpdate,
+    FeishuTextMessage,
+)
 
 DEFAULT_FEISHU_SEND_RETRY_COUNT = 3
 DEFAULT_FEISHU_SEND_RETRY_BACKOFF_SECONDS = 0.5
@@ -25,26 +33,8 @@ class AgentLike(Protocol):
     def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None: ...
 
 
-@dataclass(frozen=True)
-class FeishuTextMessage:
-    message_id: str
-    chat_id: str
-    open_id: str | None
-    text: str
-
-
-@dataclass
-class _PendingTaskInput:
-    chat_id: str
-    text: str
-    latest_message_id: str
-
-
-@dataclass(frozen=True)
-class _SubtaskResultUpdate:
-    chat_id: str
-    message_id: str
-    result: str
+_PendingTaskInput = FeishuPendingTaskInput
+_SubtaskResultUpdate = FeishuSubtaskResultUpdate
 
 
 class MessageDeduplicator:
@@ -152,12 +142,17 @@ def extract_text_message(event_payload: Any) -> FeishuTextMessage | None:
         _read_path(event_payload, "sender.sender_id.open_id"),
     )
 
-    return FeishuTextMessage(
-        message_id=message_id,
-        chat_id=chat_id,
-        open_id=open_id,
-        text=text,
-    )
+    try:
+        return FeishuTextMessage.model_validate(
+            {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "open_id": open_id,
+                "text": text,
+            }
+        )
+    except ValidationError:
+        return None
 
 
 def convert_message_to_text(*, message_type: str, raw_content: str) -> str:
@@ -588,28 +583,37 @@ class FeishuLongConnectionRunner:
                 self._logger.warning("failed to stop feishu ws client", exc_info=True)
 
     def send_proactive_text(self, *, open_id: str, text: str) -> None:
-        normalized_open_id = open_id.strip()
-        normalized_text = text.strip()
-        if not normalized_open_id:
-            raise ValueError("open_id is required")
-        if not normalized_text:
-            raise ValueError("text is required")
+        try:
+            request = FeishuProactiveTextRequest.model_validate(
+                {
+                    "open_id": open_id,
+                    "text": text,
+                }
+            )
+        except ValidationError as exc:
+            first_error = exc.errors()[0] if exc.errors() else {}
+            field_name = str(first_error.get("loc", [""])[0])
+            if field_name == "open_id":
+                raise ValueError("open_id is required") from exc
+            if field_name == "text":
+                raise ValueError("text is required") from exc
+            raise ValueError("invalid proactive text request") from exc
         with self._proactive_sender_lock:
             send_text_to_open_id = self._send_text_to_open_id
         if send_text_to_open_id is None:
             raise RuntimeError("feishu proactive sender not ready")
         try:
-            send_text_to_open_id(normalized_open_id, normalized_text)
+            send_text_to_open_id(request.open_id, request.text)
             self._logger.info(
                 "feishu proactive response sent: open_id=%s text=%s",
-                normalized_open_id,
-                normalized_text,
+                request.open_id,
+                request.text,
             )
         except Exception:  # noqa: BLE001
             self._logger.warning(
                 "feishu proactive response failed: open_id=%s text=%s",
-                normalized_open_id,
-                normalized_text,
+                request.open_id,
+                request.text,
                 exc_info=True,
             )
             raise

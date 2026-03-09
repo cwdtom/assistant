@@ -9,6 +9,13 @@ from assistant_app.schemas.domain import (
     ThoughtItem,
     WebPageFetchResult,
 )
+from assistant_app.schemas.feishu import (
+    FeishuCalendarEvent,
+    FeishuPendingTaskInput,
+    FeishuProactiveTextRequest,
+    FeishuSubtaskResultUpdate,
+    FeishuTextMessage,
+)
 from assistant_app.schemas.planner import (
     AssistantToolMessage,
     PlannedDecision,
@@ -23,6 +30,11 @@ from assistant_app.schemas.planner import (
     ToolCallPayload,
     ToolFunctionPayload,
     ToolReplyPayload,
+)
+from assistant_app.schemas.proactive import (
+    ProactiveContextSnapshot,
+    ProactiveDecision,
+    ProactivePromptPayload,
 )
 from assistant_app.schemas.tools import (
     AskUserArgs,
@@ -48,6 +60,7 @@ from assistant_app.schemas.tools import (
     ThoughtsListArgs,
     ThoughtsUpdateArgs,
 )
+from assistant_app.schemas.user_profile import UserProfileRefreshPreparation, UserProfileRefreshResult
 
 __all__ = [
     "AskUserArgs",
@@ -74,11 +87,19 @@ __all__ = [
     "ThoughtsUpdateArgs",
     "ChatMessage",
     "ChatTurn",
+    "FeishuCalendarEvent",
+    "FeishuPendingTaskInput",
+    "FeishuProactiveTextRequest",
+    "FeishuSubtaskResultUpdate",
+    "FeishuTextMessage",
     "FrozenModel",
     "AssistantToolMessage",
     "PlanStepPayload",
+    "ProactiveContextSnapshot",
+    "ProactiveDecision",
     "PlannedDecision",
     "ProactiveDoneArguments",
+    "ProactivePromptPayload",
     "RecurringScheduleRule",
     "ReplanDoneDecision",
     "ReplannedDecision",
@@ -94,5 +115,7 @@ __all__ = [
     "ToolCallPayload",
     "ToolFunctionPayload",
     "ToolReplyPayload",
+    "UserProfileRefreshPreparation",
+    "UserProfileRefreshResult",
     "WebPageFetchResult",
 ]

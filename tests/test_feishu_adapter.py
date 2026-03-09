@@ -999,6 +999,28 @@ class FeishuAdapterTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.send_proactive_text(open_id="ou_target", text="  ")
 
+    def test_feishu_runner_send_proactive_text_strips_whitespace(self) -> None:
+        agent = _FakeAgent(response="ok")
+        processor = FeishuEventProcessor(
+            agent=agent,
+            send_text=lambda _chat_id, _text: None,
+            send_reaction=lambda _message_id, _emoji_type: None,
+            logger=logging.getLogger("test.feishu_adapter.proactive_strip"),
+        )
+        runner = FeishuLongConnectionRunner(
+            app_id="app_id",
+            app_secret="app_secret",
+            event_processor=processor,
+            logger=logging.getLogger("test.feishu_adapter.proactive_strip"),
+            sdk_module=None,
+        )
+        sent: list[tuple[str, str]] = []
+        runner._send_text_to_open_id = lambda open_id, text: sent.append((open_id, text))
+
+        runner.send_proactive_text(open_id=" ou_target ", text=" 主动提醒 ")
+
+        self.assertEqual(sent, [("ou_target", "主动提醒")])
+
     def test_feishu_runner_send_proactive_text_requires_sender_ready(self) -> None:
         agent = _FakeAgent(response="ok")
         processor = FeishuEventProcessor(

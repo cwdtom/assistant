@@ -4,8 +4,10 @@ import unittest
 from types import SimpleNamespace
 
 import lark_oapi.api.calendar.v4 as calendar_v4  # type: ignore[import-untyped]
+from pydantic import ValidationError
 
 from assistant_app.feishu_calendar_client import FeishuCalendarClient, FeishuCalendarClientError
+from assistant_app.schemas.feishu import FeishuCalendarEvent
 
 
 class _FakeResponse:
@@ -154,6 +156,17 @@ class FeishuCalendarClientTest(unittest.TestCase):
         self.assertEqual(len(self.calendar_api.list_requests), 2)
         self.assertIsNone(self.calendar_api.list_requests[0].page_token)
         self.assertEqual(self.calendar_api.list_requests[1].page_token, "token_1")
+
+    def test_feishu_calendar_event_requires_non_empty_identity_fields(self) -> None:
+        with self.assertRaises(ValidationError):
+            FeishuCalendarEvent(
+                event_id=" ",
+                summary="A",
+                description="work",
+                start_timestamp=1700000000,
+                end_timestamp=1700003600,
+                timezone="Asia/Shanghai",
+            )
 
 
 if __name__ == "__main__":

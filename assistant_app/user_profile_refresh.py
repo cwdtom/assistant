@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
+from assistant_app.schemas.user_profile import UserProfileRefreshPreparation, UserProfileRefreshResult
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,19 +27,7 @@ USER_PROFILE_REFRESH_SYSTEM_PROMPT = """
 """.strip()
 
 
-@dataclass(frozen=True)
-class UserProfileRefreshResult:
-    ok: bool
-    reason: str
-    profile_content: str | None = None
-    used_turns: int = 0
-
-
-@dataclass(frozen=True)
-class _RefreshPreparation:
-    profile_path: Path
-    current_profile: str
-    turns: list[ChatTurn]
+_RefreshPreparation = UserProfileRefreshPreparation
 
 
 class UserProfileRefreshService:

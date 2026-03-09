@@ -1,23 +1,14 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
+
+from pydantic import ValidationError
+
+from assistant_app.schemas.feishu import FeishuCalendarEvent
 
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
 _DEFAULT_LIST_PAGE_SIZE = 1000
-
-
-@dataclass(frozen=True)
-class FeishuCalendarEvent:
-    event_id: str
-    summary: str
-    description: str
-    start_timestamp: int
-    end_timestamp: int
-    timezone: str
-    create_timestamp: int | None = None
-
 
 class FeishuCalendarClientError(RuntimeError):
     def __init__(self, message: str, *, code: int | None = None) -> None:
@@ -172,15 +163,21 @@ class FeishuCalendarClient:
             or self._default_timezone
         )
         created_timestamp = _parse_unix_seconds(_read_path(payload, "create_time"))
-        return FeishuCalendarEvent(
-            event_id=event_id,
-            summary=str(_read_path(payload, "summary") or ""),
-            description=str(_read_path(payload, "description") or ""),
-            start_timestamp=start_timestamp,
-            end_timestamp=end_timestamp,
-            timezone=timezone,
-            create_timestamp=created_timestamp,
-        )
+        try:
+            return FeishuCalendarEvent.model_validate(
+                {
+                    "event_id": event_id,
+                    "summary": str(_read_path(payload, "summary") or ""),
+                    "description": str(_read_path(payload, "description") or ""),
+                    "start_timestamp": start_timestamp,
+                    "end_timestamp": end_timestamp,
+                    "timezone": timezone,
+                    "create_timestamp": created_timestamp,
+                }
+            )
+        except ValidationError:
+            self._warn("skip event with invalid schema")
+            return None
 
     def _ensure_api_client(self) -> Any:
         if self._api_client is not None:

@@ -6,12 +6,12 @@ from datetime import datetime, timedelta
 
 from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.db import AssistantDB
+from assistant_app.feishu_adapter import split_semantic_messages
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_context import build_proactive_context_snapshot
 from assistant_app.proactive_react import ProactiveReactRunner
 from assistant_app.proactive_tools import ProactiveToolExecutor
 from assistant_app.search import SearchProvider
-from assistant_app.feishu_adapter import split_semantic_messages
 
 
 class ProactiveReminderService:
@@ -114,14 +114,13 @@ class ProactiveReminderService:
             max_steps=self._max_steps,
             logger=self._logger,
         )
-        decision = react_runner.run_once(
-            context_payload=snapshot.to_prompt_payload(
-                night_quiet_hint=self._night_quiet_hint,
-                score_threshold=self._score_threshold,
-                max_steps=self._max_steps,
-                internet_search_allowed=True,
-            )
+        prompt_payload = snapshot.to_prompt_payload(
+            night_quiet_hint=self._night_quiet_hint,
+            score_threshold=self._score_threshold,
+            max_steps=self._max_steps,
+            internet_search_allowed=True,
         )
+        decision = react_runner.run_once(context_payload=prompt_payload)
         if decision is None:
             return
         should_notify = decision.score >= self._score_threshold
