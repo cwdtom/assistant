@@ -209,6 +209,42 @@ class FeishuAdapterTest(unittest.TestCase):
         self.assertEqual(message.open_id, "ou_2")
         self.assertEqual(message.text, raw_content)
 
+    def test_extract_text_message_supports_root_level_payload(self) -> None:
+        payload = {
+            "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_root"}},
+            "message": {
+                "message_type": "text",
+                "chat_type": "p2p",
+                "message_id": "om_root",
+                "chat_id": "oc_root",
+                "content": '{"text":"根级消息"}',
+            },
+        }
+
+        message = extract_text_message(payload)
+
+        assert message is not None
+        self.assertEqual(message.message_id, "om_root")
+        self.assertEqual(message.chat_id, "oc_root")
+        self.assertEqual(message.open_id, "ou_root")
+        self.assertEqual(message.text, "根级消息")
+
+    def test_extract_text_message_skips_blank_json_text(self) -> None:
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_3"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_3",
+                    "chat_id": "oc_3",
+                    "content": '{"text":"   "}',
+                },
+            }
+        }
+
+        self.assertIsNone(extract_text_message(payload))
+
     def test_extract_text_message_skips_non_text_or_non_p2p(self) -> None:
         non_text = {
             "event": {
@@ -336,13 +372,18 @@ class FeishuAdapterTest(unittest.TestCase):
 
         processor.handle_event(payload)
 
+        inbound_log = (
+            "feishu inbound message received: "
+            "message_id=om_log_1 chat_id=oc_1 open_id=ou_1 text=请记录这条消息"
+        )
+        sent_log = "feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text=处理完成"
         self._wait_until(
             lambda: any(
-                "feishu inbound message received: message_id=om_log_1 chat_id=oc_1 open_id=ou_1 text=请记录这条消息" in message
+                inbound_log in message
                 for message in handler.messages()
             )
             and any(
-                "feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text=处理完成" in message
+                sent_log in message
                 for message in handler.messages()
             ),
             timeout=2.0,

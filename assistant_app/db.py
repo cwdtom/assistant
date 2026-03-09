@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from assistant_app.schemas.domain import (
     ChatMessage,
     ChatTurn,
@@ -16,9 +18,15 @@ from assistant_app.schemas.domain import (
 )
 from assistant_app.schemas.storage import (
     NormalizedTagValue,
+    ScheduleBatchCreateInput,
+    ScheduleCreateInput,
     ScheduleDurationValue,
+    ScheduleRecurrenceInput,
+    ScheduleUpdateInput,
     ThoughtContentValue,
+    ThoughtCreateInput,
     ThoughtStatusValue,
+    ThoughtUpdateInput,
 )
 
 _UNSET = object()
@@ -350,14 +358,32 @@ class AssistantDB:
         remind_at: str | None = None,
         tag: str = "default",
     ) -> int:
+        try:
+            payload = ScheduleCreateInput.model_validate(
+                {
+                    "title": title,
+                    "event_time": event_time,
+                    "duration_minutes": duration_minutes,
+                    "remind_at": remind_at,
+                    "tag": tag,
+                }
+            )
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
+
         timestamp = _now_iso()
-        normalized_tag = _normalize_tag(tag)
-        normalized_duration = _normalize_duration_minutes(duration_minutes)
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO schedules (title, tag, event_time, duration_minutes, remind_at, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (title, normalized_tag, event_time, normalized_duration, remind_at, timestamp),
+                (
+                    payload.title,
+                    payload.tag,
+                    payload.event_time,
+                    payload.duration_minutes,
+                    payload.remind_at,
+                    timestamp,
+                ),
             )
             if cur.lastrowid is None:
                 raise RuntimeError("failed to insert schedule")
@@ -373,16 +399,34 @@ class AssistantDB:
     ) -> list[int]:
         if not event_times:
             return []
+        try:
+            payload = ScheduleBatchCreateInput.model_validate(
+                {
+                    "title": title,
+                    "event_times": event_times,
+                    "duration_minutes": duration_minutes,
+                    "remind_at": remind_at,
+                    "tag": tag,
+                }
+            )
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
+
         timestamp = _now_iso()
-        normalized_tag = _normalize_tag(tag)
-        normalized_duration = _normalize_duration_minutes(duration_minutes)
         created_ids: list[int] = []
         with self._connect() as conn:
-            for event_time in event_times:
+            for event_time in payload.event_times:
                 cur = conn.execute(
                     "INSERT INTO schedules (title, tag, event_time, duration_minutes, remind_at, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (title, normalized_tag, event_time, normalized_duration, remind_at, timestamp),
+                    (
+                        payload.title,
+                        payload.tag,
+                        event_time,
+                        payload.duration_minutes,
+                        payload.remind_at,
+                        timestamp,
+                    ),
                 )
                 if cur.lastrowid is None:
                     raise RuntimeError("failed to insert schedule")
@@ -399,22 +443,28 @@ class AssistantDB:
         remind_start_time: str | None = None,
         enabled: bool = True,
     ) -> bool:
-        if repeat_times == 1:
+        if isinstance(repeat_times, int) and not isinstance(repeat_times, bool) and repeat_times == 1:
             return self.clear_schedule_recurrence(schedule_id)
-        if not isinstance(repeat_interval_minutes, int) or isinstance(repeat_interval_minutes, bool):
-            return False
-        if repeat_interval_minutes < 1:
-            return False
-        if (
-            not isinstance(repeat_times, int)
-            or isinstance(repeat_times, bool)
-            or (repeat_times != -1 and repeat_times < 2)
-        ):
+        try:
+            payload = ScheduleRecurrenceInput.model_validate(
+                {
+                    "schedule_id": schedule_id,
+                    "start_time": start_time,
+                    "repeat_interval_minutes": repeat_interval_minutes,
+                    "repeat_times": repeat_times,
+                    "remind_start_time": remind_start_time,
+                    "enabled": enabled,
+                }
+            )
+        except ValidationError:
             return False
 
         timestamp = _now_iso()
         with self._connect() as conn:
-            has_schedule = conn.execute("SELECT 1 FROM schedules WHERE id = ?", (schedule_id,)).fetchone() is not None
+            has_schedule = (
+                conn.execute("SELECT 1 FROM schedules WHERE id = ?", (payload.schedule_id,)).fetchone()
+                is not None
+            )
             if not has_schedule:
                 return False
             conn.execute(
@@ -432,12 +482,12 @@ class AssistantDB:
                     enabled = excluded.enabled
                 """,
                 (
-                    schedule_id,
-                    start_time,
-                    repeat_interval_minutes,
-                    repeat_times,
-                    remind_start_time,
-                    1 if enabled else 0,
+                    payload.schedule_id,
+                    payload.start_time,
+                    payload.repeat_interval_minutes,
+                    payload.repeat_times,
+                    payload.remind_start_time,
+                    1 if payload.enabled else 0,
                     timestamp,
                 ),
             )
@@ -559,24 +609,39 @@ class AssistantDB:
         remind_at: str | None | object = _UNSET,
         repeat_remind_start_time: str | None | object = _UNSET,
     ) -> bool:
-        fields = ["title = ?", "event_time = ?"]
-        values: list[object] = [title, event_time]
-
+        raw_payload: dict[str, object] = {
+            "schedule_id": schedule_id,
+            "title": title,
+            "event_time": event_time,
+        }
         if tag is not _UNSET:
-            fields.append("tag = ?")
-            values.append(_normalize_tag(str(tag) if tag is not None else None))
+            raw_payload["tag"] = tag
         if duration_minutes is not _UNSET:
-            try:
-                normalized_duration = _normalize_duration_minutes(duration_minutes)
-            except ValueError:
-                return False
-            fields.append("duration_minutes = ?")
-            values.append(normalized_duration)
+            raw_payload["duration_minutes"] = duration_minutes
         if remind_at is not _UNSET:
-            fields.append("remind_at = ?")
-            values.append(remind_at)
+            raw_payload["remind_at"] = remind_at
+        if repeat_remind_start_time is not _UNSET:
+            raw_payload["repeat_remind_start_time"] = repeat_remind_start_time
 
-        values.append(schedule_id)
+        try:
+            payload = ScheduleUpdateInput.model_validate(raw_payload)
+        except ValidationError:
+            return False
+
+        fields = ["title = ?", "event_time = ?"]
+        values: list[object] = [payload.title, payload.event_time]
+
+        if "tag" in payload.model_fields_set:
+            fields.append("tag = ?")
+            values.append(payload.tag)
+        if "duration_minutes" in payload.model_fields_set:
+            fields.append("duration_minutes = ?")
+            values.append(payload.duration_minutes)
+        if "remind_at" in payload.model_fields_set:
+            fields.append("remind_at = ?")
+            values.append(payload.remind_at)
+
+        values.append(payload.schedule_id)
         with self._connect() as conn:
             cur = conn.execute(
                 f"UPDATE schedules SET {', '.join(fields)} WHERE id = ?",
@@ -586,12 +651,12 @@ class AssistantDB:
                 return False
             conn.execute(
                 "UPDATE recurring_schedules SET start_time = ? WHERE schedule_id = ?",
-                (event_time, schedule_id),
+                (payload.event_time, payload.schedule_id),
             )
-            if repeat_remind_start_time is not _UNSET:
+            if "repeat_remind_start_time" in payload.model_fields_set:
                 conn.execute(
                     "UPDATE recurring_schedules SET remind_start_time = ? WHERE schedule_id = ?",
-                    (repeat_remind_start_time, schedule_id),
+                    (payload.repeat_remind_start_time, payload.schedule_id),
                 )
             return True
 
@@ -632,13 +697,16 @@ class AssistantDB:
         ]
 
     def add_thought(self, content: str, status: str = THOUGHT_STATUS_TODO) -> int:
+        try:
+            payload = ThoughtCreateInput.model_validate({"content": content, "status": status})
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
+
         timestamp = _now_iso()
-        normalized_content = _normalize_thought_content(content)
-        normalized_status = _normalize_thought_status(status)
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO thoughts (content, status, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (normalized_content, normalized_status, timestamp, timestamp),
+                (payload.content, payload.status, timestamp, timestamp),
             )
             if cur.lastrowid is None:
                 raise RuntimeError("failed to insert thought")
@@ -675,13 +743,20 @@ class AssistantDB:
         content: str,
         status: str | object = _UNSET,
     ) -> bool:
-        fields = ["content = ?"]
-        normalized_content = _normalize_thought_content(content)
-        values: list[object] = [normalized_content]
+        raw_payload: dict[str, object] = {"content": content}
         if status is not _UNSET:
-            normalized_status = _normalize_thought_status(str(status) if status is not None else "")
+            raw_payload["status"] = status
+
+        try:
+            payload = ThoughtUpdateInput.model_validate(raw_payload)
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
+
+        fields = ["content = ?"]
+        values: list[object] = [payload.content]
+        if "status" in payload.model_fields_set:
             fields.append("status = ?")
-            values.append(normalized_status)
+            values.append(payload.status)
         fields.append("updated_at = ?")
         values.append(_now_iso())
         values.append(thought_id)

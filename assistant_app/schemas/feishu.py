@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from pydantic import Field, field_validator
+import json
+from typing import Any
+
+from pydantic import ConfigDict, Field, ValidationError, field_validator
 
 from assistant_app.schemas.base import FrozenModel, StrictModel
+
+
+class FeishuCompatModel(FrozenModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, str_strip_whitespace=True, strict=True)
 
 
 class FeishuTextMessage(FrozenModel):
@@ -47,3 +54,239 @@ class FeishuCalendarEvent(FrozenModel):
     timezone: str = Field(min_length=1)
     create_timestamp: int | None = None
 
+
+class FeishuTextContentPayload(FeishuCompatModel):
+    text: str
+
+
+class FeishuSenderIdPayload(FeishuCompatModel):
+    open_id: str | None = None
+
+    @field_validator("open_id", mode="before")
+    @classmethod
+    def normalize_open_id(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class FeishuSenderPayload(FeishuCompatModel):
+    sender_type: str | None = None
+    sender_id: FeishuSenderIdPayload | None = None
+
+
+class FeishuInboundMessagePayload(FeishuCompatModel):
+    message_type: str | None = None
+    chat_type: str | None = None
+    message_id: str | None = None
+    chat_id: str | None = None
+    content: str | None = None
+
+    @field_validator("message_type", "chat_type", "message_id", "chat_id", "content", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("field must be a string")
+        normalized = value.strip()
+        return normalized or None
+
+
+class FeishuInboundEventBody(FeishuCompatModel):
+    sender: FeishuSenderPayload | None = None
+    message: FeishuInboundMessagePayload | None = None
+
+
+class FeishuInboundEventEnvelope(FeishuCompatModel):
+    event: FeishuInboundEventBody | None = None
+    sender: FeishuSenderPayload | None = None
+    message: FeishuInboundMessagePayload | None = None
+
+    def message_payload(self) -> FeishuInboundMessagePayload | None:
+        if self.event is not None and self.event.message is not None:
+            return self.event.message
+        return self.message
+
+    def sender_payload(self) -> FeishuSenderPayload | None:
+        if self.event is not None and self.event.sender is not None:
+            return self.event.sender
+        return self.sender
+
+
+class FeishuCalendarTimeInfoPayload(FeishuCompatModel):
+    time_stamp: int | None = None
+    timestamp: int | None = None
+    timezone: str | None = None
+
+    @field_validator("time_stamp", "timestamp", mode="before")
+    @classmethod
+    def normalize_optional_timestamp(cls, value: Any) -> int | None:
+        return _parse_optional_int(value)
+
+    @field_validator("timezone", mode="before")
+    @classmethod
+    def normalize_optional_timezone(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("timezone must be a string")
+        normalized = value.strip()
+        return normalized or None
+
+    def resolved_timestamp(self) -> int | None:
+        if self.time_stamp is not None:
+            return self.time_stamp
+        return self.timestamp
+
+
+class FeishuCalendarEventPayload(FeishuCompatModel):
+    event_id: str | None = None
+    summary: str = ""
+    description: str = ""
+    start_time: FeishuCalendarTimeInfoPayload | None = None
+    end_time: FeishuCalendarTimeInfoPayload | None = None
+    create_time: int | None = None
+
+    @field_validator("event_id", mode="before")
+    @classmethod
+    def normalize_event_id(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("event_id must be a string")
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("summary", "description", mode="before")
+    @classmethod
+    def normalize_text_fields(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    @field_validator("create_time", mode="before")
+    @classmethod
+    def normalize_create_time(cls, value: Any) -> int | None:
+        return _parse_optional_unix_seconds(value)
+
+
+def parse_feishu_message_text(raw_content: str) -> str:
+    content = raw_content.strip()
+    if not content:
+        return ""
+    try:
+        payload = FeishuTextContentPayload.model_validate_json(content)
+        return payload.text
+    except (ValidationError, json.JSONDecodeError, ValueError):
+        return content
+
+
+def parse_feishu_text_message(raw_payload: Any) -> FeishuTextMessage | None:
+    try:
+        envelope = FeishuInboundEventEnvelope.model_validate(raw_payload)
+    except ValidationError:
+        return None
+
+    message = envelope.message_payload()
+    sender = envelope.sender_payload()
+    if message is None:
+        return None
+    if message.message_type not in {"text", "post"}:
+        return None
+    if message.chat_type and message.chat_type != "p2p":
+        return None
+    if sender is not None and sender.sender_type and sender.sender_type != "user":
+        return None
+    if message.message_id is None or message.chat_id is None or message.content is None:
+        return None
+
+    text = message.content.strip()
+    if message.message_type == "text":
+        text = parse_feishu_message_text(message.content).strip()
+    if not text:
+        return None
+
+    try:
+        return FeishuTextMessage.model_validate(
+            {
+                "message_id": message.message_id,
+                "chat_id": message.chat_id,
+                "open_id": sender.sender_id.open_id if sender and sender.sender_id else None,
+                "text": text,
+            }
+        )
+    except ValidationError:
+        return None
+
+
+def parse_feishu_calendar_event(raw_payload: Any, *, default_timezone: str) -> FeishuCalendarEvent | None:
+    try:
+        payload = FeishuCalendarEventPayload.model_validate(raw_payload)
+    except ValidationError:
+        return None
+
+    if payload.event_id is None:
+        return None
+    start_timestamp = payload.start_time.resolved_timestamp() if payload.start_time is not None else None
+    end_timestamp = payload.end_time.resolved_timestamp() if payload.end_time is not None else None
+    if start_timestamp is None or end_timestamp is None:
+        return None
+    timezone = (
+        payload.start_time.timezone if payload.start_time and payload.start_time.timezone
+        else payload.end_time.timezone if payload.end_time and payload.end_time.timezone
+        else default_timezone.strip() or "Asia/Shanghai"
+    )
+    try:
+        return FeishuCalendarEvent.model_validate(
+            {
+                "event_id": payload.event_id,
+                "summary": payload.summary,
+                "description": payload.description,
+                "start_timestamp": start_timestamp,
+                "end_timestamp": end_timestamp,
+                "timezone": timezone,
+                "create_timestamp": payload.create_time,
+            }
+        )
+    except ValidationError:
+        return None
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_optional_unix_seconds(value: Any) -> int | None:
+    parsed = _parse_optional_int(value)
+    if parsed is None:
+        return None
+    if abs(parsed) >= 10**12:
+        return parsed // 1000
+    return parsed
+
+
+__all__ = [
+    "FeishuCalendarEvent",
+    "FeishuPendingTaskInput",
+    "FeishuProactiveTextRequest",
+    "FeishuSubtaskResultUpdate",
+    "FeishuTextMessage",
+    "parse_feishu_calendar_event",
+    "parse_feishu_message_text",
+    "parse_feishu_text_message",
+]

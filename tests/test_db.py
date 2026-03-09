@@ -196,6 +196,52 @@ class AssistantDBTest(unittest.TestCase):
         assert item is not None
         self.assertEqual(item.repeat_times, -1)
 
+    def test_set_schedule_recurrence_rejects_invalid_types_and_keeps_clear_semantics(self) -> None:
+        schedule_id = self.db.add_schedule("循环站会", "2026-02-20 09:00", duration_minutes=30)
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=1440,
+                repeat_times=3,
+            )
+        )
+
+        self.assertFalse(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=True,
+                repeat_times=3,
+            )
+        )
+        self.assertFalse(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=1440,
+                repeat_times=True,
+            )
+        )
+
+        kept = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(kept)
+        assert kept is not None
+        self.assertEqual(kept.repeat_times, 3)
+
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 09:00",
+                repeat_interval_minutes=1440,
+                repeat_times=1,
+            )
+        )
+        cleared = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(cleared)
+        assert cleared is not None
+        self.assertIsNone(cleared.repeat_times)
+
     def test_list_schedules_respects_window_max_range(self) -> None:
         now = datetime.now()
         inside = (now + timedelta(days=5)).strftime("%Y-%m-%d 09:00")
@@ -353,6 +399,40 @@ class AssistantDBTest(unittest.TestCase):
         assert changed is not None
         self.assertEqual(changed.duration_minutes, 45)
 
+    def test_update_schedule_can_reset_tag_and_clear_remind_fields(self) -> None:
+        schedule_id = self.db.add_schedule(
+            "项目同步",
+            "2026-02-20 10:00",
+            tag="work",
+            remind_at="2026-02-20 09:45",
+        )
+        self.assertTrue(
+            self.db.set_schedule_recurrence(
+                schedule_id,
+                start_time="2026-02-20 10:00",
+                repeat_interval_minutes=1440,
+                repeat_times=3,
+                remind_start_time="2026-02-20 09:30",
+            )
+        )
+
+        updated = self.db.update_schedule(
+            schedule_id,
+            title="项目同步-改",
+            event_time="2026-02-20 11:00",
+            tag=None,
+            remind_at=None,
+            repeat_remind_start_time="",
+        )
+        self.assertTrue(updated)
+
+        changed = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.tag, "default")
+        self.assertIsNone(changed.remind_at)
+        self.assertIsNone(changed.repeat_remind_start_time)
+
     def test_list_base_schedules_excludes_recurring_expansion(self) -> None:
         schedule_id = self.db.add_schedule("周会", "2026-02-20 10:00", duration_minutes=45)
         self.db.set_schedule_recurrence(
@@ -424,6 +504,38 @@ class AssistantDBTest(unittest.TestCase):
                 duration_minutes=0,
             )
         )
+        self.assertFalse(
+            self.db.update_schedule(
+                schedule_id,
+                title="正常时长",
+                event_time="2026-02-20 10:30",
+                duration_minutes=None,
+            )
+        )
+
+    def test_schedule_datetime_and_title_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            self.db.add_schedule("  ", "2026-02-20 10:00")
+        with self.assertRaises(ValueError):
+            self.db.add_schedule("非法时间", "2026-02-20")
+        with self.assertRaises(ValueError):
+            self.db.add_schedules("晨会", ["2026-02-20 09:00", "bad-time"])
+
+        schedule_id = self.db.add_schedule("正常日程", "2026-02-20 10:00")
+        self.assertFalse(
+            self.db.update_schedule(
+                schedule_id,
+                title="  ",
+                event_time="2026-02-20 10:30",
+            )
+        )
+        self.assertFalse(
+            self.db.update_schedule(
+                schedule_id,
+                title="正常日程",
+                event_time="bad-time",
+            )
+        )
 
     def test_thought_crud_and_soft_delete(self) -> None:
         thought_id = self.db.add_thought("记得买咖啡豆")
@@ -476,6 +588,8 @@ class AssistantDBTest(unittest.TestCase):
             self.db.update_thought(thought_id, content="")
         with self.assertRaises(ValueError):
             self.db.update_thought(thought_id, content="更新", status="进行中")
+        with self.assertRaises(ValueError):
+            self.db.update_thought(thought_id, content="更新", status=None)
 
         self.assertFalse(self.db.update_thought(999, content="不存在"))
         self.assertFalse(self.db.soft_delete_thought(999))

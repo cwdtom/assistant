@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
-from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_tool_names
+from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_plan_items, normalize_tool_names
 from assistant_app.schemas.base import FrozenModel
 
 
@@ -156,7 +156,97 @@ class ProactiveDoneArguments(FrozenModel):
     reason: str = Field(min_length=1, description="做出该主动提醒判断的简要原因。")
 
 
+class _CompatPayloadModel:
+    model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
+
+
+def _normalize_required_text(value: Any, *, lowercase: bool = False) -> str:
+    text = str(value or "").strip()
+    return text.lower() if lowercase else text
+
+
+def _normalize_optional_text(value: Any, *, lowercase: bool = False) -> str | None:
+    text = _normalize_required_text(value, lowercase=lowercase)
+    return text or None
+
+
+class PlannedDecisionCompatPayload(_CompatPayloadModel, FrozenModel):
+    status: str
+    goal: str
+    plan: list[Any] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_root_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {
+            "status": _normalize_required_text(value.get("status"), lowercase=True),
+            "goal": _normalize_required_text(value.get("goal")),
+            "plan": [] if value.get("plan") is None else value.get("plan"),
+        }
+
+
+class ReplanDecisionCompatPayload(_CompatPayloadModel, FrozenModel):
+    status: str
+    response: str | None = None
+    plan: list[Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_root_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {
+            "status": _normalize_required_text(value.get("status"), lowercase=True),
+            "response": _normalize_optional_text(value.get("response")),
+            "plan": [] if value.get("plan") is None else value.get("plan"),
+        }
+
+
+class ThoughtNextActionCompatPayload(_CompatPayloadModel, FrozenModel):
+    tool: str
+    input: str
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool(cls, value: Any) -> str:
+        return _normalize_required_text(value, lowercase=True)
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def normalize_input(cls, value: Any) -> str:
+        return _normalize_required_text(value)
+
+
+class ThoughtDecisionCompatPayload(_CompatPayloadModel, FrozenModel):
+    status: str
+    current_step: str = ""
+    next_action: ThoughtNextActionCompatPayload | None = None
+    question: str | None = None
+    response: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_root_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        current_step = _normalize_required_text(value.get("current_step"))
+        if not current_step:
+            plan_items = normalize_plan_items(value)
+            if plan_items:
+                current_step = plan_items[0]
+        return {
+            "status": _normalize_required_text(value.get("status"), lowercase=True),
+            "current_step": current_step,
+            "next_action": value.get("next_action"),
+            "question": _normalize_optional_text(value.get("question")),
+            "response": _normalize_optional_text(value.get("response")),
+        }
+
+
 _TOOL_CALL_LIST_ADAPTER = TypeAdapter(list[ToolCallPayload])
+_THOUGHT_DECISION_ADAPTER = TypeAdapter(ThoughtDecision)
 
 
 def normalize_tool_call_payload(raw_tool_call: Any) -> ToolCallPayload | None:
@@ -206,6 +296,42 @@ def normalize_tool_call_payloads(
         return []
 
 
+def parse_planned_decision(raw_payload: Any) -> PlannedDecision | None:
+    try:
+        compat_payload = PlannedDecisionCompatPayload.model_validate(raw_payload)
+        return PlannedDecision.model_validate(compat_payload.model_dump())
+    except ValidationError:
+        return None
+
+
+def parse_replan_decision(raw_payload: Any) -> ReplanDecision | None:
+    try:
+        compat_payload = ReplanDecisionCompatPayload.model_validate(raw_payload)
+        if compat_payload.status == "done":
+            return ReplanDoneDecision.model_validate(
+                {
+                    "status": "done",
+                    "response": compat_payload.response or "",
+                }
+            )
+        return ReplannedDecision.model_validate(
+            {
+                "status": compat_payload.status,
+                "plan": compat_payload.plan,
+            }
+        )
+    except ValidationError:
+        return None
+
+
+def parse_thought_decision(raw_payload: Any) -> ThoughtDecision | None:
+    try:
+        compat_payload = ThoughtDecisionCompatPayload.model_validate(raw_payload)
+        return _THOUGHT_DECISION_ADAPTER.validate_python(compat_payload.model_dump())
+    except ValidationError:
+        return None
+
+
 def normalize_assistant_tool_message(
     raw_message: Any,
     *,
@@ -239,6 +365,9 @@ def normalize_assistant_tool_message(
 __all__ = [
     "AssistantToolMessage",
     "normalize_assistant_tool_message",
+    "parse_planned_decision",
+    "parse_replan_decision",
+    "parse_thought_decision",
     "PlanResponsePayload",
     "PlanStepPayload",
     "PlannedDecision",

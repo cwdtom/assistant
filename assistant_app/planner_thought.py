@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from assistant_app.planner_common import (
     THOUGHT_RUNTIME_TOOL_NAMES,
     expand_tool_groups,
-    normalize_plan_items,
     normalize_tool_names,
 )
 from assistant_app.schemas.planner import (
@@ -18,6 +17,7 @@ from assistant_app.schemas.planner import (
     ThoughtDecision,
     ThoughtDoneDecision,
     normalize_tool_call_payload,
+    parse_thought_decision,
 )
 from assistant_app.schemas.tools import (
     THOUGHT_TOOL_ARGS_MODELS,
@@ -168,73 +168,7 @@ def build_thought_tool_schemas(raw_tools: Any) -> list[dict[str, Any]]:
 
 
 def normalize_thought_decision(payload: dict[str, Any]) -> ThoughtDecision | None:
-    if not isinstance(payload, dict):
-        return None
-    status = str(payload.get("status") or "").strip().lower()
-    current_step = str(payload.get("current_step") or "").strip()
-    if not current_step:
-        plan_items = normalize_plan_items(payload)
-        if plan_items:
-            current_step = plan_items[0]
-
-    if status == "continue":
-        next_action = payload.get("next_action")
-        if not isinstance(next_action, dict):
-            return None
-        response_text = str(payload.get("response") or "").strip()
-        if response_text:
-            return None
-        try:
-            return ThoughtContinueDecision.model_validate(
-                {
-                    "status": "continue",
-                    "current_step": current_step,
-                    "next_action": {
-                        "tool": str(next_action.get("tool") or "").strip().lower(),
-                        "input": str(next_action.get("input") or "").strip(),
-                    },
-                    "question": None,
-                    "response": None,
-                }
-            )
-        except ValidationError:
-            return None
-
-    if status == "ask_user":
-        try:
-            return ThoughtAskUserDecision.model_validate(
-                {
-                    "status": "ask_user",
-                    "current_step": current_step,
-                    "next_action": None,
-                    "question": str(payload.get("question") or "").strip(),
-                    "response": None,
-                }
-            )
-        except ValidationError:
-            return None
-
-    if status == "done":
-        next_action = payload.get("next_action")
-        if next_action is not None:
-            return None
-        done_question = payload.get("question")
-        if done_question is not None and str(done_question).strip():
-            return None
-        response_text = str(payload.get("response") or "").strip() or None
-        try:
-            return ThoughtDoneDecision.model_validate(
-                {
-                    "status": "done",
-                    "current_step": current_step,
-                    "next_action": None,
-                    "question": None,
-                    "response": response_text,
-                }
-            )
-        except ValidationError:
-            return None
-    return None
+    return parse_thought_decision(payload)
 
 
 def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | None:

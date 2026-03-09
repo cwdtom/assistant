@@ -4,10 +4,12 @@ import unittest
 from types import SimpleNamespace
 
 import lark_oapi.api.calendar.v4 as calendar_v4  # type: ignore[import-untyped]
-from pydantic import ValidationError
-
-from assistant_app.feishu_calendar_client import FeishuCalendarClient, FeishuCalendarClientError
+from assistant_app.feishu_calendar_client import (
+    FeishuCalendarClient,
+    FeishuCalendarClientError,
+)
 from assistant_app.schemas.feishu import FeishuCalendarEvent
+from pydantic import ValidationError
 
 
 class _FakeResponse:
@@ -156,6 +158,62 @@ class FeishuCalendarClientTest(unittest.TestCase):
         self.assertEqual(len(self.calendar_api.list_requests), 2)
         self.assertIsNone(self.calendar_api.list_requests[0].page_token)
         self.assertEqual(self.calendar_api.list_requests[1].page_token, "token_1")
+
+    def test_list_events_accepts_timestamp_alias_and_default_timezone(self) -> None:
+        self.calendar_api.list_responses = [
+            _FakeResponse(
+                ok=True,
+                data={
+                    "has_more": False,
+                    "items": [
+                        {
+                            "event_id": "evt_alias",
+                            "summary": 123,
+                            "description": None,
+                            "start_time": {"timestamp": "1700000000"},
+                            "end_time": {"timestamp": "1700003600"},
+                        }
+                    ],
+                },
+            )
+        ]
+
+        items = self.client.list_events(
+            calendar_id="cal_1",
+            start_timestamp=1699990000,
+            end_timestamp=1700100000,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].event_id, "evt_alias")
+        self.assertEqual(items[0].summary, "123")
+        self.assertEqual(items[0].description, "")
+        self.assertEqual(items[0].timezone, "Asia/Shanghai")
+
+    def test_list_events_skips_invalid_item_schema(self) -> None:
+        self.calendar_api.list_responses = [
+            _FakeResponse(
+                ok=True,
+                data={
+                    "has_more": False,
+                    "items": [
+                        {
+                            "event_id": "evt_bad",
+                            "start_time": {"time_stamp": True, "timezone": "Asia/Shanghai"},
+                            "end_time": {"time_stamp": "1700003600", "timezone": "Asia/Shanghai"},
+                        }
+                    ],
+                },
+            )
+        ]
+
+        items = self.client.list_events(
+            calendar_id="cal_1",
+            start_timestamp=1699990000,
+            end_timestamp=1700100000,
+        )
+
+        self.assertEqual(items, [])
 
     def test_feishu_calendar_event_requires_non_empty_identity_fields(self) -> None:
         with self.assertRaises(ValidationError):

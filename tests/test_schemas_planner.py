@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from assistant_app.planner_plan_replan import normalize_plan_decision, normalize_replan_decision
+from assistant_app.planner_thought import normalize_thought_decision
 from assistant_app.proactive_react import _normalize_done_arguments
 from assistant_app.schemas.planner import (
     PlannedDecision,
@@ -162,6 +163,60 @@ class PlannerSchemaTest(unittest.TestCase):
             {
                 "status": "replanned",
                 "plan": [{"task": "检索历史", "completed": True, "tools": ["history"]}],
+            }
+        )
+
+        self.assertIsNone(decision)
+
+    def test_normalize_replan_decision_ignores_extra_fields_for_done_compatibility(self) -> None:
+        decision = normalize_replan_decision(
+            {
+                "status": "DONE",
+                "response": "已完成。",
+                "plan": [{"task": "旧步骤", "completed": False, "tools": ["history"]}],
+                "unexpected": "value",
+            }
+        )
+
+        self.assertIsInstance(decision, ReplanDoneDecision)
+
+    def test_normalize_thought_decision_uses_first_plan_item_as_current_step(self) -> None:
+        decision = normalize_thought_decision(
+            {
+                "status": "continue",
+                "plan": [{"task": "检索历史", "completed": False, "tools": ["history"]}],
+                "next_action": {"tool": "history", "input": "/history list"},
+                "question": None,
+                "response": None,
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.current_step, "检索历史")
+
+    def test_normalize_thought_decision_ignores_extra_fields_for_compatibility(self) -> None:
+        decision = normalize_thought_decision(
+            {
+                "status": "ask_user",
+                "current_step": "补充信息",
+                "question": "请确认标签",
+                "next_action": None,
+                "response": None,
+                "unexpected": "value",
+            }
+        )
+
+        self.assertIsNotNone(decision)
+
+    def test_normalize_thought_decision_rejects_continue_with_response_text(self) -> None:
+        decision = normalize_thought_decision(
+            {
+                "status": "continue",
+                "current_step": "检索历史",
+                "next_action": {"tool": "history", "input": "/history list"},
+                "question": None,
+                "response": "不应携带最终响应",
             }
         )
 

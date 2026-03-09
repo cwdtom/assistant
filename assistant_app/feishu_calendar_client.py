@@ -3,9 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pydantic import ValidationError
-
-from assistant_app.schemas.feishu import FeishuCalendarEvent
+from assistant_app.schemas.feishu import FeishuCalendarEvent, parse_feishu_calendar_event
 
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
 _DEFAULT_LIST_PAGE_SIZE = 1000
@@ -55,10 +53,16 @@ class FeishuCalendarClient:
             .description(description)
             .need_notification(need_notification)
             .start_time(
-                module.TimeInfo.builder().timestamp(str(start_timestamp)).timezone(timezone or self._default_timezone).build()
+                module.TimeInfo.builder()
+                .timestamp(str(start_timestamp))
+                .timezone(timezone or self._default_timezone)
+                .build()
             )
             .end_time(
-                module.TimeInfo.builder().timestamp(str(end_timestamp)).timezone(timezone or self._default_timezone).build()
+                module.TimeInfo.builder()
+                .timestamp(str(end_timestamp))
+                .timezone(timezone or self._default_timezone)
+                .build()
             )
             .build()
         )
@@ -145,6 +149,9 @@ class FeishuCalendarClient:
         return events
 
     def _parse_event(self, payload: Any) -> FeishuCalendarEvent | None:
+        parsed = parse_feishu_calendar_event(payload, default_timezone=self._default_timezone)
+        if parsed is not None:
+            return parsed
         event_id = _first_non_empty(_read_path(payload, "event_id"))
         if event_id is None:
             self._warn("skip event without event_id")
@@ -158,26 +165,8 @@ class FeishuCalendarClient:
         if start_timestamp is None or end_timestamp is None:
             self._warn("skip event without timestamp range")
             return None
-        timezone = (
-            _first_non_empty(_read_path(payload, "start_time.timezone"), _read_path(payload, "end_time.timezone"))
-            or self._default_timezone
-        )
-        created_timestamp = _parse_unix_seconds(_read_path(payload, "create_time"))
-        try:
-            return FeishuCalendarEvent.model_validate(
-                {
-                    "event_id": event_id,
-                    "summary": str(_read_path(payload, "summary") or ""),
-                    "description": str(_read_path(payload, "description") or ""),
-                    "start_timestamp": start_timestamp,
-                    "end_timestamp": end_timestamp,
-                    "timezone": timezone,
-                    "create_timestamp": created_timestamp,
-                }
-            )
-        except ValidationError:
-            self._warn("skip event with invalid schema")
-            return None
+        self._warn("skip event with invalid schema")
+        return None
 
     def _ensure_api_client(self) -> Any:
         if self._api_client is not None:

@@ -16,6 +16,8 @@ from assistant_app.schemas.feishu import (
     FeishuProactiveTextRequest,
     FeishuSubtaskResultUpdate,
     FeishuTextMessage,
+    parse_feishu_message_text,
+    parse_feishu_text_message,
 )
 
 DEFAULT_FEISHU_SEND_RETRY_COUNT = 3
@@ -75,84 +77,11 @@ def split_semantic_messages(text: str) -> list[str]:
 
 
 def parse_message_text(raw_content: str) -> str:
-    content = raw_content.strip()
-    if not content:
-        return ""
-
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return content
-
-    if not isinstance(payload, dict):
-        return content
-
-    text = payload.get("text")
-    if isinstance(text, str):
-        return text
-    return content
+    return parse_feishu_message_text(raw_content)
 
 
 def extract_text_message(event_payload: Any) -> FeishuTextMessage | None:
-    message_type = _first_non_empty(
-        _read_path(event_payload, "event.message.message_type"),
-        _read_path(event_payload, "message.message_type"),
-    )
-    if message_type not in {"text", "post"}:
-        return None
-
-    chat_type = _first_non_empty(
-        _read_path(event_payload, "event.message.chat_type"),
-        _read_path(event_payload, "message.chat_type"),
-    )
-    if chat_type and chat_type != "p2p":
-        return None
-
-    sender_type = _first_non_empty(
-        _read_path(event_payload, "event.sender.sender_type"),
-        _read_path(event_payload, "sender.sender_type"),
-    )
-    if sender_type and sender_type != "user":
-        return None
-
-    message_id = _first_non_empty(
-        _read_path(event_payload, "event.message.message_id"),
-        _read_path(event_payload, "message.message_id"),
-    )
-    chat_id = _first_non_empty(
-        _read_path(event_payload, "event.message.chat_id"),
-        _read_path(event_payload, "message.chat_id"),
-    )
-    if not message_id or not chat_id:
-        return None
-
-    raw_content = _first_non_empty(
-        _read_path(event_payload, "event.message.content"),
-        _read_path(event_payload, "message.content"),
-    )
-    if not isinstance(raw_content, str):
-        return None
-
-    text = convert_message_to_text(message_type=message_type, raw_content=raw_content).strip()
-    if not text:
-        return None
-
-    open_id = _first_non_empty(
-        _read_path(event_payload, "event.sender.sender_id.open_id"),
-        _read_path(event_payload, "sender.sender_id.open_id"),
-    )
-
-    try:
-        return FeishuTextMessage.model_validate(
-            {
-                "message_id": message_id,
-                "chat_id": chat_id,
-                "open_id": open_id,
-                "text": text,
-            }
-        )
-    except ValidationError:
-        return None
+    return parse_feishu_text_message(event_payload)
 
 
 def convert_message_to_text(*, message_type: str, raw_content: str) -> str:
