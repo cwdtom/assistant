@@ -23,7 +23,13 @@ from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.schemas.planner import ToolReplyPayload
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
-from assistant_app.schemas.tools import HistorySearchArgs, ScheduleAddArgs
+from assistant_app.schemas.tools import (
+    HistorySearchArgs,
+    InternetSearchFetchUrlArgs,
+    ScheduleAddArgs,
+    ScheduleUpdateArgs,
+    ThoughtsUpdateArgs,
+)
 from assistant_app.search import SearchResult
 
 _DEFAULT_PLAN_TOOLS = ["schedule", "internet_search", "history"]
@@ -2502,6 +2508,28 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("planner_tool_internet_search_fetch_url_start", merged)
         self.assertIn("planner_tool_internet_search_fetch_url_failed", merged)
 
+    def test_internet_search_fetch_url_supports_runtime_typed_payload(self) -> None:
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=FakeSearchProvider(),
+        )
+        with patch("assistant_app.agent.fetch_webpage_main_text") as mocked_fetch:
+            mocked_fetch.return_value = SimpleNamespace(url="https://example.com", main_text="网页正文")
+            observation = agent._execute_planner_tool(
+                action_tool="internet_search",
+                action_input="not-json",
+                action_payload=RuntimePlannerActionPayload(
+                    tool_name="internet_search_fetch_url",
+                    arguments=InternetSearchFetchUrlArgs(url="https://example.com"),
+                ),
+            )
+
+        self.assertTrue(observation.ok)
+        result_payload = _try_parse_json(observation.result)
+        self.assertEqual(result_payload, {"url": "https://example.com", "main_text": "网页正文"})
+        mocked_fetch.assert_called_once_with("https://example.com")
+
     def test_plan_replan_history_tool(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -2702,6 +2730,27 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("planner_tool_thoughts_start", merged_failed)
         self.assertIn("planner_tool_thoughts_failed", merged_failed)
 
+    def test_thoughts_tool_update_supports_runtime_typed_payload(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        thought_id = self.db.add_thought("记得买牛奶")
+
+        observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input="not-json",
+            action_payload=RuntimePlannerActionPayload(
+                tool_name="thoughts_update",
+                arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="完成"),
+            ),
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("[状态:完成]", observation.result)
+        item = self.db.get_thought(thought_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.content, "记得买牛奶和鸡蛋")
+        self.assertEqual(item.status, "完成")
+
     def test_schedule_tool_supports_runtime_typed_payload(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
 
@@ -2724,6 +2773,35 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNotNone(item)
         assert item is not None
         self.assertEqual(item.duration_minutes, 45)
+
+    def test_schedule_tool_update_supports_runtime_typed_payload(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        schedule_id = self.db.add_schedule("项目同步", "2026-03-01 10:00", duration_minutes=30, tag="work")
+
+        observation = agent._execute_planner_tool(
+            action_tool="schedule",
+            action_input="not-json",
+            action_payload=RuntimePlannerActionPayload(
+                tool_name="schedule_update",
+                arguments=ScheduleUpdateArgs(
+                    id=schedule_id,
+                    event_time="2026-03-01 11:00",
+                    title="项目复盘",
+                    duration_minutes=45,
+                    tag="review",
+                ),
+            ),
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("[标签:review]", observation.result)
+        self.assertIn("(45 分钟)", observation.result)
+        item = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.title, "项目复盘")
+        self.assertEqual(item.duration_minutes, 45)
+        self.assertEqual(item.tag, "review")
 
     def test_schedule_tool_update_with_null_tag_clears_to_default(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
