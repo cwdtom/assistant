@@ -445,8 +445,6 @@ class FakeMultiToolCallingLLMClient(FakeToolCallingLLMClient):
         }
 
 
-
-
 def _history_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     action = str(arguments.get("action") or "").strip().lower()
     tool_name = {"list": "history_list", "search": "history_search"}.get(action, "history_list")
@@ -507,8 +505,6 @@ def _schedule_tool_name_and_arguments(arguments: dict[str, Any]) -> tuple[str, d
     return tool_name, payload
 
 
-
-
 class FakeSearchProvider:
     def __init__(self, results: list[SearchResult] | None = None, raises: Exception | None = None) -> None:
         self.results = results or []
@@ -543,7 +539,6 @@ class AssistantAgentTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-
     def test_version_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None, app_version="1.2.3")
 
@@ -564,8 +559,6 @@ class AssistantAgentTest(unittest.TestCase):
         result = agent.handle_input("/version")
 
         self.assertEqual(result, "当前版本：unknown")
-
-
 
     def test_handle_input_with_task_status_returns_false_for_slash_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -615,7 +608,6 @@ class AssistantAgentTest(unittest.TestCase):
         result = agent.handle_input("/profile refresh")
 
         self.assertIn("当前未启用 user_profile 刷新服务", result)
-
 
     def test_interrupt_current_task_stops_inflight_planner_loop(self) -> None:
         blocking_llm = _BlockingLLMClient(response=_planner_planned(["查看日程"]))
@@ -757,9 +749,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("thoughts_command_start", merged)
         self.assertIn("thoughts_command_done", merged)
 
-
-
-
     def test_view_alias_commands_removed(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
@@ -768,10 +757,6 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertEqual(alias_list, "未知命令。输入 /help 查看可用命令。")
         self.assertEqual(alias_today, "未知命令。输入 /help 查看可用命令。")
-
-
-
-
 
     def test_slash_schedule_full_crud_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -813,9 +798,7 @@ class AssistantAgentTest(unittest.TestCase):
         second_text = second_time.strftime("%Y-%m-%d %H:%M")
         third_text = third_time.strftime("%Y-%m-%d %H:%M")
 
-        add_resp = agent.handle_input(
-            f"/schedule add {base_text} 站会 --duration 30 --interval 1440 --times 3"
-        )
+        add_resp = agent.handle_input(f"/schedule add {base_text} 站会 --duration 30 --interval 1440 --times 3")
         self.assertIn("已添加重复日程 3 条", add_resp)
         self.assertIn("duration=30m", add_resp)
         self.assertIn("interval=1440m", add_resp)
@@ -833,9 +816,7 @@ class AssistantAgentTest(unittest.TestCase):
         invalid_times_one = agent.handle_input(f"/schedule add {base_text} 站会 --times 1")
         self.assertIn("用法", invalid_times_one)
 
-        invalid_interval_times_one = agent.handle_input(
-            f"/schedule add {base_text} 站会 --interval 1440 --times 1"
-        )
+        invalid_interval_times_one = agent.handle_input(f"/schedule add {base_text} 站会 --interval 1440 --times 1")
         self.assertIn("用法", invalid_interval_times_one)
 
         invalid_duration = agent.handle_input(f"/schedule add {base_text} 站会 --duration 0")
@@ -863,9 +844,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("提醒:2026-02-21 09:10", update_resp)
         self.assertIn("重复提醒开始:2026-02-21 08:40", update_resp)
 
-        invalid = agent.handle_input(
-            "/schedule add 2026-02-22 09:30 单次会 --remind-start 2026-02-22 09:00"
-        )
+        invalid = agent.handle_input("/schedule add 2026-02-22 09:30 单次会 --remind-start 2026-02-22 09:00")
         self.assertIn("用法", invalid)
 
     def test_slash_schedule_repeat_default_times_is_infinite(self) -> None:
@@ -1065,11 +1044,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("周会", month_resp)
         self.assertIn("2026-04", month_resp)
 
-
-
-
-
-
     def test_nl_schedule_flow_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1167,10 +1141,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("月会", result)
         self.assertEqual(fake_llm.model_call_count, 3)
 
-
-
-
-
     def test_nl_schedule_delete_via_intent_model(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1224,8 +1194,6 @@ class AssistantAgentTest(unittest.TestCase):
         assert item is not None
         self.assertEqual(item.duration_minutes, 35)
 
-
-
     def test_replan_runs_after_each_subtask_loop(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1244,7 +1212,6 @@ class AssistantAgentTest(unittest.TestCase):
         phases = [_extract_phase_from_messages(call) for call in fake_llm.calls]
         self.assertGreaterEqual(len(phases), 5)
         self.assertEqual(phases[:5], ["plan", "thought", "thought", "replan", "thought"])
-
 
     def test_plan_initialization_notifies_expanded_goal_once(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1442,13 +1409,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual([_extract_phase_from_messages(call) for call in fake_llm.calls], ["plan"])
         self.assertEqual(self.db.recent_messages(limit=2), [])
 
-
-
-
-
-
-
-
     def test_plan_prompt_excludes_tool_and_time_contract(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -1515,7 +1475,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertTrue(completed)
         self.assertEqual(completed[0].get("item"), "步骤一")
         self.assertIn("步骤一已完成", completed[0].get("result", ""))
-
 
     def test_replan_payload_completed_subtasks_appends_history(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1709,9 +1668,6 @@ class AssistantAgentTest(unittest.TestCase):
                 user_profile_path=str(profile_file),
             )
 
-
-
-
     def test_thought_tool_calling_expands_internet_search_group_tools(self) -> None:
         fake_llm = FakeToolCallingLLMClient(
             responses=[
@@ -1824,10 +1780,6 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("测试 multi tool call 拒绝")
 
         self.assertIn("每轮最多调用 1 个工具", response)
-
-
-
-
 
     def test_llm_request_and_response_are_logged(self) -> None:
         fake_llm = FakeLLMClient(
@@ -1952,9 +1904,7 @@ class AssistantAgentTest(unittest.TestCase):
             handler.close()
 
         records = _parse_json_lines(stream.getvalue())
-        failure_events = [
-            item for item in records if item.get("event") == "thought_tool_arguments_validation_failed"
-        ]
+        failure_events = [item for item in records if item.get("event") == "thought_tool_arguments_validation_failed"]
         self.assertEqual(len(failure_events), 1)
         self.assertEqual(failure_events[0].get("phase"), "thought")
         self.assertEqual(failure_events[0].get("tool_name"), "internet_search_fetch_url")
@@ -1980,10 +1930,6 @@ class AssistantAgentTest(unittest.TestCase):
             for handler in original_handlers:
                 logger.addHandler(handler)
             logger.propagate = original_propagate
-
-
-
-
 
     def test_thought_parse_failure_counts_step_limit(self) -> None:
         fake_llm = FakeLLMClient(
@@ -2141,8 +2087,6 @@ class AssistantAgentTest(unittest.TestCase):
             },
         )
 
-
-
     def test_thought_tool_call_contract_maps_history_list_tool(self) -> None:
         decision = normalize_thought_tool_call(
             {
@@ -2248,7 +2192,6 @@ class AssistantAgentTest(unittest.TestCase):
             }
         )
         self.assertIsNone(decision)
-
 
     def test_thought_tool_call_contract_maps_schedule_update_tool_with_tag(self) -> None:
         decision = normalize_thought_tool_call(
@@ -2545,7 +2488,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("1 条相关历史", response)
         self.assertEqual(fake_llm.model_call_count, 3)
 
-
     def test_cancel_pending_plan_task(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -2559,7 +2501,6 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(ask, "请确认：你想操作哪个日程 id？")
         cancel = agent.handle_input("取消当前任务")
         self.assertEqual(cancel, "已取消当前任务。")
-
 
     def test_plan_contract_requires_tools_field(self) -> None:
         fake_llm = FakeLLMClient(
@@ -2580,8 +2521,6 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("测试 plan tools 缺失")
         self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(fake_llm.model_call_count, 4)
-
-
 
     def test_history_tool_supports_list_and_search_actions(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
@@ -2825,6 +2764,32 @@ class AssistantAgentTest(unittest.TestCase):
         assert updated is not None
         self.assertEqual(updated.tag, "default")
 
+    def test_schedule_tool_repeat_with_dict_payload_updates_rule_state(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        schedule_id = self.db.add_schedule("项目同步", "2026-03-01 10:00", tag="work")
+        self.db.set_schedule_recurrence(
+            schedule_id,
+            start_time="2026-03-01 10:00",
+            repeat_interval_minutes=1440,
+            repeat_times=-1,
+        )
+
+        observation = agent._execute_schedule_system_action(
+            payload={
+                "action": "repeat",
+                "id": schedule_id,
+                "enabled": False,
+            },
+            raw_input='{"action":"repeat","id":1,"enabled":false}',
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("已停用日程", observation.result)
+        updated = self.db.get_schedule(schedule_id)
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertFalse(updated.repeat_enabled)
+
     def test_schedule_delete_missing_id_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -2853,11 +2818,6 @@ class AssistantAgentTest(unittest.TestCase):
         response = agent.handle_input("看一下全部日程")
         self.assertIn("计划执行服务暂时不可用", response)
         self.assertEqual(fake_llm.model_call_count, 4)
-
-
-
-
-
 
     def test_schedule_repeat_invalid_combo_retries_then_unavailable(self) -> None:
         fake_llm = FakeLLMClient(
@@ -2927,11 +2887,6 @@ class AssistantAgentTest(unittest.TestCase):
     def test_strip_think_blocks(self) -> None:
         text = "<think>abc</think>最终答案"
         self.assertEqual(_strip_think_blocks(text), "最终答案")
-
-
-
-
-
 
 
 if __name__ == "__main__":
