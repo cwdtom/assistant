@@ -6,15 +6,20 @@ from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.parsing_utils import (
     DEFAULT_HISTORY_LIST_LIMIT,
     MAX_HISTORY_LIST_LIMIT,
-    _normalize_positive_int_value,
 )
 from assistant_app.agent_components.render_helpers import (
     _format_history_list_result,
     _format_history_search_result,
     _is_planner_command_success,
 )
+from pydantic import ValidationError
+
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
-from assistant_app.schemas.tools import HistoryListArgs, HistorySearchArgs
+from assistant_app.schemas.tools import (
+    HistoryListArgs,
+    HistorySearchArgs,
+    coerce_history_action_payload,
+)
 
 
 def execute_history_system_action(
@@ -57,50 +62,15 @@ def _coerce_history_runtime_payload(
     if isinstance(payload, RuntimePlannerActionPayload):
         return payload
 
-    action = str(payload.get("action") or "").strip().lower()
-    if action not in {"list", "search"}:
+    try:
+        return coerce_history_action_payload(payload)
+    except ValidationError as exc:
         return PlannerObservation(
             tool=observation_tool,
             input_text=raw_input,
             ok=False,
-            result="history.action 非法。",
+            result=_history_validation_error_text(payload=payload, exc=exc),
         )
-
-    arguments: dict[str, Any] = {}
-    if "limit" in payload and payload.get("limit") is not None:
-        limit = _normalize_positive_int_value(payload.get("limit"))
-        if limit is None:
-            if action == "list":
-                limit_error = "history.list limit 必须为正整数。"
-            else:
-                limit_error = "history.search limit 必须为正整数。"
-            return PlannerObservation(
-                tool=observation_tool,
-                input_text=raw_input,
-                ok=False,
-                result=limit_error,
-            )
-        arguments["limit"] = limit
-
-    if action == "list":
-        return RuntimePlannerActionPayload(
-            tool_name="history_list",
-            arguments=HistoryListArgs.model_validate(arguments),
-        )
-
-    keyword = str(payload.get("keyword") or "").strip()
-    if not keyword:
-        return PlannerObservation(
-            tool=observation_tool,
-            input_text=raw_input,
-            ok=False,
-            result="history.search keyword 不能为空。",
-        )
-    arguments["keyword"] = keyword
-    return RuntimePlannerActionPayload(
-        tool_name="history_search",
-        arguments=HistorySearchArgs.model_validate(arguments),
-    )
 
 
 def _execute_typed_history_system_action(
@@ -141,3 +111,17 @@ def _normalized_history_limit(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_HISTORY_LIST_LIMIT
     return min(limit, MAX_HISTORY_LIST_LIMIT)
+
+
+def _history_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
+    action = str(payload.get("action") or "").strip().lower()
+    first_error = exc.errors()[0] if exc.errors() else {}
+    location = first_error.get("loc", ())
+    field_names = {str(item) for item in location}
+    if action not in {"list", "search"}:
+        return "history.action 非法。"
+    if "limit" in field_names:
+        return f"history.{action} limit 必须为正整数。"
+    if action == "search" and "keyword" in field_names:
+        return "history.search keyword 不能为空。"
+    return "history.action 非法。"

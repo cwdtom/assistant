@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from dataclasses import dataclass, field
 from typing import Protocol
+
+from assistant_app.schemas.llm_payloads import PersonaRewriteRequestPayload
 
 
 class PersonaLLMClient(Protocol):
@@ -49,15 +50,15 @@ class PersonaRewriter:
         persona = self.persona.strip()
         if not persona or self.llm_client is None:
             return text
-        payload = {
-            "scene": scene,
-            "persona": persona,
-            "text": normalized_text,
-            "requirements": self._scene_requirements(scene=scene),
-        }
+        payload = PersonaRewriteRequestPayload(
+            scene=scene,
+            persona=persona,
+            text=normalized_text,
+            requirements=self._scene_requirements(scene=scene),
+        )
         messages = [
             {"role": "system", "content": PERSONA_REWRITE_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            {"role": "user", "content": payload.model_dump_json()},
         ]
         try:
             if use_lock:

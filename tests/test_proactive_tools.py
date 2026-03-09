@@ -9,6 +9,10 @@ from pathlib import Path
 
 from assistant_app.db import AssistantDB
 from assistant_app.proactive_tools import ProactiveToolExecutor
+from assistant_app.schemas.proactive import (
+    ProactiveHistorySearchToolResult,
+    ProactiveScheduleListToolResult,
+)
 from assistant_app.search import SearchResult
 
 
@@ -86,6 +90,54 @@ class ProactiveToolExecutorTest(unittest.TestCase):
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["items"][0]["assistant_content"], "今天会下雨")
+
+    def test_schedule_list_returns_schema_compatible_payload(self) -> None:
+        schedule_id = self.db.add_schedule(
+            title="晨会",
+            event_time="2026-03-05 10:00",
+            duration_minutes=30,
+            tag="work",
+        )
+        self.assertGreater(schedule_id, 0)
+
+        executor = ProactiveToolExecutor(
+            db=self.db,
+            search_provider=_FakeSearchProvider(),
+            now=self.now,
+            lookahead_hours=24,
+            chat_lookback_hours=24,
+            internet_search_top_k=3,
+        )
+
+        raw = executor.execute(tool_name="schedule_list", arguments={"tag": "work"})
+        payload = ProactiveScheduleListToolResult.model_validate_json(raw)
+
+        self.assertEqual(payload.count, 1)
+        self.assertEqual(payload.items[0].title, "晨会")
+
+    def test_history_search_returns_schema_compatible_payload(self) -> None:
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="记得顺路去超市")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE chat_history SET created_at = ? WHERE id = 1",
+                ((self.now - timedelta(hours=1)).isoformat(sep=" "),),
+            )
+            conn.commit()
+
+        executor = ProactiveToolExecutor(
+            db=self.db,
+            search_provider=_FakeSearchProvider(),
+            now=self.now,
+            lookahead_hours=24,
+            chat_lookback_hours=24,
+            internet_search_top_k=3,
+        )
+
+        raw = executor.execute(tool_name="history_search", arguments={"keyword": "牛奶", "limit": 5})
+        payload = ProactiveHistorySearchToolResult.model_validate_json(raw)
+
+        self.assertEqual(payload.count, 1)
+        self.assertEqual(payload.items[0].user_content, "我要买牛奶")
 
 
 if __name__ == "__main__":

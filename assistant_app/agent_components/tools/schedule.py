@@ -4,18 +4,8 @@ from typing import Any
 
 from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.parsing_utils import (
-    _INVALID_OPTION_VALUE,
     _default_schedule_list_window,
     _filter_schedules_by_calendar_view,
-    _normalize_datetime_text,
-    _normalize_optional_datetime_value,
-    _normalize_positive_int_value,
-    _normalize_schedule_duration_minutes_value,
-    _normalize_schedule_interval_minutes_value,
-    _normalize_schedule_repeat_times_value,
-    _normalize_schedule_tag_value,
-    _normalize_schedule_view_anchor,
-    _normalize_schedule_view_value,
     _resolve_schedule_view_window,
 )
 from assistant_app.agent_components.render_helpers import (
@@ -28,6 +18,8 @@ from assistant_app.agent_components.render_helpers import (
     _schedule_table_rows,
     _schedule_view_title,
 )
+from pydantic import ValidationError
+
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
     ScheduleAddArgs,
@@ -36,6 +28,7 @@ from assistant_app.schemas.tools import (
     ScheduleRepeatArgs,
     ScheduleUpdateArgs,
     ScheduleViewArgs,
+    coerce_schedule_action_payload,
 )
 
 
@@ -62,188 +55,14 @@ def _coerce_schedule_runtime_payload(
     if isinstance(payload, RuntimePlannerActionPayload):
         return payload
 
-    action = str(payload.get("action") or "").strip().lower()
-    if action not in {"add", "list", "get", "view", "update", "delete", "repeat"}:
-        return _schedule_observation(raw_input=raw_input, ok=False, result="schedule.action 非法。")
-
-    if action == "list":
-        arguments: dict[str, Any] = {}
-        if "tag" in payload:
-            arguments["tag"] = _normalize_schedule_tag_value(payload.get("tag"))
-        return RuntimePlannerActionPayload(
-            tool_name="schedule_list",
-            arguments=ScheduleListArgs.model_validate(arguments),
-        )
-
-    if action == "view":
-        view_name = _normalize_schedule_view_value(payload.get("view"))
-        if view_name is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.view 需要合法 view(day|week|month)。",
-            )
-        arguments = {"view": view_name}
-        if "anchor" in payload:
-            anchor = payload.get("anchor")
-            if anchor is not None:
-                normalized_anchor = _normalize_schedule_view_anchor(view_name=view_name, value=str(anchor))
-                if normalized_anchor is None:
-                    return _schedule_observation(raw_input=raw_input, ok=False, result="schedule.view 的 anchor 非法。")
-                arguments["anchor"] = normalized_anchor
-            else:
-                arguments["anchor"] = None
-        if "tag" in payload:
-            arguments["tag"] = _normalize_schedule_tag_value(payload.get("tag"))
-        return RuntimePlannerActionPayload(
-            tool_name="schedule_view",
-            arguments=ScheduleViewArgs.model_validate(arguments),
-        )
-
-    if action == "add":
-        return _coerce_schedule_add_runtime_payload(payload=payload, raw_input=raw_input)
-
-    schedule_id = _normalize_positive_int_value(payload.get("id"))
-    if schedule_id is None:
-        return _schedule_observation(raw_input=raw_input, ok=False, result="schedule.id 必须为正整数。")
-
-    if action == "get":
-        return RuntimePlannerActionPayload(
-            tool_name="schedule_get",
-            arguments=ScheduleIdArgs(id=schedule_id),
-        )
-
-    if action == "update":
-        return _coerce_schedule_update_runtime_payload(
-            payload=payload,
-            raw_input=raw_input,
-            schedule_id=schedule_id,
-        )
-
-    if action == "delete":
-        return RuntimePlannerActionPayload(
-            tool_name="schedule_delete",
-            arguments=ScheduleIdArgs(id=schedule_id),
-        )
-
-    enabled = payload.get("enabled")
-    if not isinstance(enabled, bool):
+    try:
+        return coerce_schedule_action_payload(payload)
+    except ValidationError as exc:
         return _schedule_observation(
             raw_input=raw_input,
             ok=False,
-            result="schedule.repeat 需要 enabled 布尔值。",
+            result=_schedule_validation_error_text(payload=payload, exc=exc),
         )
-    return RuntimePlannerActionPayload(
-        tool_name="schedule_repeat",
-        arguments=ScheduleRepeatArgs(id=schedule_id, enabled=enabled),
-    )
-
-
-def _coerce_schedule_add_runtime_payload(
-    *,
-    payload: dict[str, Any],
-    raw_input: str,
-) -> RuntimePlannerActionPayload | PlannerObservation:
-    event_time = _normalize_datetime_text(str(payload.get("event_time") or ""))
-    title = str(payload.get("title") or "").strip()
-    if not event_time or not title:
-        return _schedule_observation(
-            raw_input=raw_input,
-            ok=False,
-            result="schedule.add 缺少 event_time/title 或格式非法。",
-        )
-
-    arguments: dict[str, Any] = {
-        "event_time": event_time,
-        "title": title,
-    }
-    if "tag" in payload:
-        arguments["tag"] = _normalize_schedule_tag_value(payload.get("tag"))
-    if "duration_minutes" in payload:
-        arguments["duration_minutes"] = _normalize_schedule_duration_minutes_value(payload.get("duration_minutes"))
-    remind_at_value = _normalize_optional_datetime_value(
-        payload.get("remind_at"),
-        key_present="remind_at" in payload,
-    )
-    if remind_at_value is _INVALID_OPTION_VALUE:
-        return _schedule_observation(raw_input=raw_input, ok=False, result="schedule.add remind_at 格式非法。")
-    if "remind_at" in payload:
-        arguments["remind_at"] = remind_at_value
-    if "interval_minutes" in payload:
-        arguments["interval_minutes"] = _normalize_schedule_interval_minutes_value(payload.get("interval_minutes"))
-    if "times" in payload:
-        arguments["times"] = _normalize_schedule_repeat_times_value(payload.get("times"))
-    repeat_remind_start_value = _normalize_optional_datetime_value(
-        payload.get("remind_start_time"),
-        key_present="remind_start_time" in payload,
-    )
-    if repeat_remind_start_value is _INVALID_OPTION_VALUE:
-        return _schedule_observation(
-            raw_input=raw_input,
-            ok=False,
-            result="schedule.add remind_start_time 格式非法。",
-        )
-    if "remind_start_time" in payload:
-        arguments["remind_start_time"] = repeat_remind_start_value
-    return RuntimePlannerActionPayload(
-        tool_name="schedule_add",
-        arguments=ScheduleAddArgs.model_validate(arguments),
-    )
-
-
-def _coerce_schedule_update_runtime_payload(
-    *,
-    payload: dict[str, Any],
-    raw_input: str,
-    schedule_id: int,
-) -> RuntimePlannerActionPayload | PlannerObservation:
-    event_time = _normalize_datetime_text(str(payload.get("event_time") or ""))
-    title = str(payload.get("title") or "").strip()
-    if not event_time or not title:
-        return _schedule_observation(
-            raw_input=raw_input,
-            ok=False,
-            result="schedule.update 缺少 event_time/title 或格式非法。",
-        )
-
-    arguments: dict[str, Any] = {
-        "id": schedule_id,
-        "event_time": event_time,
-        "title": title,
-    }
-    if "tag" in payload:
-        arguments["tag"] = _normalize_schedule_tag_value(payload.get("tag"))
-    if "duration_minutes" in payload:
-        arguments["duration_minutes"] = _normalize_schedule_duration_minutes_value(payload.get("duration_minutes"))
-    remind_at_value = _normalize_optional_datetime_value(payload.get("remind_at"), key_present="remind_at" in payload)
-    if remind_at_value is _INVALID_OPTION_VALUE:
-        return _schedule_observation(
-            raw_input=raw_input,
-            ok=False,
-            result="schedule.update remind_at 格式非法。",
-        )
-    if "remind_at" in payload:
-        arguments["remind_at"] = remind_at_value
-    if "interval_minutes" in payload:
-        arguments["interval_minutes"] = _normalize_schedule_interval_minutes_value(payload.get("interval_minutes"))
-    if "times" in payload:
-        arguments["times"] = _normalize_schedule_repeat_times_value(payload.get("times"))
-    repeat_remind_start_value = _normalize_optional_datetime_value(
-        payload.get("remind_start_time"),
-        key_present="remind_start_time" in payload,
-    )
-    if repeat_remind_start_value is _INVALID_OPTION_VALUE:
-        return _schedule_observation(
-            raw_input=raw_input,
-            ok=False,
-            result="schedule.update remind_start_time 格式非法。",
-        )
-    if "remind_start_time" in payload:
-        arguments["remind_start_time"] = repeat_remind_start_value
-    return RuntimePlannerActionPayload(
-        tool_name="schedule_update",
-        arguments=ScheduleUpdateArgs.model_validate(arguments),
-    )
 
 
 def _schedule_observation(*, raw_input: str, ok: bool, result: str) -> PlannerObservation:
@@ -519,21 +338,16 @@ def _execute_typed_schedule_system_action(
         return _observe_schedule_list(
             agent,
             raw_input=raw_input,
-            tag=_normalize_schedule_tag_value(arguments.tag),
+            tag=arguments.tag,
         )
 
     if tool_name == "schedule_view" and isinstance(arguments, ScheduleViewArgs):
-        anchor = arguments.anchor
-        if anchor is not None:
-            anchor = _normalize_schedule_view_anchor(view_name=arguments.view, value=anchor)
-            if anchor is None:
-                return _schedule_observation(raw_input=raw_input, ok=False, result="schedule.view 的 anchor 非法。")
         return _observe_schedule_view(
             agent,
             raw_input=raw_input,
             view_name=arguments.view,
-            anchor=anchor,
-            tag=_normalize_schedule_tag_value(arguments.tag),
+            anchor=arguments.anchor,
+            tag=arguments.tag,
         )
 
     if tool_name == "schedule_add" and isinstance(arguments, ScheduleAddArgs):
@@ -574,7 +388,7 @@ def _execute_typed_schedule_system_action(
             raw_input=raw_input,
             event_time=arguments.event_time,
             title=arguments.title,
-            tag=_normalize_schedule_tag_value(arguments.tag) or "default",
+            tag=arguments.tag or "default",
             duration_minutes=arguments.duration_minutes if arguments.duration_minutes is not None else 60,
             remind_at=arguments.remind_at,
             repeat_interval_minutes=repeat_interval_minutes,
@@ -626,7 +440,7 @@ def _execute_typed_schedule_system_action(
             schedule_id=arguments.id,
             event_time=arguments.event_time,
             title=arguments.title,
-            tag=_normalize_schedule_tag_value(arguments.tag),
+            tag=arguments.tag,
             tag_present="tag" in arguments.model_fields_set,
             duration_minutes=arguments.duration_minutes if "duration_minutes" in arguments.model_fields_set else None,
             remind_at=arguments.remind_at,
@@ -649,3 +463,37 @@ def _execute_typed_schedule_system_action(
         )
 
     return None
+
+
+def _schedule_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
+    action = str(payload.get("action") or "").strip().lower()
+    first_error = exc.errors()[0] if exc.errors() else {}
+    location = first_error.get("loc", ())
+    field_names = {str(item) for item in location}
+    message = str(first_error.get("msg") or "").removeprefix("Value error, ").strip()
+
+    if message.startswith("schedule."):
+        return message
+    if action not in {"add", "list", "get", "view", "update", "delete", "repeat"}:
+        return "schedule.action 非法。"
+    if action == "view" and "view" in field_names:
+        return "schedule.view 需要合法 view(day|week|month)。"
+    if action == "view" and ("anchor" in field_names or message == "anchor must match view"):
+        return "schedule.view 的 anchor 非法。"
+    if "id" in field_names:
+        return "schedule.id 必须为正整数。"
+    if action in {"add", "update"} and field_names.intersection({"event_time", "title"}):
+        return f"schedule.{action} 缺少 event_time/title 或格式非法。"
+    if action in {"add", "update"} and "remind_at" in field_names:
+        return f"schedule.{action} remind_at 格式非法。"
+    if action in {"add", "update"} and "remind_start_time" in field_names:
+        return f"schedule.{action} remind_start_time 格式非法。"
+    if action in {"add", "update"} and "duration_minutes" in field_names:
+        return f"schedule.{action} duration_minutes 需为 >=1 的整数。"
+    if action in {"add", "update"} and "interval_minutes" in field_names:
+        return f"schedule.{action} interval_minutes 需为 >=1 的整数。"
+    if action in {"add", "update"} and "times" in field_names:
+        return f"schedule.{action} times 需为 -1 或 >=2 的整数。"
+    if action == "repeat" and "enabled" in field_names:
+        return "schedule.repeat 需要 enabled 布尔值。"
+    return "schedule.action 非法。"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.schemas.base import FrozenModel
@@ -11,8 +11,10 @@ from assistant_app.schemas.domain import (
     TIMESTAMP_FORMAT,
     ChatTurn,
     ScheduleItem,
+    SearchResult,
     _validate_datetime_text,
 )
+from assistant_app.schemas.values import HistoryListLimitValue, ScheduleViewAnchorValue
 from assistant_app.schemas.planner import ProactiveDoneArguments
 
 
@@ -197,6 +199,66 @@ class ProactiveContextSnapshot(FrozenModel):
                 recent_chat_turns=[ProactiveChatTurnContextItem.from_chat_turn(item) for item in self.turns],
             ),
         )
+
+
+class ProactiveScheduleListToolResult(FrozenModel):
+    count: int = Field(ge=0)
+    items: list[ProactiveScheduleContextItem] = Field(default_factory=list)
+
+
+class ProactiveScheduleViewToolResult(ProactiveScheduleListToolResult):
+    view: str = Field(min_length=1)
+    anchor: str = ""
+
+    @field_validator("view", mode="before")
+    @classmethod
+    def normalize_view(cls, value: object) -> str:
+        return str(value or "").strip().lower()
+
+    @model_validator(mode="after")
+    def validate_anchor(self) -> ProactiveScheduleViewToolResult:
+        if not self.anchor:
+            return self
+        normalized = ScheduleViewAnchorValue.model_validate({"view": self.view, "anchor": self.anchor}).anchor
+        object.__setattr__(self, "anchor", normalized or "")
+        return self
+
+
+class ProactiveScheduleGetToolResult(FrozenModel):
+    found: bool
+    id: int | None = Field(default=None, ge=1)
+    item: ProactiveScheduleContextItem | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> ProactiveScheduleGetToolResult:
+        if self.found and self.item is None:
+            raise ValueError("item is required when found is true")
+        if not self.found and self.id is None:
+            raise ValueError("id is required when found is false")
+        return self
+
+
+class ProactiveHistoryListToolResult(FrozenModel):
+    limit: int = Field(ge=1, le=200)
+    count: int = Field(ge=0)
+    items: list[ProactiveChatTurnContextItem] = Field(default_factory=list)
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def normalize_limit(cls, value: object) -> int:
+        return HistoryListLimitValue.model_validate({"limit": value}).limit
+
+
+class ProactiveHistorySearchToolResult(FrozenModel):
+    keyword: str = Field(min_length=1)
+    count: int = Field(ge=0)
+    items: list[ProactiveChatTurnContextItem] = Field(default_factory=list)
+
+
+class ProactiveInternetSearchToolResult(FrozenModel):
+    query: str = Field(min_length=1)
+    count: int = Field(ge=0)
+    items: list[SearchResult] = Field(default_factory=list)
 
 
 def _local_timezone_name(now: datetime) -> str:

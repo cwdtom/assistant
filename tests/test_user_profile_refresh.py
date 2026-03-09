@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -140,6 +141,26 @@ class UserProfileRefreshServiceTest(unittest.TestCase):
         self.assertEqual(self.profile_path.read_text(encoding="utf-8"), "# 新画像\n- 偏好: 乌龙茶")
         self.assertEqual(self.reload_count, 1)
         self.assertEqual(llm.temperature_calls, [0.0])
+
+    def test_manual_refresh_builds_structured_prompt_payload(self) -> None:
+        clock = _MutableClock(datetime(2026, 2, 27, 12, 0))
+        llm = _FakeLLMClient(replies=["# 新画像\n- 偏好: 乌龙茶"])
+        service = UserProfileRefreshService(
+            db=self.db,
+            llm_client=llm,
+            user_profile_path=str(self.profile_path),
+            agent_reloader=self._reload_agent,
+            clock=clock,
+            scheduled_hour=4,
+        )
+
+        service.run_manual_refresh()
+
+        payload = json.loads(llm.messages[0][1]["content"])
+        self.assertEqual(payload["task"], "refresh_user_profile")
+        self.assertEqual(payload["time"]["now"], "2026-02-27 12:00")
+        self.assertEqual(payload["limits"]["actual_turns"], 1)
+        self.assertEqual(payload["chat_turns"][0]["user_content"], "今天喝拿铁")
 
     def test_manual_refresh_is_not_blocked_by_daily_dedup(self) -> None:
         clock = _MutableClock(datetime(2026, 2, 27, 3, 50))

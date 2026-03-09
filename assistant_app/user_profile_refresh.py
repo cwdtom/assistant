@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
@@ -9,6 +8,11 @@ from typing import Literal
 
 from assistant_app.db import AssistantDB, ChatTurn
 from assistant_app.llm import LLMClient
+from assistant_app.schemas.llm_payloads import (
+    UserProfileRefreshPromptLimits,
+    UserProfileRefreshPromptPayload,
+    UserProfileRefreshPromptTime,
+)
 from assistant_app.schemas.user_profile import UserProfileRefreshPreparation, UserProfileRefreshResult
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -228,34 +232,27 @@ class UserProfileRefreshService:
         return [item for item in turns if item.user_content.strip() or item.assistant_content.strip()]
 
     def _build_messages(self, *, current_profile: str, turns: list[ChatTurn], now: datetime) -> list[dict[str, str]]:
-        payload = {
-            "task": "refresh_user_profile",
-            "time": {
-                "now": now.strftime("%Y-%m-%d %H:%M"),
-                "window_days": self._lookback_days,
-            },
-            "limits": {
-                "max_turns": self._max_turns,
-                "actual_turns": len(turns),
-            },
-            "current_user_profile": current_profile,
-            "chat_turns": [
-                {
-                    "created_at": item.created_at,
-                    "user_content": item.user_content,
-                    "assistant_content": item.assistant_content,
-                }
-                for item in turns
-            ],
-            "output_requirements": [
+        payload = UserProfileRefreshPromptPayload(
+            task="refresh_user_profile",
+            time=UserProfileRefreshPromptTime(
+                now=now.strftime("%Y-%m-%d %H:%M"),
+                window_days=self._lookback_days,
+            ),
+            limits=UserProfileRefreshPromptLimits(
+                max_turns=self._max_turns,
+                actual_turns=len(turns),
+            ),
+            current_user_profile=current_profile,
+            chat_turns=turns,
+            output_requirements=[
                 "输出完整新版 user_profile Markdown",
                 "不要输出解释文本",
                 "若信息不足，保留原有条目并标注待观察",
             ],
-        }
+        )
         return [
             {"role": "system", "content": USER_PROFILE_REFRESH_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            {"role": "user", "content": payload.model_dump_json()},
         ]
 
     @staticmethod

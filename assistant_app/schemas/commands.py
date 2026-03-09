@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from assistant_app.agent_components.parsing_utils import (
     _INVALID_OPTION_VALUE,
@@ -32,6 +32,8 @@ from assistant_app.schemas.tools import (
     ThoughtsIdArgs,
     ThoughtsListArgs,
     ThoughtsUpdateArgs,
+    coerce_history_action_payload,
+    coerce_schedule_action_payload,
 )
 
 
@@ -127,13 +129,52 @@ class ScheduleRepeatCommand(CliCommandBase):
     arguments: ScheduleRepeatArgs
 
 
+def _coerce_history_command_arguments(raw_payload: dict[str, object]) -> HistoryListArgs | HistorySearchArgs | None:
+    try:
+        runtime_payload = coerce_history_action_payload(raw_payload)
+    except ValidationError:
+        return None
+    arguments = runtime_payload.arguments
+    if isinstance(arguments, (HistoryListArgs, HistorySearchArgs)):
+        return arguments
+    return None
+
+
+def _coerce_schedule_command_arguments(
+    raw_payload: dict[str, object],
+) -> (
+    ScheduleListArgs
+    | ScheduleViewArgs
+    | ScheduleIdArgs
+    | ScheduleAddArgs
+    | ScheduleUpdateArgs
+    | ScheduleRepeatArgs
+    | None
+):
+    try:
+        runtime_payload = coerce_schedule_action_payload(raw_payload)
+    except ValidationError:
+        return None
+    arguments = runtime_payload.arguments
+    if isinstance(
+        arguments,
+        (ScheduleListArgs, ScheduleViewArgs, ScheduleIdArgs, ScheduleAddArgs, ScheduleUpdateArgs, ScheduleRepeatArgs),
+    ):
+        return arguments
+    return None
+
+
 def parse_history_list_command(command: str) -> HistoryListCommand | None:
     history_limit = _parse_history_list_limit(command)
     if history_limit is None:
         return None
-    if command == "/history list":
-        return HistoryListCommand()
-    return HistoryListCommand(arguments=HistoryListArgs(limit=history_limit))
+    raw_payload: dict[str, object] = {"action": "list"}
+    if command != "/history list":
+        raw_payload["limit"] = history_limit
+    arguments = _coerce_history_command_arguments(raw_payload)
+    if not isinstance(arguments, HistoryListArgs):
+        return None
+    return HistoryListCommand(arguments=arguments)
 
 
 def parse_history_search_command(command: str) -> HistorySearchCommand | None:
@@ -142,7 +183,12 @@ def parse_history_search_command(command: str) -> HistorySearchCommand | None:
     if parsed is None:
         return None
     keyword, history_limit = parsed
-    return HistorySearchCommand(arguments=HistorySearchArgs(keyword=keyword, limit=history_limit))
+    arguments = _coerce_history_command_arguments(
+        {"action": "search", "keyword": keyword, "limit": history_limit}
+    )
+    if not isinstance(arguments, HistorySearchArgs):
+        return None
+    return HistorySearchCommand(arguments=arguments)
 
 
 def parse_thoughts_add_command(command: str) -> ThoughtsAddCommand | None:
@@ -193,9 +239,13 @@ def parse_schedule_list_command(command: str) -> ScheduleListCommand | None:
     parsed_tag = _parse_schedule_list_tag_input(command.removeprefix("/schedule list").strip())
     if parsed_tag is _INVALID_OPTION_VALUE:
         return None
+    raw_payload: dict[str, object] = {"action": "list"}
     if isinstance(parsed_tag, str):
-        return ScheduleListCommand(arguments=ScheduleListArgs(tag=parsed_tag))
-    return ScheduleListCommand()
+        raw_payload["tag"] = parsed_tag
+    arguments = _coerce_schedule_command_arguments(raw_payload)
+    if not isinstance(arguments, ScheduleListArgs):
+        return None
+    return ScheduleListCommand(arguments=arguments)
 
 
 def parse_schedule_view_command(command: str) -> ScheduleViewCommand | None:
@@ -203,19 +253,25 @@ def parse_schedule_view_command(command: str) -> ScheduleViewCommand | None:
     if parsed_view is None:
         return None
     view_name, anchor, tag = parsed_view
-    arguments: dict[str, object] = {"view": view_name}
+    raw_payload: dict[str, object] = {"action": "view", "view": view_name}
     if anchor is not None:
-        arguments["anchor"] = anchor
+        raw_payload["anchor"] = anchor
     if tag is not None:
-        arguments["tag"] = tag
-    return ScheduleViewCommand(arguments=ScheduleViewArgs.model_validate(arguments))
+        raw_payload["tag"] = tag
+    arguments = _coerce_schedule_command_arguments(raw_payload)
+    if not isinstance(arguments, ScheduleViewArgs):
+        return None
+    return ScheduleViewCommand(arguments=arguments)
 
 
 def parse_schedule_get_command(command: str) -> ScheduleGetCommand | None:
     schedule_id = _parse_positive_int(command.removeprefix("/schedule get ").strip())
     if schedule_id is None:
         return None
-    return ScheduleGetCommand(arguments=ScheduleIdArgs(id=schedule_id))
+    arguments = _coerce_schedule_command_arguments({"action": "get", "id": schedule_id})
+    if not isinstance(arguments, ScheduleIdArgs):
+        return None
+    return ScheduleGetCommand(arguments=arguments)
 
 
 def parse_schedule_add_command(command: str) -> ScheduleAddCommand | None:
@@ -232,20 +288,24 @@ def parse_schedule_add_command(command: str) -> ScheduleAddCommand | None:
         repeat_times,
         repeat_remind_start_time,
     ) = parsed_add
-    arguments: dict[str, object] = {
+    raw_payload: dict[str, object] = {
+        "action": "add",
         "event_time": event_time,
         "title": title,
         "tag": tag,
         "duration_minutes": duration_minutes,
     }
     if remind_at is not None:
-        arguments["remind_at"] = remind_at
+        raw_payload["remind_at"] = remind_at
     if repeat_interval_minutes is not None:
-        arguments["interval_minutes"] = repeat_interval_minutes
-        arguments["times"] = repeat_times
+        raw_payload["interval_minutes"] = repeat_interval_minutes
+        raw_payload["times"] = repeat_times
     if repeat_remind_start_time is not None:
-        arguments["remind_start_time"] = repeat_remind_start_time
-    return ScheduleAddCommand(arguments=ScheduleAddArgs.model_validate(arguments))
+        raw_payload["remind_start_time"] = repeat_remind_start_time
+    arguments = _coerce_schedule_command_arguments(raw_payload)
+    if not isinstance(arguments, ScheduleAddArgs):
+        return None
+    return ScheduleAddCommand(arguments=arguments)
 
 
 def parse_schedule_update_command(command: str) -> ScheduleUpdateCommand | None:
@@ -266,30 +326,37 @@ def parse_schedule_update_command(command: str) -> ScheduleUpdateCommand | None:
         repeat_remind_start_time,
         has_repeat_remind_start_time,
     ) = parsed_update
-    arguments: dict[str, object] = {
+    raw_payload: dict[str, object] = {
+        "action": "update",
         "id": schedule_id,
         "event_time": event_time,
         "title": title,
     }
     if has_tag:
-        arguments["tag"] = tag
+        raw_payload["tag"] = tag
     if duration_minutes is not None:
-        arguments["duration_minutes"] = duration_minutes
+        raw_payload["duration_minutes"] = duration_minutes
     if has_remind:
-        arguments["remind_at"] = remind_at
+        raw_payload["remind_at"] = remind_at
     if repeat_interval_minutes is not None:
-        arguments["interval_minutes"] = repeat_interval_minutes
-        arguments["times"] = repeat_times
+        raw_payload["interval_minutes"] = repeat_interval_minutes
+        raw_payload["times"] = repeat_times
     if has_repeat_remind_start_time:
-        arguments["remind_start_time"] = repeat_remind_start_time
-    return ScheduleUpdateCommand(arguments=ScheduleUpdateArgs.model_validate(arguments))
+        raw_payload["remind_start_time"] = repeat_remind_start_time
+    arguments = _coerce_schedule_command_arguments(raw_payload)
+    if not isinstance(arguments, ScheduleUpdateArgs):
+        return None
+    return ScheduleUpdateCommand(arguments=arguments)
 
 
 def parse_schedule_delete_command(command: str) -> ScheduleDeleteCommand | None:
     schedule_id = _parse_positive_int(command.removeprefix("/schedule delete ").strip())
     if schedule_id is None:
         return None
-    return ScheduleDeleteCommand(arguments=ScheduleIdArgs(id=schedule_id))
+    arguments = _coerce_schedule_command_arguments({"action": "delete", "id": schedule_id})
+    if not isinstance(arguments, ScheduleIdArgs):
+        return None
+    return ScheduleDeleteCommand(arguments=arguments)
 
 
 def parse_schedule_repeat_command(command: str) -> ScheduleRepeatCommand | None:
@@ -297,7 +364,10 @@ def parse_schedule_repeat_command(command: str) -> ScheduleRepeatCommand | None:
     if parsed_toggle is None:
         return None
     schedule_id, enabled = parsed_toggle
-    return ScheduleRepeatCommand(arguments=ScheduleRepeatArgs(id=schedule_id, enabled=enabled))
+    arguments = _coerce_schedule_command_arguments({"action": "repeat", "id": schedule_id, "enabled": enabled})
+    if not isinstance(arguments, ScheduleRepeatArgs):
+        return None
+    return ScheduleRepeatCommand(arguments=arguments)
 
 
 __all__ = [

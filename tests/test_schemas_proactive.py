@@ -5,7 +5,14 @@ from datetime import datetime
 
 from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.schemas.domain import ChatTurn, ScheduleItem
-from assistant_app.schemas.proactive import ProactiveContextSnapshot, ProactivePromptPayload
+from pydantic import ValidationError
+
+from assistant_app.schemas.proactive import (
+    ProactiveContextSnapshot,
+    ProactivePromptPayload,
+    ProactiveScheduleGetToolResult,
+    ProactiveScheduleViewToolResult,
+)
 
 
 class ProactiveSchemaTest(unittest.TestCase):
@@ -61,6 +68,22 @@ class ProactiveSchemaTest(unittest.TestCase):
         dumped = payload.model_dump(mode="json")
         self.assertEqual(dumped["output_contract"]["terminal_action"], "done")
         self.assertEqual(dumped["internal_context"]["schedules"][0]["event_time"], "2026-03-05 10:00")
+
+    def test_schedule_view_tool_result_normalizes_anchor(self) -> None:
+        payload = ProactiveScheduleViewToolResult.model_validate(
+            {
+                "view": "month",
+                "anchor": "2026-03",
+                "count": 0,
+                "items": [],
+            }
+        )
+
+        self.assertEqual(payload.anchor, "2026-03")
+
+    def test_schedule_get_tool_result_requires_item_when_found(self) -> None:
+        with self.assertRaises(ValidationError):
+            ProactiveScheduleGetToolResult.model_validate({"found": True})
 
 
 if __name__ == "__main__":

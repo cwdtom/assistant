@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from assistant_app.llm import OpenAICompatibleClient
+from assistant_app.schemas.llm import parse_chat_completion_response
 
 
 class OpenAICompatibleClientTest(unittest.TestCase):
@@ -156,6 +157,50 @@ class OpenAICompatibleClientTest(unittest.TestCase):
 
         self.assertEqual(len(payload.assistant_message.tool_calls), 1)
         self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "done")
+
+    def test_parse_chat_completion_response_accepts_legacy_dict_response(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": " hello ",
+                        "tool_calls": None,
+                    }
+                }
+            ]
+        }
+
+        parsed = parse_chat_completion_response(response)
+
+        self.assertEqual(parsed.first_message().role, "assistant")
+        self.assertEqual(parsed.first_message().content_text(), "hello")
+        self.assertEqual(parsed.first_message().tool_calls, [])
+
+    def test_parse_chat_completion_response_accepts_object_response(self) -> None:
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call_9",
+                                type="function",
+                                function=SimpleNamespace(name="history_list", arguments={"limit": 3}),
+                            )
+                        ],
+                    )
+                )
+            ]
+        )
+
+        parsed = parse_chat_completion_response(response)
+        tool_call = parsed.first_message().tool_calls[0]
+
+        self.assertEqual(tool_call.function.name, "history_list")
+        self.assertEqual(tool_call.function.arguments, '{"limit":3}')
 
 
 if __name__ == "__main__":

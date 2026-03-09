@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, TypeAdapter, ValidationError, field_validator
+from pydantic import Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from assistant_app.schemas.base import FrozenModel
-from assistant_app.schemas.domain import EVENT_TIME_FORMAT, HttpUrlValue, _validate_datetime_text
+from assistant_app.schemas.domain import HttpUrlValue
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
+from assistant_app.schemas.values import (
+    HistoryListLimitValue,
+    OptionalScheduleDateTimeValue,
+    OptionalTagValue,
+    PositiveIntValue,
+    ScheduleDateTimeValue,
+    ScheduleRepeatTimesValue,
+    ScheduleViewAnchorValue,
+)
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, Any])
 _THOUGHT_STATUS_VALUES = ("未完成", "完成", "删除")
@@ -36,15 +46,19 @@ class ScheduleAddArgs(ThoughtToolArgsBase):
     @field_validator("event_time")
     @classmethod
     def validate_event_time(cls, value: str) -> str:
-        return _validate_datetime_text(value, field_name="event_time", formats=(EVENT_TIME_FORMAT,))
+        return ScheduleDateTimeValue.model_validate({"value": value}).value
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
 
     @field_validator("remind_at", "remind_start_time")
     @classmethod
     def validate_optional_datetime_fields(cls, value: str | None, info: object) -> str | None:
         if value is None:
             return None
-        field_name = getattr(info, "field_name", "datetime")
-        return _validate_datetime_text(value, field_name=field_name, formats=(EVENT_TIME_FORMAT,))
+        return OptionalScheduleDateTimeValue.model_validate({"value": value}).value
 
     @field_validator("times")
     @classmethod
@@ -57,6 +71,11 @@ class ScheduleAddArgs(ThoughtToolArgsBase):
 class ScheduleListArgs(ThoughtToolArgsBase):
     tag: str | None = Field(default=None, description="标签过滤；不传/null 表示不过滤标签。")
 
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
 
 class ScheduleViewArgs(ThoughtToolArgsBase):
     view: Literal["day", "week", "month"] = Field(
@@ -67,6 +86,29 @@ class ScheduleViewArgs(ThoughtToolArgsBase):
         description="视图锚点；day/week 用 YYYY-MM-DD，month 用 YYYY-MM；不传/null 表示当前时间。",
     )
     tag: str | None = Field(default=None, description="标签过滤；不传/null 表示不过滤标签。")
+
+    @field_validator("view", mode="before")
+    @classmethod
+    def normalize_view(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
+    @model_validator(mode="after")
+    def validate_anchor(self) -> ScheduleViewArgs:
+        try:
+            normalized = ScheduleViewAnchorValue.model_validate(
+                {"view": self.view, "anchor": self.anchor}
+            ).anchor
+        except ValidationError as exc:
+            raise ValueError("anchor must match view") from exc
+        object.__setattr__(self, "anchor", normalized)
+        return self
 
 
 class ScheduleIdArgs(ThoughtToolArgsBase):
@@ -84,6 +126,13 @@ class ScheduleRepeatArgs(ThoughtToolArgsBase):
 
 class HistoryListArgs(ThoughtToolArgsBase):
     limit: int | None = Field(default=None, ge=1, description="返回结果上限；传值时需为正整数。")
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def normalize_limit(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return HistoryListLimitValue.model_validate({"limit": value}).limit
 
 
 class HistorySearchArgs(HistoryListArgs):
@@ -142,11 +191,39 @@ class ProactiveToolArgsBase(FrozenModel):
 class ProactiveScheduleListArgs(ProactiveToolArgsBase):
     tag: str | None = Field(default=None, description="标签过滤；不传/null 表示不过滤标签。")
 
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
 
 class ProactiveScheduleViewArgs(ProactiveToolArgsBase):
     view: Literal["day", "week", "month"] = Field(description="日历视图：day/week/month。")
     anchor: str | None = Field(default=None, description="YYYY-MM-DD 或 YYYY-MM。")
     tag: str | None = Field(default=None, description="标签过滤；不传/null 表示不过滤标签。")
+
+    @field_validator("view", mode="before")
+    @classmethod
+    def normalize_view(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
+    @model_validator(mode="after")
+    def validate_anchor(self) -> ProactiveScheduleViewArgs:
+        try:
+            normalized = ScheduleViewAnchorValue.model_validate(
+                {"view": self.view, "anchor": self.anchor}
+            ).anchor
+        except ValidationError as exc:
+            raise ValueError("anchor must match view") from exc
+        object.__setattr__(self, "anchor", normalized)
+        return self
 
 
 class ProactiveScheduleGetArgs(ProactiveToolArgsBase):
@@ -155,6 +232,13 @@ class ProactiveScheduleGetArgs(ProactiveToolArgsBase):
 
 class ProactiveHistoryListArgs(ProactiveToolArgsBase):
     limit: int | None = Field(default=None, ge=1, le=200, description="返回结果上限；取值范围 1~200。")
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def normalize_limit(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return HistoryListLimitValue.model_validate({"limit": value}).limit
 
 
 class ProactiveHistorySearchArgs(ProactiveHistoryListArgs):
@@ -194,6 +278,289 @@ PROACTIVE_TOOL_ARGS_MODELS: dict[str, type[ProactiveToolArgsBase]] = {
     "history_search": ProactiveHistorySearchArgs,
     "internet_search": ProactiveInternetSearchArgs,
 }
+
+
+def _normalize_action_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(raw_payload)
+    action = payload.get("action")
+    if isinstance(action, str):
+        payload["action"] = action.strip().lower()
+    return payload
+
+
+def _normalize_required_text(value: Any, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+
+class HistoryListCompatPayload(FrozenModel):
+    action: Literal["list"]
+    limit: int | None = None
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def normalize_limit(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return HistoryListLimitValue.model_validate({"limit": value}).limit
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {}
+        if "limit" in self.model_fields_set:
+            arguments["limit"] = self.limit
+        return RuntimePlannerActionPayload(
+            tool_name="history_list",
+            arguments=HistoryListArgs.model_validate(arguments),
+        )
+
+
+class HistorySearchCompatPayload(FrozenModel):
+    action: Literal["search"]
+    keyword: str = Field(min_length=1)
+    limit: int | None = None
+
+    @field_validator("keyword", mode="before")
+    @classmethod
+    def normalize_keyword(cls, value: Any) -> str:
+        return _normalize_required_text(value, field_name="keyword")
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def normalize_limit(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return HistoryListLimitValue.model_validate({"limit": value}).limit
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {"keyword": self.keyword}
+        if "limit" in self.model_fields_set:
+            arguments["limit"] = self.limit
+        return RuntimePlannerActionPayload(
+            tool_name="history_search",
+            arguments=HistorySearchArgs.model_validate(arguments),
+        )
+
+
+class ScheduleListCompatPayload(FrozenModel):
+    action: Literal["list"]
+    tag: str | None = None
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {}
+        if "tag" in self.model_fields_set:
+            arguments["tag"] = self.tag
+        return RuntimePlannerActionPayload(
+            tool_name="schedule_list",
+            arguments=ScheduleListArgs.model_validate(arguments),
+        )
+
+
+class ScheduleViewCompatPayload(FrozenModel):
+    action: Literal["view"]
+    view: Literal["day", "week", "month"]
+    anchor: str | None = None
+    tag: str | None = None
+
+    @field_validator("view", mode="before")
+    @classmethod
+    def normalize_view(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("anchor", mode="before")
+    @classmethod
+    def normalize_anchor(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
+    @model_validator(mode="after")
+    def validate_anchor(self) -> ScheduleViewCompatPayload:
+        try:
+            normalized = ScheduleViewAnchorValue.model_validate(
+                {"view": self.view, "anchor": self.anchor}
+            ).anchor
+        except ValidationError as exc:
+            raise ValueError("anchor must match view") from exc
+        object.__setattr__(self, "anchor", normalized)
+        return self
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {"view": self.view}
+        if "anchor" in self.model_fields_set:
+            arguments["anchor"] = self.anchor
+        if "tag" in self.model_fields_set:
+            arguments["tag"] = self.tag
+        return RuntimePlannerActionPayload(
+            tool_name="schedule_view",
+            arguments=ScheduleViewArgs.model_validate(arguments),
+        )
+
+
+class ScheduleIdCompatPayload(FrozenModel):
+    action: Literal["get", "delete"]
+    id: int = Field(ge=1)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        return PositiveIntValue.model_validate({"value": value}).value
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        tool_name = "schedule_get" if self.action == "get" else "schedule_delete"
+        return RuntimePlannerActionPayload(
+            tool_name=tool_name,
+            arguments=ScheduleIdArgs(id=self.id),
+        )
+
+
+class _ScheduleMutationCompatPayloadBase(FrozenModel):
+    event_time: str
+    title: str = Field(min_length=1)
+    tag: str | None = None
+    duration_minutes: int | None = None
+    remind_at: str | None = None
+    interval_minutes: int | None = None
+    times: int | None = None
+    remind_start_time: str | None = None
+
+    @field_validator("event_time", mode="before")
+    @classmethod
+    def normalize_event_time(cls, value: Any) -> str:
+        return ScheduleDateTimeValue.model_validate({"value": value}).value
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: Any) -> str:
+        return _normalize_required_text(value, field_name="title")
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, value: Any) -> str | None:
+        return OptionalTagValue.model_validate({"tag": value}).tag
+
+    @field_validator("duration_minutes", "interval_minutes", mode="before")
+    @classmethod
+    def normalize_optional_positive_int(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return PositiveIntValue.model_validate({"value": value}).value
+
+    @field_validator("remind_at", "remind_start_time", mode="before")
+    @classmethod
+    def normalize_optional_datetime(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        return OptionalScheduleDateTimeValue.model_validate({"value": value}).value
+
+    @field_validator("times", mode="before")
+    @classmethod
+    def normalize_times(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return ScheduleRepeatTimesValue.model_validate({"value": value}).value
+
+    def _build_arguments(self) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "event_time": self.event_time,
+            "title": self.title,
+        }
+        for field_name in (
+            "tag",
+            "duration_minutes",
+            "remind_at",
+            "interval_minutes",
+            "times",
+            "remind_start_time",
+        ):
+            if field_name in self.model_fields_set:
+                arguments[field_name] = getattr(self, field_name)
+        return arguments
+
+
+class ScheduleAddCompatPayload(_ScheduleMutationCompatPayloadBase):
+    action: Literal["add"]
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="schedule_add",
+            arguments=ScheduleAddArgs.model_validate(self._build_arguments()),
+        )
+
+
+class ScheduleUpdateCompatPayload(_ScheduleMutationCompatPayloadBase):
+    action: Literal["update"]
+    id: int = Field(ge=1)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        return PositiveIntValue.model_validate({"value": value}).value
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments = {"id": self.id, **self._build_arguments()}
+        return RuntimePlannerActionPayload(
+            tool_name="schedule_update",
+            arguments=ScheduleUpdateArgs.model_validate(arguments),
+        )
+
+
+class ScheduleRepeatCompatPayload(FrozenModel):
+    action: Literal["repeat"]
+    id: int = Field(ge=1)
+    enabled: bool
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        return PositiveIntValue.model_validate({"value": value}).value
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="schedule_repeat",
+            arguments=ScheduleRepeatArgs(id=self.id, enabled=self.enabled),
+        )
+
+
+HistoryCompatPayload = Annotated[
+    HistoryListCompatPayload | HistorySearchCompatPayload,
+    Field(discriminator="action"),
+]
+ScheduleCompatPayload = Annotated[
+    ScheduleListCompatPayload
+    | ScheduleViewCompatPayload
+    | ScheduleIdCompatPayload
+    | ScheduleAddCompatPayload
+    | ScheduleUpdateCompatPayload
+    | ScheduleRepeatCompatPayload,
+    Field(discriminator="action"),
+]
+
+_HISTORY_COMPAT_ADAPTER = TypeAdapter(HistoryCompatPayload)
+_SCHEDULE_COMPAT_ADAPTER = TypeAdapter(ScheduleCompatPayload)
+
+
+def coerce_history_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    compat_payload = _HISTORY_COMPAT_ADAPTER.validate_python(_normalize_action_payload(raw_payload))
+    return compat_payload.to_runtime_payload()
+
+
+def coerce_schedule_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    compat_payload = _SCHEDULE_COMPAT_ADAPTER.validate_python(_normalize_action_payload(raw_payload))
+    return compat_payload.to_runtime_payload()
 
 
 def _normalize_nullable_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -304,7 +671,9 @@ __all__ = [
     "AskUserArgs",
     "DoneArgs",
     "HistoryListArgs",
+    "HistoryListCompatPayload",
     "HistorySearchArgs",
+    "HistorySearchCompatPayload",
     "InternetSearchArgs",
     "InternetSearchFetchUrlArgs",
     "ProactiveHistoryListArgs",
@@ -314,16 +683,24 @@ __all__ = [
     "ProactiveScheduleListArgs",
     "ProactiveScheduleViewArgs",
     "ScheduleAddArgs",
+    "ScheduleAddCompatPayload",
     "ScheduleIdArgs",
+    "ScheduleIdCompatPayload",
     "ScheduleListArgs",
+    "ScheduleListCompatPayload",
     "ScheduleRepeatArgs",
+    "ScheduleRepeatCompatPayload",
     "ScheduleUpdateArgs",
+    "ScheduleUpdateCompatPayload",
     "ScheduleViewArgs",
+    "ScheduleViewCompatPayload",
     "ThoughtsAddArgs",
     "ThoughtsIdArgs",
     "ThoughtsListArgs",
     "ThoughtsUpdateArgs",
     "build_function_tool_schema",
+    "coerce_history_action_payload",
+    "coerce_schedule_action_payload",
     "parse_json_object",
     "validate_proactive_tool_arguments",
     "validate_thought_tool_arguments",

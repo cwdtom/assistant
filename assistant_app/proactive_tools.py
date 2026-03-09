@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem
+from assistant_app.db import AssistantDB, ScheduleItem
 from assistant_app.schemas.planner import ProactiveDoneArguments
+from assistant_app.schemas.proactive import (
+    ProactiveChatTurnContextItem,
+    ProactiveHistoryListToolResult,
+    ProactiveHistorySearchToolResult,
+    ProactiveInternetSearchToolResult,
+    ProactiveScheduleContextItem,
+    ProactiveScheduleGetToolResult,
+    ProactiveScheduleListToolResult,
+    ProactiveScheduleViewToolResult,
+)
 from assistant_app.schemas.tools import (
     PROACTIVE_TOOL_ARGS_MODELS,
     ProactiveHistoryListArgs,
@@ -95,8 +104,11 @@ class ProactiveToolExecutor:
             max_window_days=max_window_days,
             tag=tag,
         )
-        payload = [_schedule_to_payload(item) for item in items[:50]]
-        return _json_dumps({"count": len(payload), "items": payload})
+        payload = ProactiveScheduleListToolResult(
+            count=min(len(items), 50),
+            items=[ProactiveScheduleContextItem.from_schedule_item(item) for item in items[:50]],
+        )
+        return payload.model_dump_json()
 
     def _schedule_view(self, arguments: ProactiveScheduleViewArgs) -> str:
         view = arguments.view
@@ -111,22 +123,34 @@ class ProactiveToolExecutor:
             tag=tag,
         )
         filtered = _filter_schedules_by_view(items, view=view, anchor=anchor)
-        payload = [_schedule_to_payload(item) for item in filtered[:50]]
-        return _json_dumps({"view": view, "anchor": anchor or "", "count": len(payload), "items": payload})
+        payload = ProactiveScheduleViewToolResult(
+            view=view,
+            anchor=anchor or "",
+            count=min(len(filtered), 50),
+            items=[ProactiveScheduleContextItem.from_schedule_item(item) for item in filtered[:50]],
+        )
+        return payload.model_dump_json()
 
     def _schedule_get(self, arguments: ProactiveScheduleGetArgs) -> str:
         schedule_id = arguments.id
         item = self._db.get_schedule(schedule_id)
         if item is None:
-            return _json_dumps({"found": False, "id": schedule_id})
-        return _json_dumps({"found": True, "item": _schedule_to_payload(item)})
+            return ProactiveScheduleGetToolResult(found=False, id=schedule_id).model_dump_json()
+        return ProactiveScheduleGetToolResult(
+            found=True,
+            item=ProactiveScheduleContextItem.from_schedule_item(item),
+        ).model_dump_json()
 
     def _history_list(self, arguments: ProactiveHistoryListArgs) -> str:
         limit = arguments.limit or 20
         since = self._now - timedelta(hours=self._chat_lookback_hours)
         turns = self._db.recent_turns_since(since=since, limit=limit)
-        payload = [_turn_to_payload(turn) for turn in turns]
-        return _json_dumps({"limit": limit, "count": len(payload), "items": payload})
+        payload = ProactiveHistoryListToolResult(
+            limit=limit,
+            count=len(turns),
+            items=[ProactiveChatTurnContextItem.from_chat_turn(turn) for turn in turns],
+        )
+        return payload.model_dump_json()
 
     def _history_search(self, arguments: ProactiveHistorySearchArgs) -> str:
         keyword = arguments.keyword
@@ -139,45 +163,23 @@ class ProactiveToolExecutor:
             for turn in recent_turns
             if lowered_keyword in turn.user_content.lower() or lowered_keyword in turn.assistant_content.lower()
         ]
-        payload = [_turn_to_payload(turn) for turn in matched[-limit:]]
-        return _json_dumps({"keyword": keyword, "count": len(payload), "items": payload})
+        selected = matched[-limit:]
+        payload = ProactiveHistorySearchToolResult(
+            keyword=keyword,
+            count=len(selected),
+            items=[ProactiveChatTurnContextItem.from_chat_turn(turn) for turn in selected],
+        )
+        return payload.model_dump_json()
 
     def _internet_search(self, arguments: ProactiveInternetSearchArgs) -> str:
         query = arguments.query
         results = self._search_provider.search(query, top_k=self._internet_search_top_k)
-        payload = [
-            {"title": item.title, "snippet": item.snippet, "url": item.url}
-            for item in results[: self._internet_search_top_k]
-        ]
-        return _json_dumps({"query": query, "count": len(payload), "items": payload})
-
-
-def _json_dumps(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-
-
-
-def _schedule_to_payload(item: ScheduleItem) -> dict[str, object]:
-    return {
-        "id": item.id,
-        "title": item.title,
-        "tag": item.tag,
-        "event_time": item.event_time,
-        "duration_minutes": item.duration_minutes,
-        "remind_at": item.remind_at,
-        "repeat_interval_minutes": item.repeat_interval_minutes,
-        "repeat_times": item.repeat_times,
-        "repeat_enabled": item.repeat_enabled,
-    }
-
-
-def _turn_to_payload(turn: ChatTurn) -> dict[str, str]:
-    return {
-        "created_at": turn.created_at,
-        "user_content": turn.user_content,
-        "assistant_content": turn.assistant_content,
-    }
+        payload = ProactiveInternetSearchToolResult(
+            query=query,
+            count=min(len(results), self._internet_search_top_k),
+            items=results[: self._internet_search_top_k],
+        )
+        return payload.model_dump_json()
 
 
 def _filter_schedules_by_view(items: list[ScheduleItem], *, view: str, anchor: str | None) -> list[ScheduleItem]:
