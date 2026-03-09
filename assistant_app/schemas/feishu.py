@@ -9,7 +9,13 @@ from assistant_app.schemas.base import FrozenModel, StrictModel
 
 
 class FeishuCompatModel(FrozenModel):
-    model_config = ConfigDict(extra="ignore", frozen=True, str_strip_whitespace=True, strict=True)
+    model_config = ConfigDict(
+        extra="ignore",
+        frozen=True,
+        from_attributes=True,
+        str_strip_whitespace=True,
+        strict=True,
+    )
 
 
 class FeishuTextMessage(FrozenModel):

@@ -8,6 +8,11 @@ import time
 import unittest
 from unittest.mock import patch
 
+try:
+    from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
+except ImportError:  # pragma: no cover - optional dependency in some environments
+    P2ImMessageReceiveV1 = None
+
 from assistant_app.feishu_adapter import (
     FeishuEventProcessor,
     FeishuLongConnectionRunner,
@@ -366,6 +371,57 @@ class FeishuAdapterTest(unittest.TestCase):
             )
 
             self._wait_until(lambda: len(agent.inputs) == 1)
+            records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+            events = [item.get("event") for item in records]
+            self.assertNotIn("feishu_event_payload_invalid", events)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
+
+    @unittest.skipIf(P2ImMessageReceiveV1 is None, "lark_oapi not installed")
+    def test_handle_event_accepts_lark_sdk_event_object(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("test.feishu_adapter.sdk_event")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+            agent = _FakeAgent(response="ok")
+            processor = FeishuEventProcessor(
+                agent=agent,
+                send_text=lambda _chat_id, _text: None,
+                send_reaction=lambda _message_id, _emoji_type: None,
+                logger=logger,
+            )
+
+            payload = P2ImMessageReceiveV1(
+                {
+                    "event": {
+                        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_sdk"}},
+                        "message": {
+                            "message_type": "text",
+                            "chat_type": "p2p",
+                            "message_id": "om_sdk",
+                            "chat_id": "oc_sdk",
+                            "content": '{"text":"SDK 对象消息"}',
+                        },
+                    }
+                }
+            )
+
+            processor.handle_event(payload)
+
+            self._wait_until(lambda: len(agent.inputs) == 1)
+            self.assertEqual(agent.inputs, ["SDK 对象消息"])
             records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
             events = [item.get("event") for item in records]
             self.assertNotIn("feishu_event_payload_invalid", events)
