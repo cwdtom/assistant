@@ -19,6 +19,7 @@ from assistant_app.schemas.planner import (
     normalize_tool_call_payload,
     parse_thought_decision,
 )
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
     THOUGHT_TOOL_ARGS_MODELS,
     build_function_tool_schema,
@@ -184,6 +185,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | 
         return None
     arguments = validated_arguments.model_dump(exclude_none=True)
     current_step = validated_arguments.current_step
+    runtime_payload = RuntimePlannerActionPayload(tool_name=name, arguments=validated_arguments)
 
     if name in _SCHEDULE_TOOL_ACTION_BY_NAME:
         schedule_payload: dict[str, Any] = {"action": _SCHEDULE_TOOL_ACTION_BY_NAME[name]}
@@ -199,6 +201,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | 
                     "next_action": {
                         "tool": "schedule",
                         "input": json.dumps(schedule_payload, ensure_ascii=False, separators=(",", ":")),
+                        "payload": runtime_payload,
                     },
                     "question": None,
                     "response": None,
@@ -225,6 +228,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | 
                     "next_action": {
                         "tool": "history",
                         "input": json.dumps(history_payload, ensure_ascii=False, separators=(",", ":")),
+                        "payload": runtime_payload,
                     },
                     "question": None,
                     "response": None,
@@ -251,6 +255,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | 
                     "next_action": {
                         "tool": "thoughts",
                         "input": json.dumps(thoughts_payload, ensure_ascii=False, separators=(",", ":")),
+                        "payload": runtime_payload,
                     },
                     "question": None,
                     "response": None,
@@ -268,7 +273,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | 
                 {
                     "status": "continue",
                     "current_step": current_step,
-                    "next_action": {"tool": "internet_search", "input": query},
+                    "next_action": {"tool": "internet_search", "input": query, "payload": runtime_payload},
                     "question": None,
                     "response": None,
                 }
@@ -289,6 +294,7 @@ def normalize_thought_tool_call(tool_call: dict[str, Any]) -> ThoughtDecision | 
                     "next_action": {
                         "tool": "internet_search",
                         "input": json.dumps(fetch_payload, ensure_ascii=False, separators=(",", ":")),
+                        "payload": runtime_payload,
                     },
                     "question": None,
                     "response": None,

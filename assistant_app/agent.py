@@ -107,6 +107,7 @@ from assistant_app.schemas.planner import (
     ThoughtResponsePayload,
     parse_tool_reply_payload,
 )
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.schemas.tools import parse_json_object, validate_thought_tool_arguments
 from assistant_app.search import BingSearchProvider, SearchProvider, fetch_webpage_main_text
 
@@ -1065,7 +1066,13 @@ class AssistantAgent:
         except Exception:
             return
 
-    def _execute_planner_tool(self, *, action_tool: str, action_input: str) -> PlannerObservation:
+    def _execute_planner_tool(
+        self,
+        *,
+        action_tool: str,
+        action_input: str,
+        action_payload: RuntimePlannerActionPayload | None = None,
+    ) -> PlannerObservation:
         handler = self._planner_tool_routes.get(action_tool)
         if handler is None:
             return PlannerObservation(
@@ -1074,9 +1081,11 @@ class AssistantAgent:
                 ok=False,
                 result=f"未知工具: {action_tool}",
             )
-        return handler(action_input)
+        return handler(action_input, action_payload)
 
-    def _build_planner_tool_routes(self) -> dict[str, Callable[[str], PlannerObservation]]:
+    def _build_planner_tool_routes(
+        self,
+    ) -> dict[str, Callable[[str, RuntimePlannerActionPayload | None], PlannerObservation]]:
         json_routes: dict[str, JsonPlannerToolRoute] = {
             "schedule": JsonPlannerToolRoute(
                 tool="schedule",
@@ -1085,12 +1094,18 @@ class AssistantAgent:
                 payload_executor=lambda payload, raw_input: self._execute_schedule_system_action(
                     payload, raw_input=raw_input
                 ),
+                typed_payload_executor=lambda payload, raw_input: self._execute_schedule_system_action(
+                    payload, raw_input=raw_input
+                ),
             ),
             "history": JsonPlannerToolRoute(
                 tool="history",
                 invalid_json_result="history 工具参数无效：需要 JSON 对象。",
                 legacy_command_prefix="/history",
                 payload_executor=lambda payload, raw_input: self._execute_history_system_action(
+                    payload, raw_input=raw_input
+                ),
+                typed_payload_executor=lambda payload, raw_input: self._execute_history_system_action(
                     payload, raw_input=raw_input
                 ),
             ),
@@ -1102,6 +1117,9 @@ class AssistantAgent:
                 payload_executor=lambda payload, raw_input: self._execute_history_system_action(
                     payload, raw_input=raw_input, observation_tool="history_search"
                 ),
+                typed_payload_executor=lambda payload, raw_input: self._execute_history_system_action(
+                    payload, raw_input=raw_input, observation_tool="history_search"
+                ),
             ),
             "thoughts": JsonPlannerToolRoute(
                 tool="thoughts",
@@ -1110,25 +1128,36 @@ class AssistantAgent:
                 payload_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
                     payload, raw_input=raw_input
                 ),
+                typed_payload_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
+                    payload, raw_input=raw_input
+                ),
             ),
         }
         routes = {
             name: build_json_planner_tool_executor(route=route, command_executor=self._handle_command)
             for name, route in json_routes.items()
         }
-        routes["internet_search"] = lambda action_input: _execute_internet_search_planner_action_impl(
+        routes["internet_search"] = (
+            lambda action_input, action_payload=None: _execute_internet_search_planner_action_impl(
             self,
             action_input=action_input,
+            action_payload=action_payload,
             fetch_main_text=fetch_webpage_main_text,
+        )
         )
         return routes
 
-    def _execute_schedule_system_action(self, payload: dict[str, Any], *, raw_input: str) -> PlannerObservation:
+    def _execute_schedule_system_action(
+        self,
+        payload: dict[str, Any] | RuntimePlannerActionPayload,
+        *,
+        raw_input: str,
+    ) -> PlannerObservation:
         return _execute_schedule_system_action_impl(self, payload, raw_input=raw_input)
 
     def _execute_history_system_action(
         self,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | RuntimePlannerActionPayload,
         *,
         raw_input: str,
         observation_tool: str = "history",
@@ -1142,7 +1171,7 @@ class AssistantAgent:
 
     def _execute_thoughts_system_action(
         self,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | RuntimePlannerActionPayload,
         *,
         raw_input: str,
     ) -> PlannerObservation:

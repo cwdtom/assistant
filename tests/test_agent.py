@@ -22,6 +22,8 @@ from assistant_app.agent import (
 from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.schemas.planner import ToolReplyPayload
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
+from assistant_app.schemas.tools import HistorySearchArgs, ScheduleAddArgs
 from assistant_app.search import SearchResult
 
 _DEFAULT_PLAN_TOOLS = ["schedule", "internet_search", "history"]
@@ -2170,6 +2172,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(next_action["tool"], "history")
         input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "search", "keyword": "牛奶", "limit": 3})
+        assert decision.next_action.payload is not None
+        self.assertEqual(decision.next_action.payload.tool_name, "history_search")
 
     def test_thought_tool_call_contract_rejects_legacy_history_tool(self) -> None:
         decision = normalize_thought_tool_call(
@@ -2569,6 +2573,22 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertTrue(search_observation.ok)
         self.assertIn("历史搜索(关键词: 牛奶", search_observation.result)
 
+    def test_history_tool_supports_runtime_typed_payload(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="已记录买牛奶日程")
+
+        observation = agent._execute_planner_tool(
+            action_tool="history",
+            action_input="not-json",
+            action_payload=RuntimePlannerActionPayload(
+                tool_name="history_search",
+                arguments=HistorySearchArgs(keyword="牛奶", limit=5),
+            ),
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("历史搜索(关键词: 牛奶", observation.result)
+
     def test_history_tool_validation_for_limit_and_keyword(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
 
@@ -2681,6 +2701,29 @@ class AssistantAgentTest(unittest.TestCase):
         merged_failed = "\n".join(captured_failed.output)
         self.assertIn("planner_tool_thoughts_start", merged_failed)
         self.assertIn("planner_tool_thoughts_failed", merged_failed)
+
+    def test_schedule_tool_supports_runtime_typed_payload(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+
+        observation = agent._execute_planner_tool(
+            action_tool="schedule",
+            action_input="not-json",
+            action_payload=RuntimePlannerActionPayload(
+                tool_name="schedule_add",
+                arguments=ScheduleAddArgs(
+                    event_time="2026-03-02 09:30",
+                    title="项目同步",
+                    duration_minutes=45,
+                ),
+            ),
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertIn("已添加日程 #1", observation.result)
+        item = self.db.get_schedule(1)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.duration_minutes, 45)
 
     def test_schedule_tool_update_with_null_tag_clears_to_default(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

@@ -313,11 +313,16 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
         next_action = thought_decision.next_action
         action_tool = next_action.tool.strip().lower()
         action_input = next_action.input.strip()
+        action_payload = next_action.payload
         tool_call_id = thought_payload.tool_call_id
         agent._emit_progress(f"步骤动作：{action_tool} -> {action_input}")
         agent._raise_if_task_interrupted()
         task.step_count += 1
-        observation = agent._execute_planner_tool(action_tool=action_tool, action_input=action_input)
+        observation = agent._execute_planner_tool(
+            action_tool=action_tool,
+            action_input=action_input,
+            action_payload=action_payload,
+        )
         normalized_observation = agent._append_observation(task, observation)
         if tool_call_id:
             agent._append_thought_tool_result_message(

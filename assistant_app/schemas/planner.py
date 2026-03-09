@@ -8,6 +8,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_vali
 from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_plan_items, normalize_tool_names
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.domain import EVENT_TIME_FORMAT, _validate_datetime_text
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
 
 
 class PlanStepPayload(FrozenModel):
@@ -55,6 +56,7 @@ class ReplanDoneDecision(FrozenModel):
 class ThoughtNextAction(FrozenModel):
     tool: str = Field(min_length=1)
     input: str = Field(min_length=1)
+    payload: RuntimePlannerActionPayload | None = Field(default=None, exclude=True)
 
     @field_validator("tool")
     @classmethod

@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.render_helpers import _is_planner_command_success
-from assistant_app.schemas.routing import JsonPlannerToolRoute
+from assistant_app.schemas.routing import JsonPlannerToolRoute, RuntimePlannerActionPayload
 from assistant_app.schemas.tools import parse_json_object
 
 
@@ -12,8 +12,11 @@ def build_json_planner_tool_executor(
     *,
     route: JsonPlannerToolRoute,
     command_executor: Callable[[str], str],
-) -> Callable[[str], PlannerObservation]:
-    def execute(action_input: str) -> PlannerObservation:
+) -> Callable[[str, RuntimePlannerActionPayload | None], PlannerObservation]:
+    def execute(
+        action_input: str,
+        action_payload: RuntimePlannerActionPayload | None = None,
+    ) -> PlannerObservation:
         normalized_input = action_input.strip()
         if route.legacy_command_prefix is not None:
             legacy_observation = _maybe_execute_legacy_tool_command(
@@ -24,6 +27,8 @@ def build_json_planner_tool_executor(
             )
             if legacy_observation is not None:
                 return legacy_observation
+        if action_payload is not None and route.typed_payload_executor is not None:
+            return route.typed_payload_executor(action_payload, normalized_input)
         payload = parse_json_object(normalized_input)
         if payload is None:
             return PlannerObservation(

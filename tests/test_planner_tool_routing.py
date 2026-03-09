@@ -8,6 +8,7 @@ from assistant_app.agent_components.tools.planner_tool_routing import (
     JsonPlannerToolRoute,
     build_json_planner_tool_executor,
 )
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from pydantic import ValidationError
 
 
@@ -89,6 +90,34 @@ class PlannerToolRoutingTest(unittest.TestCase):
         self.assertTrue(observation.ok)
         self.assertEqual(observation.tool, "thoughts")
         self.assertIn("想法列表", observation.result)
+
+    def test_json_route_uses_typed_payload_executor_when_runtime_payload_provided(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def _typed_payload_executor(payload: RuntimePlannerActionPayload, raw_input: str):
+            captured["tool_name"] = payload.tool_name
+            captured["raw_input"] = raw_input
+            return PlannerObservation(tool="history", input_text=raw_input, ok=True, result="ok")
+
+        route = JsonPlannerToolRoute(
+            tool="history",
+            invalid_json_result="history 工具参数无效：需要 JSON 对象。",
+            payload_executor=lambda _payload, _raw_input: self.fail("json payload executor should not run"),
+            typed_payload_executor=_typed_payload_executor,
+        )
+        executor = build_json_planner_tool_executor(
+            route=route,
+            command_executor=lambda _command: "",
+        )
+
+        observation = executor(
+            "not-json",
+            RuntimePlannerActionPayload(tool_name="history_search", arguments={"keyword": "牛奶", "limit": 3}),
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(captured["tool_name"], "history_search")
+        self.assertEqual(captured["raw_input"], "not-json")
 
     def test_json_route_rejects_blank_tool_name(self) -> None:
         with self.assertRaises(ValidationError):

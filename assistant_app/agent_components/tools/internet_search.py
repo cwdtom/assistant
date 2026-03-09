@@ -14,15 +14,27 @@ from assistant_app.agent_components.render_helpers import (
     _try_parse_json,
 )
 from assistant_app.schemas.domain import HttpUrlValue
+from assistant_app.schemas.routing import RuntimePlannerActionPayload
+from assistant_app.schemas.tools import InternetSearchArgs, InternetSearchFetchUrlArgs
 
 
 def execute_internet_search_planner_action(
     agent: Any,
     *,
     action_input: str,
+    action_payload: RuntimePlannerActionPayload | None = None,
     fetch_main_text: Callable[[str], Any],
 ) -> PlannerObservation:
     normalized_input = action_input.strip()
+    if action_payload is not None:
+        typed_observation = _execute_typed_internet_search_action(
+            agent,
+            action_payload=action_payload,
+            raw_input=normalized_input,
+            fetch_main_text=fetch_main_text,
+        )
+        if typed_observation is not None:
+            return typed_observation
     payload = _try_parse_json(normalized_input)
     if isinstance(payload, dict):
         action = str(payload.get("action") or "").strip().lower()
@@ -48,17 +60,55 @@ def execute_internet_search_planner_action(
             fetch_main_text=fetch_main_text,
         )
 
-    query = normalized_input
-    if not query:
+    return _execute_internet_search_query_action(
+        agent,
+        query=normalized_input,
+        raw_input=action_input,
+    )
+
+
+def _execute_typed_internet_search_action(
+    agent: Any,
+    *,
+    action_payload: RuntimePlannerActionPayload,
+    raw_input: str,
+    fetch_main_text: Callable[[str], Any],
+) -> PlannerObservation | None:
+    tool_name = action_payload.tool_name
+    arguments = action_payload.arguments
+    if tool_name == "internet_search_tool" and isinstance(arguments, InternetSearchArgs):
+        return _execute_internet_search_query_action(
+            agent,
+            query=arguments.query,
+            raw_input=raw_input,
+        )
+    if tool_name == "internet_search_fetch_url" and isinstance(arguments, InternetSearchFetchUrlArgs):
+        return _execute_internet_search_fetch_url(
+            agent,
+            url=arguments.url,
+            raw_input=raw_input,
+            fetch_main_text=fetch_main_text,
+        )
+    return None
+
+
+def _execute_internet_search_query_action(
+    agent: Any,
+    *,
+    query: str,
+    raw_input: str,
+) -> PlannerObservation:
+    normalized_query = query.strip()
+    if not normalized_query:
         return PlannerObservation(
             tool="internet_search",
-            input_text=action_input,
+            input_text=raw_input,
             ok=False,
             result="internet_search 缺少查询词。",
         )
     log_context = {
-        "query_preview": _truncate_text(query, 120),
-        "query_length": len(query),
+        "query_preview": _truncate_text(normalized_query, 120),
+        "query_length": len(normalized_query),
         "top_k": agent._internet_search_top_k,
     }
     agent._app_logger.info(
@@ -66,7 +116,7 @@ def execute_internet_search_planner_action(
         extra={"event": "planner_tool_internet_search_start", "context": log_context},
     )
     try:
-        search_results = agent.search_provider.search(query, top_k=agent._internet_search_top_k)
+        search_results = agent.search_provider.search(normalized_query, top_k=agent._internet_search_top_k)
     except Exception as exc:  # noqa: BLE001
         agent._app_logger.warning(
             "planner_tool_internet_search_failed",
@@ -77,7 +127,7 @@ def execute_internet_search_planner_action(
         )
         return PlannerObservation(
             tool="internet_search",
-            input_text=query,
+            input_text=normalized_query,
             ok=False,
             result=f"搜索失败: {exc}",
         )
@@ -88,9 +138,9 @@ def execute_internet_search_planner_action(
         )
         return PlannerObservation(
             tool="internet_search",
-            input_text=query,
+            input_text=normalized_query,
             ok=False,
-            result=f"未搜索到与“{query}”相关的结果。",
+            result=f"未搜索到与“{normalized_query}”相关的结果。",
         )
     formatted = _format_search_results(search_results, top_k=agent._internet_search_top_k)
     agent._app_logger.info(
@@ -100,7 +150,7 @@ def execute_internet_search_planner_action(
             "context": {**log_context, "result_count": len(search_results)},
         },
     )
-    return PlannerObservation(tool="internet_search", input_text=query, ok=True, result=formatted)
+    return PlannerObservation(tool="internet_search", input_text=normalized_query, ok=True, result=formatted)
 
 
 def _execute_internet_search_fetch_url_action(
@@ -127,6 +177,21 @@ def _execute_internet_search_fetch_url_action(
             ok=False,
             result="internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
         )
+    return _execute_internet_search_fetch_url(
+        agent,
+        url=url,
+        raw_input=raw_input,
+        fetch_main_text=fetch_main_text,
+    )
+
+
+def _execute_internet_search_fetch_url(
+    agent: Any,
+    *,
+    url: str,
+    raw_input: str,
+    fetch_main_text: Callable[[str], Any],
+) -> PlannerObservation:
     log_context = {
         "url_preview": _truncate_text(url, 120),
         "url_length": len(url),
