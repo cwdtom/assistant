@@ -112,14 +112,10 @@ class OpenAICompatibleClientTest(unittest.TestCase):
             }
         )
 
-        self.assertIsInstance(payload.get("assistant_message"), dict)
-        assistant_message = payload["assistant_message"]
-        self.assertEqual(assistant_message.get("role"), "assistant")
-        self.assertIsNone(assistant_message.get("content"))
-        tool_calls = assistant_message.get("tool_calls")
-        self.assertIsInstance(tool_calls, list)
-        self.assertEqual(tool_calls[0]["function"]["name"], "schedule")
-        self.assertIsNone(payload.get("reasoning_content"))
+        self.assertEqual(payload.assistant_message.role, "assistant")
+        self.assertIsNone(payload.assistant_message.content)
+        self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "schedule")
+        self.assertIsNone(payload.reasoning_content)
 
     def test_build_tool_reply_payload_accepts_object_tool_calls(self) -> None:
         payload = OpenAICompatibleClient._build_tool_reply_payload(
@@ -137,10 +133,9 @@ class OpenAICompatibleClientTest(unittest.TestCase):
             )
         )
 
-        assistant_message = payload["assistant_message"]
-        tool_calls = assistant_message["tool_calls"]
-        self.assertEqual(tool_calls[0]["function"]["name"], "history_list")
-        self.assertEqual(tool_calls[0]["function"]["arguments"], '{"limit":5}')
+        tool_call = payload.assistant_message.tool_calls[0]
+        self.assertEqual(tool_call.function.name, "history_list")
+        self.assertEqual(tool_call.function.arguments, '{"limit":5}')
 
     def test_build_tool_reply_payload_filters_invalid_tool_calls(self) -> None:
         payload = OpenAICompatibleClient._build_tool_reply_payload(
@@ -159,9 +154,8 @@ class OpenAICompatibleClientTest(unittest.TestCase):
             }
         )
 
-        assistant_message = payload["assistant_message"]
-        self.assertEqual(len(assistant_message["tool_calls"]), 1)
-        self.assertEqual(assistant_message["tool_calls"][0]["function"]["name"], "done")
+        self.assertEqual(len(payload.assistant_message.tool_calls), 1)
+        self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "done")
 
 
 if __name__ == "__main__":

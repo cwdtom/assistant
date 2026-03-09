@@ -21,6 +21,7 @@ from assistant_app.agent import (
 )
 from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
+from assistant_app.schemas.planner import ToolReplyPayload
 from assistant_app.search import SearchResult
 
 _DEFAULT_PLAN_TOOLS = ["schedule", "internet_search", "history"]
@@ -377,6 +378,18 @@ class FakeThinkingToolCallingLLMClient(FakeToolCallingLLMClient):
         payload = super().reply_with_tools(messages, tools=tools, tool_choice=tool_choice)
         payload["reasoning_content"] = "thinking trace"
         return payload
+
+
+class FakeTypedToolCallingLLMClient(FakeToolCallingLLMClient):
+    def reply_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> ToolReplyPayload:
+        payload = super().reply_with_tools(messages, tools=tools, tool_choice=tool_choice)
+        return ToolReplyPayload.model_validate(payload)
 
 
 class FakeMultiToolCallingLLMClient(FakeToolCallingLLMClient):
@@ -1772,7 +1785,21 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(set(first_tool_names), expected_thoughts_tools)
         self.assertNotIn("thoughts", first_tool_names)
 
+    def test_thought_tool_calling_accepts_typed_tool_reply_payload(self) -> None:
+        fake_llm = FakeTypedToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看日程", "总结"]),
+                _thought_continue("schedule", "/schedule list"),
+                _planner_done("日程已查看。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
 
+        response = agent.handle_input("帮我用 typed payload 看日程")
+
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
 
     def test_thought_tool_calling_rejects_multiple_tool_calls(self) -> None:
         fake_llm = FakeMultiToolCallingLLMClient(

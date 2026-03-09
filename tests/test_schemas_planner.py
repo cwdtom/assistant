@@ -6,15 +6,21 @@ from assistant_app.planner_plan_replan import normalize_plan_decision, normalize
 from assistant_app.planner_thought import normalize_thought_decision
 from assistant_app.proactive_react import _normalize_done_arguments
 from assistant_app.schemas.planner import (
+    ObservationPayload,
     PlannedDecision,
+    PlanPromptPayload,
     PlanResponsePayload,
     ProactiveDoneArguments,
     ReplanDoneDecision,
     ReplannedDecision,
     ReplanResponsePayload,
     ThoughtContinueDecision,
+    ThoughtDecisionMessagePayload,
+    ThoughtObservationMessagePayload,
+    ThoughtPromptPayload,
     ThoughtResponsePayload,
     ToolReplyPayload,
+    parse_tool_reply_payload,
 )
 from pydantic import ValidationError
 
@@ -96,6 +102,31 @@ class PlannerSchemaTest(unittest.TestCase):
         self.assertIsNone(payload.assistant_message.content)
         self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "schedule_list")
 
+    def test_parse_tool_reply_payload_normalizes_reasoning_and_filters_bad_calls(self) -> None:
+        payload = parse_tool_reply_payload(
+            {
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "broken", "type": "function"},
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "schedule_list", "arguments": "{}"},
+                        },
+                    ],
+                },
+                "reasoning_content": 123,
+            }
+        )
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(payload.reasoning_content, "123")
+        self.assertEqual(len(payload.assistant_message.tool_calls), 1)
+        self.assertEqual(payload.assistant_message.tool_calls[0].function.name, "schedule_list")
+
     def test_plan_response_payload_wraps_decision_model(self) -> None:
         payload = PlanResponsePayload.model_validate(
             {
@@ -110,6 +141,77 @@ class PlannerSchemaTest(unittest.TestCase):
 
         self.assertIsInstance(payload.decision, PlannedDecision)
         self.assertEqual(payload.decision.goal, "查询最近历史")
+
+    def test_plan_prompt_payload_wraps_context_models(self) -> None:
+        payload = PlanPromptPayload.model_validate(
+            {
+                "phase": "plan",
+                "goal": "查询最近历史",
+                "clarification_history": [{"role": "assistant_question", "content": "请确认范围"}],
+                "step_count": 1,
+                "max_steps": 20,
+                "latest_plan": [{"task": "检索历史", "completed": False, "tools": ["history"]}],
+                "current_plan_index": 0,
+                "completed_subtasks": [{"item": "澄清目标", "result": "用户已确认"}],
+                "user_profile": "偏好：先给结论",
+                "time": "2026-03-09 14:20",
+            }
+        )
+
+        self.assertEqual(payload.latest_plan[0].task, "检索历史")
+        self.assertEqual(payload.completed_subtasks[0].item, "澄清目标")
+
+    def test_thought_prompt_payload_normalizes_current_subtask_tools(self) -> None:
+        payload = ThoughtPromptPayload.model_validate(
+            {
+                "phase": "thought",
+                "current_plan_item": "执行搜索",
+                "clarification_history": [],
+                "step_count": 2,
+                "max_steps": 20,
+                "current_subtask": {
+                    "item": "执行搜索",
+                    "index": 1,
+                    "total": 2,
+                    "tools": [" schedule_list ", "done", "done"],
+                },
+                "completed_subtasks": [],
+                "current_subtask_observations": [
+                    {"tool": "history_list", "input": "{\"limit\": 5}", "ok": True, "result": "[]"}
+                ],
+                "user_profile": None,
+                "time": "2026-03-09 14:20",
+            }
+        )
+
+        self.assertEqual(payload.current_subtask.tools, ["schedule_list", "done"])
+        self.assertEqual(payload.current_subtask_observations[0].tool, "history_list")
+
+    def test_thought_message_payloads_accept_typed_content(self) -> None:
+        decision_payload = ThoughtDecisionMessagePayload.model_validate(
+            {
+                "phase": "thought_decision",
+                "decision": {
+                    "status": "done",
+                    "current_step": "总结",
+                    "response": "已完成。",
+                },
+            }
+        )
+        observation_payload = ThoughtObservationMessagePayload.model_validate(
+            {
+                "phase": "thought_observation",
+                "observation": {
+                    "tool": "schedule_list",
+                    "input": "{}",
+                    "ok": True,
+                    "result": "[]",
+                },
+            }
+        )
+
+        self.assertEqual(decision_payload.decision.status, "done")
+        self.assertIsInstance(observation_payload.observation, ObservationPayload)
 
     def test_replan_response_payload_accepts_done_union(self) -> None:
         payload = ReplanResponsePayload.model_validate(

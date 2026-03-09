@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_vali
 
 from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_plan_items, normalize_tool_names
 from assistant_app.schemas.base import FrozenModel
+from assistant_app.schemas.domain import EVENT_TIME_FORMAT, _validate_datetime_text
 
 
 class PlanStepPayload(FrozenModel):
@@ -150,6 +151,126 @@ class ThoughtResponsePayload(FrozenModel):
         return self
 
 
+class ClarificationTurnPayload(FrozenModel):
+    role: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+
+
+class CompletedSubtaskPayload(FrozenModel):
+    item: str = Field(min_length=1)
+    result: str
+
+
+class ObservationPayload(FrozenModel):
+    tool: str = Field(min_length=1)
+    input: str
+    ok: bool
+    result: str
+
+
+class PlannerContextPayload(FrozenModel):
+    goal: str = Field(min_length=1)
+    clarification_history: list[ClarificationTurnPayload] = Field(default_factory=list)
+    step_count: int = Field(ge=0)
+    max_steps: int = Field(ge=1)
+    latest_plan: list[PlanStepPayload] = Field(default_factory=list)
+    current_plan_index: int = Field(ge=0)
+    completed_subtasks: list[CompletedSubtaskPayload] = Field(default_factory=list)
+    user_profile: str | None = None
+    time: str
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+
+
+class ThoughtCurrentSubtaskPayload(FrozenModel):
+    item: str = ""
+    index: int | None = Field(default=None, ge=1)
+    total: int | None = Field(default=None, ge=1)
+    tools: list[str] = Field(default_factory=list)
+
+    @field_validator("tools")
+    @classmethod
+    def normalize_tools(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            name = str(item or "").strip().lower()
+            if not name:
+                raise ValueError("tools must not contain empty values")
+            if name not in normalized:
+                normalized.append(name)
+        return normalized
+
+
+class ThoughtContextPayload(FrozenModel):
+    clarification_history: list[ClarificationTurnPayload] = Field(default_factory=list)
+    step_count: int = Field(ge=0)
+    max_steps: int = Field(ge=1)
+    current_subtask: ThoughtCurrentSubtaskPayload = Field(default_factory=ThoughtCurrentSubtaskPayload)
+    completed_subtasks: list[CompletedSubtaskPayload] = Field(default_factory=list)
+    current_subtask_observations: list[ObservationPayload] = Field(default_factory=list)
+    user_profile: str | None = None
+    time: str
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+
+
+class PlanPromptPayload(FrozenModel):
+    phase: Literal["plan"]
+    goal: str = Field(min_length=1)
+    clarification_history: list[ClarificationTurnPayload] = Field(default_factory=list)
+    step_count: int = Field(ge=0)
+    max_steps: int = Field(ge=1)
+    latest_plan: list[PlanStepPayload] = Field(default_factory=list)
+    current_plan_index: int = Field(ge=0)
+    completed_subtasks: list[CompletedSubtaskPayload] = Field(default_factory=list)
+    user_profile: str | None = None
+    time: str
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+
+
+class ReplanPromptPayload(PlanPromptPayload):
+    phase: Literal["replan"]
+    current_plan_item: str = ""
+
+
+class ThoughtPromptPayload(FrozenModel):
+    phase: Literal["thought"]
+    current_plan_item: str = ""
+    clarification_history: list[ClarificationTurnPayload] = Field(default_factory=list)
+    step_count: int = Field(ge=0)
+    max_steps: int = Field(ge=1)
+    current_subtask: ThoughtCurrentSubtaskPayload = Field(default_factory=ThoughtCurrentSubtaskPayload)
+    completed_subtasks: list[CompletedSubtaskPayload] = Field(default_factory=list)
+    current_subtask_observations: list[ObservationPayload] = Field(default_factory=list)
+    user_profile: str | None = None
+    time: str
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return _validate_datetime_text(value, field_name="time", formats=(EVENT_TIME_FORMAT,))
+
+
+class ThoughtDecisionMessagePayload(FrozenModel):
+    phase: Literal["thought_decision"]
+    decision: ThoughtDecision
+
+
+class ThoughtObservationMessagePayload(FrozenModel):
+    phase: Literal["thought_observation"]
+    observation: ObservationPayload
+
+
 class ProactiveDoneArguments(FrozenModel):
     score: int = Field(ge=0, le=100, description="提醒价值分数，范围 0~100。")
     message: str = Field(description="当分数达到阈值时发送给用户的提醒文案。")
@@ -249,6 +370,17 @@ _TOOL_CALL_LIST_ADAPTER = TypeAdapter(list[ToolCallPayload])
 _THOUGHT_DECISION_ADAPTER = TypeAdapter(ThoughtDecision)
 
 
+def _to_plain_mapping(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
 def normalize_tool_call_payload(raw_tool_call: Any) -> ToolCallPayload | None:
     if not isinstance(raw_tool_call, dict):
         return None
@@ -294,6 +426,45 @@ def normalize_tool_call_payloads(
         return _TOOL_CALL_LIST_ADAPTER.validate_python(normalized_payloads)
     except ValidationError:
         return []
+
+
+def parse_tool_reply_payload(
+    raw_payload: Any,
+    *,
+    plain_tool_call_converter: Callable[[Any], Any] | None = None,
+) -> ToolReplyPayload | None:
+    if isinstance(raw_payload, ToolReplyPayload):
+        return raw_payload
+    payload = _to_plain_mapping(raw_payload)
+    if payload is None:
+        return None
+    assistant_message = normalize_assistant_tool_message(
+        payload.get("assistant_message"),
+        plain_tool_call_converter=plain_tool_call_converter,
+    )
+    if assistant_message is None:
+        assistant_message = normalize_assistant_tool_message(
+            {"role": "assistant", "content": None, "tool_calls": []}
+        )
+    if assistant_message is None:
+        return None
+
+    reasoning = payload.get("reasoning_content")
+    if reasoning is None:
+        reasoning_text: str | None = None
+    elif isinstance(reasoning, str):
+        reasoning_text = reasoning
+    else:
+        reasoning_text = str(reasoning)
+    try:
+        return ToolReplyPayload.model_validate(
+            {
+                "assistant_message": assistant_message,
+                "reasoning_content": reasoning_text,
+            }
+        )
+    except ValidationError:
+        return None
 
 
 def parse_planned_decision(raw_payload: Any) -> PlannedDecision | None:
@@ -364,23 +535,35 @@ def normalize_assistant_tool_message(
 
 __all__ = [
     "AssistantToolMessage",
+    "ClarificationTurnPayload",
+    "CompletedSubtaskPayload",
+    "ObservationPayload",
+    "PlannerContextPayload",
     "normalize_assistant_tool_message",
+    "parse_tool_reply_payload",
     "parse_planned_decision",
     "parse_replan_decision",
     "parse_thought_decision",
+    "PlanPromptPayload",
     "PlanResponsePayload",
     "PlanStepPayload",
     "PlannedDecision",
     "ProactiveDoneArguments",
+    "ReplanPromptPayload",
     "ReplanDecision",
     "ReplanDoneDecision",
     "ReplanResponsePayload",
     "ReplannedDecision",
+    "ThoughtContextPayload",
     "ThoughtAskUserDecision",
     "ThoughtContinueDecision",
     "ThoughtDecision",
+    "ThoughtCurrentSubtaskPayload",
+    "ThoughtDecisionMessagePayload",
     "ThoughtDoneDecision",
     "ThoughtNextAction",
+    "ThoughtObservationMessagePayload",
+    "ThoughtPromptPayload",
     "ThoughtResponsePayload",
     "ToolCallPayload",
     "ToolFunctionPayload",

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from assistant_app.llm import LLMClient
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
-from assistant_app.schemas.planner import normalize_assistant_tool_message
+from assistant_app.schemas.planner import AssistantToolMessage, ToolReplyPayload, parse_tool_reply_payload
 from assistant_app.schemas.proactive import ProactiveDecision, ProactivePromptPayload
 from assistant_app.schemas.tools import parse_json_object
 
@@ -88,10 +88,11 @@ class ProactiveReactRunner:
         )
 
         for step_index in range(1, self._max_steps + 1):
-            payload = reply_with_tools(messages, tools=tools, tool_choice="auto")
-            assistant_message = _normalize_assistant_message(payload)
-            messages.append(assistant_message)
-            tool_calls = assistant_message.get("tool_calls") or []
+            raw_payload = reply_with_tools(messages, tools=tools, tool_choice="auto")
+            payload = _normalize_tool_reply_payload(raw_payload)
+            assistant_message = payload.assistant_message
+            messages.append(_assistant_message_to_chat_payload(assistant_message))
+            tool_calls = assistant_message.tool_calls
             if not tool_calls:
                 self._logger.warning(
                     "proactive react invalid action: no tool calls",
@@ -103,20 +104,9 @@ class ProactiveReactRunner:
                 break
 
             tool_call = tool_calls[0]
-            tool_id = str(tool_call.get("id") or f"proactive_tool_{step_index}")
-            function_payload = tool_call.get("function") if isinstance(tool_call, dict) else None
-            if not isinstance(function_payload, dict):
-                self._logger.warning(
-                    "proactive react invalid action: malformed function payload",
-                    extra={
-                        "event": "proactive_react_invalid_action",
-                        "context": {"action_tool": "", "reason": "malformed_function", "step_index": step_index},
-                    },
-                )
-                break
-            tool_name = str(function_payload.get("name") or "").strip()
-            raw_arguments = function_payload.get("arguments")
-            arguments = _parse_arguments(raw_arguments)
+            tool_id = tool_call.id.strip() or f"proactive_tool_{step_index}"
+            tool_name = tool_call.function.name.strip()
+            arguments = _parse_arguments(tool_call.function.arguments)
             self._logger.info(
                 "proactive react step",
                 extra={
@@ -214,12 +204,20 @@ class ProactiveReactRunner:
         return None
 
 
-def _normalize_assistant_message(payload: dict[str, Any]) -> dict[str, Any]:
-    assistant_message = payload.get("assistant_message") if isinstance(payload, dict) else None
-    normalized_message = normalize_assistant_tool_message(assistant_message)
-    if normalized_message is None:
-        return {"role": "assistant", "content": "", "tool_calls": []}
-    normalized = normalized_message.model_dump()
+def _normalize_tool_reply_payload(payload: Any) -> ToolReplyPayload:
+    normalized = parse_tool_reply_payload(payload)
+    if normalized is not None:
+        return normalized
+    return ToolReplyPayload.model_validate(
+        {
+            "assistant_message": {"role": "assistant", "content": "", "tool_calls": []},
+            "reasoning_content": None,
+        }
+    )
+
+
+def _assistant_message_to_chat_payload(message: AssistantToolMessage) -> dict[str, Any]:
+    normalized = message.model_dump()
     content = normalized.get("content")
     normalized["content"] = "" if content is None else str(content)
     return normalized

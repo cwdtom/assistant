@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from assistant_app.schemas.planner import (
     ToolReplyPayload,
     normalize_assistant_tool_message,
+    parse_tool_reply_payload,
 )
 
 warnings.filterwarnings(
@@ -54,7 +55,7 @@ class OpenAICompatibleClient:
         *,
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
-    ) -> dict[str, Any]:
+    ) -> ToolReplyPayload:
         if "reasoner" in self.model.strip().lower():
             raise RuntimeError("thought 阶段暂不支持 thinking 模式（例如 deepseek-reasoner）。")
 
@@ -169,7 +170,7 @@ class OpenAICompatibleClient:
         return str(content).strip()
 
     @staticmethod
-    def _build_tool_reply_payload(message: Any) -> dict[str, Any]:
+    def _build_tool_reply_payload(message: Any) -> ToolReplyPayload:
         message_payload = OpenAICompatibleClient._to_plain_message(message)
         reasoning = message_payload.get("reasoning_content")
         reasoning_text: str | None
@@ -180,22 +181,23 @@ class OpenAICompatibleClient:
         else:
             reasoning_text = str(reasoning)
 
-        assistant_message = normalize_assistant_tool_message(
-            message_payload,
+        payload = parse_tool_reply_payload(
+            {
+                "assistant_message": message_payload,
+                "reasoning_content": reasoning_text,
+            },
             plain_tool_call_converter=OpenAICompatibleClient._to_plain_tool_call,
         )
-        if assistant_message is None:
-            assistant_message = normalize_assistant_tool_message(
-                {"role": "assistant", "content": None, "tool_calls": []}
+        if payload is None:
+            payload = ToolReplyPayload.model_validate(
+                {
+                    "assistant_message": normalize_assistant_tool_message(
+                        {"role": "assistant", "content": None, "tool_calls": []}
+                    ),
+                    "reasoning_content": reasoning_text,
+                }
             )
-            assert assistant_message is not None
-        payload = ToolReplyPayload.model_validate(
-            {
-                "assistant_message": assistant_message,
-                "reasoning_content": reasoning_text,
-            }
-        )
-        return payload.model_dump()
+        return payload
 
     @staticmethod
     def _to_plain_message(message: Any) -> dict[str, Any]:

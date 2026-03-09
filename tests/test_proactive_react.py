@@ -5,6 +5,7 @@ import logging
 import unittest
 
 from assistant_app.proactive_react import PROACTIVE_REACT_SYSTEM_PROMPT, ProactiveReactRunner
+from assistant_app.schemas.planner import ToolReplyPayload
 from assistant_app.schemas.proactive import ProactivePromptPayload
 
 
@@ -124,6 +125,35 @@ class ProactiveReactRunnerTest(unittest.TestCase):
         assert decision is not None
         self.assertEqual(decision.score, 85)
         self.assertEqual(decision.reason, "用户画像显示偏好提前提醒。")
+
+    def test_run_once_accepts_typed_tool_reply_payload(self) -> None:
+        llm = _FakeLLM(
+            [
+                ToolReplyPayload.model_validate(
+                    _tool_payload(
+                        "done",
+                        {
+                            "score": 85,
+                            "message": "你明早有重要事项，建议今晚提前准备。",
+                            "reason": "用户画像显示偏好提前提醒。",
+                        },
+                        call_id="call_model_payload",
+                    )
+                ),
+            ]
+        )
+        runner = ProactiveReactRunner(
+            llm_client=llm,
+            tool_executor=_FakeToolExecutor(),
+            max_steps=2,
+            logger=logging.getLogger("test.proactive_react.model_tool_reply"),
+        )
+
+        decision = runner.run_once(context_payload={"policy": {"score_threshold": 80}, "user_profile": {"content": ""}})
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.score, 85)
 
     def test_run_once_ignores_invalid_done_and_retries(self) -> None:
         llm = _FakeLLM(
