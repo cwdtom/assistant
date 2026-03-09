@@ -5,94 +5,43 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem
+from assistant_app.schemas.planner import ProactiveDoneArguments
 from assistant_app.schemas.tools import (
+    PROACTIVE_TOOL_ARGS_MODELS,
     ProactiveHistoryListArgs,
     ProactiveHistorySearchArgs,
     ProactiveInternetSearchArgs,
     ProactiveScheduleGetArgs,
     ProactiveScheduleListArgs,
     ProactiveScheduleViewArgs,
+    ProactiveToolArgsBase,
+    build_function_tool_schema,
     validate_proactive_tool_arguments,
 )
 from assistant_app.search import SearchProvider
 
+_ProactiveSchemaModel = type[ProactiveToolArgsBase] | type[ProactiveDoneArguments]
+
+_PROACTIVE_TOOL_SCHEMA_SPECS: tuple[tuple[str, str, _ProactiveSchemaModel], ...] = (
+    ("schedule_list", "List schedules in upcoming window.", PROACTIVE_TOOL_ARGS_MODELS["schedule_list"]),
+    ("schedule_view", "View schedules by day/week/month.", PROACTIVE_TOOL_ARGS_MODELS["schedule_view"]),
+    ("schedule_get", "Get a schedule by id.", PROACTIVE_TOOL_ARGS_MODELS["schedule_get"]),
+    ("history_list", "List recent chat turns.", PROACTIVE_TOOL_ARGS_MODELS["history_list"]),
+    ("history_search", "Search chat turns by keyword.", PROACTIVE_TOOL_ARGS_MODELS["history_search"]),
+    ("internet_search", "Search public web for supplemental evidence.", PROACTIVE_TOOL_ARGS_MODELS["internet_search"]),
+    ("done", "Finish proactive decision with structured output.", ProactiveDoneArguments),
+)
+
 
 def build_proactive_tool_schemas() -> list[dict[str, Any]]:
     return [
-        _function_tool(
-            name="schedule_list",
-            description="List schedules in upcoming window.",
-            properties={"tag": {"type": "string"}},
-        ),
-        _function_tool(
-            name="schedule_view",
-            description="View schedules by day/week/month.",
-            properties={
-                "view": {"type": "string", "enum": ["day", "week", "month"]},
-                "anchor": {"type": "string", "description": "YYYY-MM-DD or YYYY-MM"},
-                "tag": {"type": "string"},
-            },
-            required=["view"],
-        ),
-        _function_tool(
-            name="schedule_get",
-            description="Get a schedule by id.",
-            properties={"id": {"type": "integer", "minimum": 1}},
-            required=["id"],
-        ),
-        _function_tool(
-            name="history_list",
-            description="List recent chat turns.",
-            properties={"limit": {"type": "integer", "minimum": 1, "maximum": 200}},
-        ),
-        _function_tool(
-            name="history_search",
-            description="Search chat turns by keyword.",
-            properties={
-                "keyword": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-            },
-            required=["keyword"],
-        ),
-        _function_tool(
-            name="internet_search",
-            description="Search public web for supplemental evidence.",
-            properties={"query": {"type": "string"}},
-            required=["query"],
-        ),
-        _function_tool(
-            name="done",
-            description="Finish proactive decision with structured output.",
-            properties={
-                "score": {"type": "integer", "minimum": 0, "maximum": 100},
-                "message": {"type": "string"},
-                "reason": {"type": "string"},
-            },
-            required=["score", "message", "reason"],
-        ),
+        build_function_tool_schema(
+            name=name,
+            description=description,
+            arguments_model=arguments_model,
+        )
+        for name, description, arguments_model in _PROACTIVE_TOOL_SCHEMA_SPECS
     ]
-
-
-def _function_tool(
-    *,
-    name: str,
-    description: str,
-    properties: dict[str, dict[str, Any]],
-    required: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required or [],
-                "additionalProperties": False,
-            },
-        },
-    }
 
 
 class ProactiveToolExecutor:
@@ -113,8 +62,13 @@ class ProactiveToolExecutor:
         self._chat_lookback_hours = max(chat_lookback_hours, 1)
         self._internet_search_top_k = max(internet_search_top_k, 1)
 
-    def execute(self, *, tool_name: str, arguments: dict[str, Any]) -> str:
-        validated_arguments = validate_proactive_tool_arguments(tool_name, arguments)
+    def execute(self, *, tool_name: str, arguments: dict[str, Any] | ProactiveToolArgsBase) -> str:
+        validated_arguments: ProactiveToolArgsBase | None
+        if isinstance(arguments, ProactiveToolArgsBase):
+            expected_cls = PROACTIVE_TOOL_ARGS_MODELS.get(tool_name)
+            validated_arguments = arguments if expected_cls and isinstance(arguments, expected_cls) else None
+        else:
+            validated_arguments = validate_proactive_tool_arguments(tool_name, arguments)
         if validated_arguments is None:
             raise ValueError(f"invalid arguments for tool: {tool_name}")
         if tool_name == "schedule_list":

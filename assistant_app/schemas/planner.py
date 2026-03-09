@@ -151,9 +151,9 @@ class ThoughtResponsePayload(FrozenModel):
 
 
 class ProactiveDoneArguments(FrozenModel):
-    score: int = Field(ge=0, le=100)
-    message: str
-    reason: str = Field(min_length=1)
+    score: int = Field(ge=0, le=100, description="提醒价值分数，范围 0~100。")
+    message: str = Field(description="当分数达到阈值时发送给用户的提醒文案。")
+    reason: str = Field(min_length=1, description="做出该主动提醒判断的简要原因。")
 
 
 _TOOL_CALL_LIST_ADAPTER = TypeAdapter(list[ToolCallPayload])

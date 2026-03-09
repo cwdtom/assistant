@@ -19,7 +19,12 @@ from assistant_app.schemas.planner import (
     ThoughtDoneDecision,
     normalize_tool_call_payload,
 )
-from assistant_app.schemas.tools import parse_json_object, validate_thought_tool_arguments
+from assistant_app.schemas.tools import (
+    THOUGHT_TOOL_ARGS_MODELS,
+    build_function_tool_schema,
+    parse_json_object,
+    validate_thought_tool_arguments,
+)
 
 THOUGHT_PROMPT = """
 你是 CLI 助手的 thought 模块，需要基于当前计划项做一步决策。
@@ -45,385 +50,35 @@ THOUGHT_PROMPT = """
 - thoughts_* 工具用于记录碎片想法；优先使用结构化参数进行新增/查询/更新/软删除
 """.strip()
 
+_THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("schedule_add", "新增日程，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("schedule_list", "列出日程（不带视图参数），直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("schedule_view", "按日历视图列出日程，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("schedule_get", "获取日程详情，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("schedule_update", "更新日程，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("schedule_delete", "删除日程，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("schedule_repeat", "切换重复规则开关，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("internet_search_tool", "搜索互联网信息，返回结构化搜索结果摘要。", ("current_step",)),
+    ("internet_search_fetch_url", "按 URL 抓取网页正文信息，返回主文本内容。", ("current_step",)),
+    ("history_list", "列出最近历史会话，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("history_search", "检索历史会话中的用户输入与最终回答。", ("current_step",)),
+    ("thoughts_add", "记录碎片想法：新增一条想法内容。", ("current_step",)),
+    ("thoughts_list", "记录碎片想法：按状态列出想法。", ("current_step",)),
+    ("thoughts_get", "记录碎片想法：查看单条想法详情。", ("current_step",)),
+    ("thoughts_update", "记录碎片想法：更新内容，并可选更新状态。", ("current_step",)),
+    ("thoughts_delete", "记录碎片想法：软删除（状态置为删除）。", ("current_step",)),
+    ("ask_user", "向用户提一个澄清问题。", ()),
+    ("done", "声明当前子任务完成，并提供本轮最终结论。", ()),
+)
+
 THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_add",
-            "description": "新增日程，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event_time": {
-                        "type": "string",
-                        "description": "日程开始时间，格式 YYYY-MM-DD HH:MM（本地时间）。",
-                    },
-                    "title": {"type": "string", "description": "日程标题文本。"},
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "日程标签；不传/null/空字符串时按默认标签 default 入库。",
-                    },
-                    "duration_minutes": {"type": "integer", "description": "日程时长，单位分钟，>=1。"},
-                    "remind_at": {
-                        "type": ["string", "null"],
-                        "description": "单次提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置。",
-                    },
-                    "interval_minutes": {"type": "integer", "description": "重复间隔，单位分钟，>=1。"},
-                    "times": {"type": "integer", "description": "重复次数：-1 表示无限重复，或 >=2 的有限重复次数。"},
-                    "remind_start_time": {
-                        "type": ["string", "null"],
-                        "description": "重复提醒起始时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示不设置。",
-                    },
-                },
-                "required": ["event_time", "title"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_list",
-            "description": "列出日程（不带视图参数），直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "标签过滤；不传/null 表示不过滤标签。",
-                    }
-                },
-                "required": [],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_view",
-            "description": "按日历视图列出日程，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "view": {
-                        "type": "string",
-                        "enum": ["day", "week", "month"],
-                        "description": (
-                            "日历视图：day=当天（锚点 YYYY-MM-DD）；"
-                            "week=锚点所在周（周一到周日，锚点 YYYY-MM-DD）；"
-                            "month=指定月份（锚点 YYYY-MM）。"
-                        ),
-                    },
-                    "anchor": {
-                        "type": ["string", "null"],
-                        "description": (
-                            "视图锚点；day/week 用 YYYY-MM-DD，month 用 YYYY-MM；"
-                            "不传/null 表示使用当前时间。"
-                        ),
-                    },
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": "标签过滤；不传/null 表示不过滤标签。",
-                    },
-                },
-                "required": ["view"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_get",
-            "description": "获取日程详情，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_update",
-            "description": "更新日程，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
-                    "event_time": {
-                        "type": "string",
-                        "description": "更新后的开始时间，格式 YYYY-MM-DD HH:MM（本地时间）。",
-                    },
-                    "title": {"type": "string", "description": "更新后的日程标题文本。"},
-                    "tag": {
-                        "type": ["string", "null"],
-                        "description": (
-                            "标签更新策略：不传时不修改；"
-                            "null/空字符串时清空并回落到 default；非空字符串时更新标签。"
-                        ),
-                    },
-                    "duration_minutes": {"type": "integer", "description": "日程时长，单位分钟，>=1。"},
-                    "remind_at": {
-                        "type": ["string", "null"],
-                        "description": "单次提醒时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示清空。",
-                    },
-                    "interval_minutes": {"type": "integer", "description": "重复间隔，单位分钟，>=1。"},
-                    "times": {"type": "integer", "description": "重复次数：-1 表示无限重复，或 >=2 的有限重复次数。"},
-                    "remind_start_time": {
-                        "type": ["string", "null"],
-                        "description": "重复提醒起始时间，格式 YYYY-MM-DD HH:MM（本地时间）；null 表示清空。",
-                    },
-                },
-                "required": ["id", "event_time", "title"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_delete",
-            "description": "删除日程，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_repeat",
-            "description": "切换重复规则开关，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "日程 ID，正整数。"},
-                    "enabled": {"type": "boolean", "description": "重复规则开关：true=开启，false=关闭。"},
-                },
-                "required": ["id", "enabled"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "internet_search_tool",
-            "description": "搜索互联网信息，返回结构化搜索结果摘要。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "搜索关键词文本；用于互联网检索。",
-                    }
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "internet_search_fetch_url",
-            "description": "按 URL 抓取网页正文信息，返回主文本内容。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "目标网页 URL，需为 http:// 或 https:// 开头。",
-                    }
-                },
-                "required": ["url"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "history_list",
-            "description": "列出最近历史会话，直接传结构化参数，不要传命令字符串。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": ["integer", "null"],
-                        "description": "返回结果上限；不传/null 使用系统默认值，传值时需为正整数。",
-                    },
-                },
-                "required": [],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "history_search",
-            "description": "检索历史会话中的用户输入与最终回答。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keyword": {
-                        "type": "string",
-                        "description": "历史检索关键词文本；用于匹配历史会话。",
-                    },
-                    "limit": {
-                        "type": ["integer", "null"],
-                        "description": "返回结果上限；不传/null 使用系统默认值，传值时需为正整数。",
-                    },
-                },
-                "required": ["keyword"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "thoughts_add",
-            "description": "记录碎片想法：新增一条想法内容。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "想法内容文本，不能为空。",
-                    }
-                },
-                "required": ["content"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "thoughts_list",
-            "description": "记录碎片想法：按状态列出想法。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": ["string", "null"],
-                        "enum": ["未完成", "完成", "删除", None],
-                        "description": "状态过滤；不传/null 时默认只看未完成与完成。",
-                    },
-                },
-                "required": [],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "thoughts_get",
-            "description": "记录碎片想法：查看单条想法详情。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "想法 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "thoughts_update",
-            "description": "记录碎片想法：更新内容，并可选更新状态。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "想法 ID，正整数。"},
-                    "content": {"type": "string", "description": "更新后的想法内容文本，不能为空。"},
-                    "status": {
-                        "type": ["string", "null"],
-                        "enum": ["未完成", "完成", "删除", None],
-                        "description": "更新后的状态；不传/null 时保持原状态。",
-                    },
-                },
-                "required": ["id", "content"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "thoughts_delete",
-            "description": "记录碎片想法：软删除（状态置为删除）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "想法 ID，正整数。"},
-                },
-                "required": ["id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "ask_user",
-            "description": "向用户提一个澄清问题。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "单个澄清问题文本；用于向用户补齐缺失信息。",
-                    },
-                    "current_step": {
-                        "type": "string",
-                        "description": "当前步骤说明文本（可选）；用于标注该问题对应的子任务步骤。",
-                    },
-                },
-                "required": ["question"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "done",
-            "description": "声明当前子任务完成，并提供本轮最终结论。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "response": {
-                        "type": "string",
-                        "description": "当前子任务结论文本；用于交给 replan 判断是否继续。",
-                    },
-                    "current_step": {
-                        "type": "string",
-                        "description": "当前步骤说明文本（可选）；用于标注已完成的子任务步骤。",
-                    },
-                },
-                "required": ["response"],
-                "additionalProperties": False,
-            },
-        },
-    },
+    build_function_tool_schema(
+        name=name,
+        description=description,
+        arguments_model=THOUGHT_TOOL_ARGS_MODELS[name],
+        exclude_fields=exclude_fields,
+    )
+    for name, description, exclude_fields in _THOUGHT_TOOL_SPECS
 ]
 
 _THOUGHT_SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
