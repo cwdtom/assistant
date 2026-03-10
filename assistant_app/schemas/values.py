@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import Field, field_validator, model_validator
 
@@ -18,6 +18,7 @@ from assistant_app.schemas.normalization import (
 
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
+THOUGHT_STATUS_VALUES = ("未完成", "完成", "删除")
 
 
 class DefaultTagValue(FrozenModel):
@@ -99,6 +100,41 @@ class ScheduleRepeatTimesValue(FrozenModel):
         return normalize_repeat_times_value(value, field_name="value")
 
 
+class ThoughtContentValue(FrozenModel):
+    content: str = Field(min_length=1)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        return normalize_required_text(value, field_name="content")
+
+
+class ThoughtStatusValue(FrozenModel):
+    status: Literal["未完成", "完成", "删除"]
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> Literal["未完成", "完成", "删除"]:
+        normalized = normalize_required_text(value, field_name="status")
+        if normalized not in THOUGHT_STATUS_VALUES:
+            raise ValueError("status must be one of 未完成, 完成, 删除")
+        return cast(Literal["未完成", "完成", "删除"], normalized)
+
+
+class OptionalThoughtStatusValue(FrozenModel):
+    status: Literal["未完成", "完成", "删除"] | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> Literal["未完成", "完成", "删除"] | None:
+        normalized = normalize_optional_text(value)
+        if normalized is None:
+            return None
+        if normalized not in THOUGHT_STATUS_VALUES:
+            raise ValueError("status must be one of 未完成, 完成, 删除")
+        return cast(Literal["未完成", "完成", "删除"], normalized)
+
+
 class ScheduleViewAnchorValue(FrozenModel):
     view: Literal["day", "week", "month"]
     anchor: str | None = None
@@ -133,8 +169,12 @@ __all__ = [
     "MAX_HISTORY_LIST_LIMIT",
     "OptionalScheduleDateTimeValue",
     "OptionalTagValue",
+    "OptionalThoughtStatusValue",
     "PositiveIntValue",
     "ScheduleDateTimeValue",
     "ScheduleRepeatTimesValue",
     "ScheduleViewAnchorValue",
+    "THOUGHT_STATUS_VALUES",
+    "ThoughtContentValue",
+    "ThoughtStatusValue",
 ]

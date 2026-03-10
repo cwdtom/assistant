@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from assistant_app.agent_components.models import PlannerObservation
-from assistant_app.agent_components.parsing_utils import (
-    _normalize_positive_int_value,
-    _normalize_thought_status_value,
-)
 from assistant_app.agent_components.render_helpers import (
     _format_thought_detail_result,
     _format_thoughts_list_result,
@@ -14,7 +12,13 @@ from assistant_app.agent_components.render_helpers import (
     _truncate_text,
 )
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
-from assistant_app.schemas.tools import ThoughtsAddArgs, ThoughtsIdArgs, ThoughtsListArgs, ThoughtsUpdateArgs
+from assistant_app.schemas.tools import (
+    ThoughtsAddArgs,
+    ThoughtsIdArgs,
+    ThoughtsListArgs,
+    ThoughtsUpdateArgs,
+    coerce_thoughts_action_payload,
+)
 
 
 def execute_thoughts_system_action(
@@ -33,24 +37,37 @@ def execute_thoughts_system_action(
         extra={"event": "planner_tool_thoughts_start", "context": log_context},
     )
     try:
-        runtime_payload_or_error = _coerce_thoughts_runtime_payload(payload)
-        if isinstance(runtime_payload_or_error, str):
+        runtime_payload = _coerce_thoughts_runtime_payload(payload)
+        if runtime_payload is None:
             return _done_observation(
                 agent=agent,
                 action=action,
                 raw_input=raw_input,
-                result=runtime_payload_or_error,
+                result="thoughts.action 非法。",
             )
-
         typed_observation = _execute_typed_thoughts_system_action(
             agent=agent,
-            payload=runtime_payload_or_error,
+            payload=runtime_payload,
             raw_input=raw_input,
             action=action,
         )
         if typed_observation is not None:
             return typed_observation
         return _done_observation(agent=agent, action=action, raw_input=raw_input, result="thoughts.action 非法。")
+    except ValidationError as exc:
+        return _done_observation(
+            agent=agent,
+            action=action,
+            raw_input=raw_input,
+            result=_first_validation_error_message(exc),
+        )
+    except ValueError as exc:
+        return _done_observation(
+            agent=agent,
+            action=action,
+            raw_input=raw_input,
+            result=str(exc).strip() or "thoughts.action 非法。",
+        )
     except Exception as exc:  # noqa: BLE001
         agent._app_logger.warning(
             "planner_tool_thoughts_failed",
@@ -69,70 +86,10 @@ def execute_thoughts_system_action(
 
 def _coerce_thoughts_runtime_payload(
     payload: dict[str, Any] | RuntimePlannerActionPayload,
-) -> RuntimePlannerActionPayload | str:
+) -> RuntimePlannerActionPayload | None:
     if isinstance(payload, RuntimePlannerActionPayload):
         return payload
-
-    action = str(payload.get("action") or "").strip().lower()
-    if action not in {"add", "list", "get", "update", "delete"}:
-        return "thoughts.action 非法。"
-
-    if action == "add":
-        content = str(payload.get("content") or "").strip()
-        if not content:
-            return "thoughts.add content 不能为空。"
-        return RuntimePlannerActionPayload(
-            tool_name="thoughts_add",
-            arguments=ThoughtsAddArgs.model_validate({"content": content}),
-        )
-
-    if action == "list":
-        arguments: dict[str, Any] = {}
-        if "status" in payload and payload.get("status") is not None:
-            status = _normalize_thought_status_value(payload.get("status"))
-            if status is None:
-                return "thoughts.list status 必须为 未完成|完成|删除。"
-            arguments["status"] = status
-        return RuntimePlannerActionPayload(
-            tool_name="thoughts_list",
-            arguments=ThoughtsListArgs.model_validate(arguments),
-        )
-
-    target_id = _normalize_positive_int_value(payload.get("id"))
-    if target_id is None:
-        return "thoughts.id 必须为正整数。"
-
-    if action == "get":
-        return RuntimePlannerActionPayload(
-            tool_name="thoughts_get",
-            arguments=ThoughtsIdArgs(id=target_id),
-        )
-
-    if action == "update":
-        content = str(payload.get("content") or "").strip()
-        if not content:
-            return "thoughts.update content 不能为空。"
-        update_arguments: dict[str, Any] = {
-            "id": target_id,
-            "content": content,
-        }
-        if "status" in payload:
-            if payload.get("status") is None:
-                update_arguments["status"] = None
-            else:
-                status = _normalize_thought_status_value(payload.get("status"))
-                if status is None:
-                    return "thoughts.update status 必须为 未完成|完成|删除。"
-                update_arguments["status"] = status
-        return RuntimePlannerActionPayload(
-            tool_name="thoughts_update",
-            arguments=ThoughtsUpdateArgs.model_validate(update_arguments),
-        )
-
-    return RuntimePlannerActionPayload(
-        tool_name="thoughts_delete",
-        arguments=ThoughtsIdArgs(id=target_id),
-    )
+    return coerce_thoughts_action_payload(payload)
 
 
 def _execute_typed_thoughts_system_action(
@@ -184,13 +141,6 @@ def _execute_typed_thoughts_system_action(
         )
 
     if action == "update" and isinstance(arguments, ThoughtsUpdateArgs):
-        if "status" in arguments.model_fields_set and arguments.status is None:
-            return _done_observation(
-                agent=agent,
-                action=action,
-                raw_input=raw_input,
-                result="thoughts.update status 必须为 未完成|完成|删除。",
-            )
         if "status" in arguments.model_fields_set:
             updated = agent.db.update_thought(arguments.id, content=arguments.content, status=arguments.status)
         else:
@@ -264,3 +214,13 @@ def _done_observation(*, agent: Any, action: str, raw_input: str, result: str) -
         },
     )
     return observation
+
+
+def _first_validation_error_message(exc: ValidationError) -> str:
+    errors = exc.errors(include_url=False)
+    if not errors:
+        return "thoughts 工具参数无效。"
+    message = str(errors[0].get("msg") or "").strip()
+    if message.startswith("Value error, "):
+        message = message.removeprefix("Value error, ").strip()
+    return message or "thoughts 工具参数无效。"

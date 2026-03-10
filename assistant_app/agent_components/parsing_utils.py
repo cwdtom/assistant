@@ -12,6 +12,7 @@ from assistant_app.schemas.normalization import (
 from assistant_app.schemas.normalization import (
     normalize_datetime_text as normalize_schedule_datetime_text,
 )
+from assistant_app.schemas.values import OptionalThoughtStatusValue
 
 SCHEDULE_EVENT_PREFIX_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$")
 SCHEDULE_INTERVAL_OPTION_PATTERN = re.compile(r"(^|\s)--interval\s+(\d+)")
@@ -25,7 +26,6 @@ TAG_OPTION_PATTERN = re.compile(r"(^|\s)--tag\s+(\S+)")
 HISTORY_LIMIT_OPTION_PATTERN = re.compile(r"(^|\s)--limit\s+(\d+)")
 THOUGHTS_STATUS_OPTION_PATTERN = re.compile(r"(^|\s)--status\s+(\S+)")
 SCHEDULE_VIEW_NAMES = ("day", "week", "month")
-THOUGHT_STATUS_VALUES = ("未完成", "完成", "删除")
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
@@ -484,12 +484,10 @@ def _normalize_schedule_duration_minutes_value(value: Any) -> int | None:
 
 
 def _normalize_thought_status_value(value: Any) -> str | None:
-    if value is None:
+    try:
+        return OptionalThoughtStatusValue.model_validate({"status": value}).status
+    except Exception:
         return None
-    text = str(value).strip()
-    if text in THOUGHT_STATUS_VALUES:
-        return text
-    return None
 
 
 def _normalize_schedule_view_anchor(*, view_name: str, value: str) -> str | None:

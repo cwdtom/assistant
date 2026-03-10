@@ -13,10 +13,12 @@ from assistant_app.schemas.values import (
     HistoryListLimitValue,
     OptionalScheduleDateTimeValue,
     OptionalTagValue,
+    OptionalThoughtStatusValue,
     PositiveIntValue,
     ScheduleDateTimeValue,
     ScheduleRepeatTimesValue,
     ScheduleViewAnchorValue,
+    ThoughtContentValue,
 )
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, Any])
@@ -142,12 +144,22 @@ class HistorySearchArgs(HistoryListArgs):
 class ThoughtsAddArgs(ThoughtToolArgsBase):
     content: str = Field(min_length=1, description="想法内容文本，不能为空。")
 
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        return ThoughtContentValue.model_validate({"content": value}).content
+
 
 class ThoughtsListArgs(ThoughtToolArgsBase):
     status: Literal["未完成", "完成", "删除"] | None = Field(
         default=None,
         description="状态过滤；不传/null 时默认只看未完成与完成。",
     )
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str | None:
+        return OptionalThoughtStatusValue.model_validate({"status": value}).status
 
 
 class ThoughtsIdArgs(ThoughtToolArgsBase):
@@ -161,6 +173,22 @@ class ThoughtsUpdateArgs(ThoughtToolArgsBase):
         default=None,
         description="更新后的状态；不传/null 时保持原状态。",
     )
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        return ThoughtContentValue.model_validate({"content": value}).content
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str | None:
+        return OptionalThoughtStatusValue.model_validate({"status": value}).status
+
+    @model_validator(mode="after")
+    def validate_optional_status(self) -> ThoughtsUpdateArgs:
+        if "status" in self.model_fields_set and self.status is None:
+            raise ValueError("status must be one of 未完成, 完成, 删除")
+        return self
 
 
 class InternetSearchArgs(ThoughtToolArgsBase):
@@ -535,6 +563,120 @@ class ScheduleRepeatCompatPayload(FrozenModel):
         )
 
 
+class ThoughtsAddCompatPayload(FrozenModel):
+    action: Literal["add"]
+    content: str = Field(min_length=1)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("thoughts.add content 不能为空。")
+        return ThoughtContentValue.model_validate({"content": text}).content
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="thoughts_add",
+            arguments=ThoughtsAddArgs(content=self.content),
+        )
+
+
+class ThoughtsListCompatPayload(FrozenModel):
+    action: Literal["list"]
+    status: Literal["未完成", "完成", "删除"] | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            return OptionalThoughtStatusValue.model_validate({"status": value}).status
+        except ValidationError as exc:
+            raise ValueError("thoughts.list status 必须为 未完成|完成|删除。") from exc
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {}
+        if "status" in self.model_fields_set and self.status is not None:
+            arguments["status"] = self.status
+        return RuntimePlannerActionPayload(
+            tool_name="thoughts_list",
+            arguments=ThoughtsListArgs.model_validate(arguments),
+        )
+
+
+class ThoughtsIdCompatPayload(FrozenModel):
+    action: Literal["get", "delete"]
+    id: int = Field(ge=1)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        try:
+            return PositiveIntValue.model_validate({"value": value}).value
+        except ValidationError as exc:
+            raise ValueError("thoughts.id 必须为正整数。") from exc
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        tool_name = "thoughts_get" if self.action == "get" else "thoughts_delete"
+        return RuntimePlannerActionPayload(
+            tool_name=tool_name,
+            arguments=ThoughtsIdArgs(id=self.id),
+        )
+
+
+class ThoughtsUpdateCompatPayload(FrozenModel):
+    action: Literal["update"]
+    id: int = Field(ge=1)
+    content: str = Field(min_length=1)
+    status: Literal["未完成", "完成", "删除"] | None = None
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        try:
+            return PositiveIntValue.model_validate({"value": value}).value
+        except ValidationError as exc:
+            raise ValueError("thoughts.id 必须为正整数。") from exc
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("thoughts.update content 不能为空。")
+        return ThoughtContentValue.model_validate({"content": text}).content
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            return OptionalThoughtStatusValue.model_validate({"status": value}).status
+        except ValidationError as exc:
+            raise ValueError("thoughts.update status 必须为 未完成|完成|删除。") from exc
+
+    @model_validator(mode="after")
+    def validate_optional_status(self) -> ThoughtsUpdateCompatPayload:
+        if "status" in self.model_fields_set and self.status is None:
+            raise ValueError("thoughts.update status 必须为 未完成|完成|删除。")
+        return self
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {
+            "id": self.id,
+            "content": self.content,
+        }
+        if "status" in self.model_fields_set:
+            arguments["status"] = self.status
+        return RuntimePlannerActionPayload(
+            tool_name="thoughts_update",
+            arguments=ThoughtsUpdateArgs.model_validate(arguments),
+        )
+
+
 HistoryCompatPayload = Annotated[
     HistoryListCompatPayload | HistorySearchCompatPayload,
     Field(discriminator="action"),
@@ -548,9 +690,14 @@ ScheduleCompatPayload = Annotated[
     | ScheduleRepeatCompatPayload,
     Field(discriminator="action"),
 ]
+ThoughtsCompatPayload = Annotated[
+    ThoughtsAddCompatPayload | ThoughtsListCompatPayload | ThoughtsIdCompatPayload | ThoughtsUpdateCompatPayload,
+    Field(discriminator="action"),
+]
 
 _HISTORY_COMPAT_ADAPTER: TypeAdapter[HistoryCompatPayload] = TypeAdapter(HistoryCompatPayload)
 _SCHEDULE_COMPAT_ADAPTER: TypeAdapter[ScheduleCompatPayload] = TypeAdapter(ScheduleCompatPayload)
+_THOUGHTS_COMPAT_ADAPTER: TypeAdapter[ThoughtsCompatPayload] = TypeAdapter(ThoughtsCompatPayload)
 
 
 def coerce_history_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
@@ -560,6 +707,15 @@ def coerce_history_action_payload(raw_payload: dict[str, Any]) -> RuntimePlanner
 
 def coerce_schedule_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
     compat_payload = _SCHEDULE_COMPAT_ADAPTER.validate_python(_normalize_action_payload(raw_payload))
+    return compat_payload.to_runtime_payload()
+
+
+def coerce_thoughts_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    normalized_payload = _normalize_action_payload(raw_payload)
+    action = normalized_payload.get("action")
+    if action not in {"add", "list", "get", "update", "delete"}:
+        raise ValueError("thoughts.action 非法。")
+    compat_payload = _THOUGHTS_COMPAT_ADAPTER.validate_python(normalized_payload)
     return compat_payload.to_runtime_payload()
 
 
@@ -695,12 +851,17 @@ __all__ = [
     "ScheduleViewArgs",
     "ScheduleViewCompatPayload",
     "ThoughtsAddArgs",
+    "ThoughtsAddCompatPayload",
     "ThoughtsIdArgs",
+    "ThoughtsIdCompatPayload",
     "ThoughtsListArgs",
+    "ThoughtsListCompatPayload",
     "ThoughtsUpdateArgs",
+    "ThoughtsUpdateCompatPayload",
     "build_function_tool_schema",
     "coerce_history_action_payload",
     "coerce_schedule_action_payload",
+    "coerce_thoughts_action_payload",
     "parse_json_object",
     "validate_proactive_tool_arguments",
     "validate_thought_tool_arguments",

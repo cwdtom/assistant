@@ -20,16 +20,19 @@ from assistant_app.agent import (
     _try_parse_json,
 )
 from assistant_app.agent_components.models import PlannerObservation
+from assistant_app.agent_components.tools.planner_tool_routing import build_json_planner_tool_executor
 from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
+from assistant_app.schemas.commands import parse_tool_command_payload
 from assistant_app.schemas.planner import ToolReplyPayload
-from assistant_app.schemas.routing import RuntimePlannerActionPayload
+from assistant_app.schemas.routing import JsonPlannerToolRoute, RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
     HistorySearchArgs,
     InternetSearchFetchUrlArgs,
     ScheduleAddArgs,
     ScheduleUpdateArgs,
     ThoughtsUpdateArgs,
+    coerce_thoughts_action_payload,
 )
 from assistant_app.search import SearchResult
 
@@ -2025,6 +2028,9 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNotNone(decision)
         assert decision is not None
         self.assertEqual(decision.model_dump()["next_action"]["tool"], "history")
+        assert decision.next_action.payload is not None
+        self.assertEqual(decision.next_action.payload.tool_name, "history_search")
+        self.assertEqual(decision.next_action.payload.arguments.keyword, "牛奶")
 
     def test_thought_tool_call_contract_maps_internet_search_tool(self) -> None:
         decision = normalize_thought_tool_call(
@@ -2180,6 +2186,8 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(next_action["tool"], "thoughts")
         input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(input_payload, {"action": "add", "content": "记得补充周报"})
+        assert decision.next_action.payload is not None
+        self.assertEqual(decision.next_action.payload.tool_name, "thoughts_add")
 
     def test_thought_tool_call_contract_maps_thoughts_update_tool(self) -> None:
         decision = normalize_thought_tool_call(
@@ -2204,6 +2212,8 @@ class AssistantAgentTest(unittest.TestCase):
             input_payload,
             {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
         )
+        assert decision.next_action.payload is not None
+        self.assertEqual(decision.next_action.payload.tool_name, "thoughts_update")
 
     def test_thought_tool_call_contract_rejects_legacy_thoughts_tool(self) -> None:
         decision = normalize_thought_tool_call(
@@ -2740,6 +2750,62 @@ class AssistantAgentTest(unittest.TestCase):
         merged = "\n".join(captured.output)
         self.assertIn("planner_tool_thoughts_start", merged)
         self.assertIn("planner_tool_thoughts_done", merged)
+
+    def test_thoughts_cli_and_json_payload_share_runtime_payload(self) -> None:
+        command_payload = parse_tool_command_payload("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
+        self.assertIsNotNone(command_payload)
+        assert command_payload is not None
+
+        compat_payload = coerce_thoughts_action_payload(
+            {"action": "update", "id": 1, "content": "记得买牛奶和鸡蛋", "status": "完成"}
+        )
+
+        self.assertEqual(command_payload, compat_payload)
+
+    def test_thoughts_tool_update_rejects_explicit_null_status(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        thought_id = self.db.add_thought("记得买牛奶")
+
+        observation = agent._execute_planner_tool(
+            action_tool="thoughts",
+            action_input='{"action":"update","id":1,"content":"记得买牛奶和鸡蛋","status":null}',
+        )
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(observation.result, "thoughts.update status 必须为 未完成|完成|删除。")
+        item = self.db.get_thought(thought_id)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.content, "记得买牛奶")
+
+    def test_json_planner_tool_executor_prefers_typed_payload_over_legacy_command(self) -> None:
+        typed_observation = PlannerObservation(tool="history", input_text="typed", ok=True, result="typed")
+        route = JsonPlannerToolRoute(
+            tool="history",
+            invalid_json_result="invalid",
+            legacy_command_prefix="/history",
+            payload_executor=lambda payload, raw_input: PlannerObservation(
+                tool="history",
+                input_text=raw_input,
+                ok=False,
+                result="payload",
+            ),
+            typed_payload_executor=lambda payload, raw_input: typed_observation,
+        )
+        executor = build_json_planner_tool_executor(
+            route=route,
+            command_executor=lambda command: "legacy",
+        )
+
+        observation = executor(
+            "/history search 牛奶",
+            RuntimePlannerActionPayload(
+                tool_name="history_search",
+                arguments=HistorySearchArgs(keyword="牛奶"),
+            ),
+        )
+
+        self.assertIs(observation, typed_observation)
 
     def test_schedule_tool_supports_runtime_typed_payload(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

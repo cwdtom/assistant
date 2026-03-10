@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal, TypeAlias
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from assistant_app.planner_common import THOUGHT_EXECUTION_TOOL_NAMES, normalize_plan_items, normalize_tool_names
+from assistant_app.runtime_actions import coerce_runtime_action_payload, serialize_runtime_action_input
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.normalization import EVENT_TIME_FORMAT, validate_datetime_text
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
@@ -55,7 +56,7 @@ class ReplanDoneDecision(FrozenModel):
 
 class ThoughtNextAction(FrozenModel):
     tool: str = Field(min_length=1)
-    input: str = Field(min_length=1)
+    input: str = ""
     payload: RuntimePlannerActionPayload | None = Field(default=None, exclude=True)
 
     @field_validator("tool")
@@ -65,6 +66,24 @@ class ThoughtNextAction(FrozenModel):
         if normalized not in THOUGHT_EXECUTION_TOOL_NAMES:
             raise ValueError("tool must be one of the execution tool names")
         return normalized
+
+    @field_validator("input")
+    @classmethod
+    def normalize_input(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def normalize_runtime_payload(self) -> ThoughtNextAction:
+        if self.payload is not None:
+            serialized_input = serialize_runtime_action_input(action_tool=self.tool, payload=self.payload)
+            object.__setattr__(self, "input", serialized_input)
+            return self
+        if not self.input:
+            raise ValueError("next_action requires input")
+        derived_payload = coerce_runtime_action_payload(action_tool=self.tool, raw_input=self.input)
+        if derived_payload is not None:
+            object.__setattr__(self, "payload", derived_payload)
+        return self
 
 
 class ThoughtContinueDecision(FrozenModel):

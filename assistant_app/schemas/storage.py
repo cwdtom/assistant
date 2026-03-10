@@ -12,6 +12,7 @@ from assistant_app.schemas.normalization import (
     normalize_repeat_times_value,
     normalize_tag_text,
 )
+from assistant_app.schemas.values import OptionalThoughtStatusValue, ThoughtContentValue, ThoughtStatusValue
 
 THOUGHT_STATUS_TODO: Literal["未完成"] = "未完成"
 
@@ -27,14 +28,6 @@ class NormalizedTagValue(FrozenModel):
 
 class ScheduleDurationValue(FrozenModel):
     duration_minutes: int = Field(ge=1)
-
-
-class ThoughtContentValue(FrozenModel):
-    content: str = Field(min_length=1)
-
-
-class ThoughtStatusValue(FrozenModel):
-    status: Literal["未完成", "完成", "删除"]
 
 
 class ScheduleCreateInput(FrozenModel):
@@ -152,10 +145,30 @@ class ThoughtCreateInput(FrozenModel):
     content: str = Field(min_length=1)
     status: Literal["未完成", "完成", "删除"] = THOUGHT_STATUS_TODO
 
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: object) -> str:
+        return ThoughtContentValue.model_validate({"content": value}).content
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: object) -> str:
+        return ThoughtStatusValue.model_validate({"status": value}).status
+
 
 class ThoughtUpdateInput(FrozenModel):
     content: str = Field(min_length=1)
     status: Literal["未完成", "完成", "删除"] | None = None
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: object) -> str:
+        return ThoughtContentValue.model_validate({"content": value}).content
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: object) -> str | None:
+        return OptionalThoughtStatusValue.model_validate({"status": value}).status
 
     @model_validator(mode="after")
     def validate_optional_status(self) -> ThoughtUpdateInput:

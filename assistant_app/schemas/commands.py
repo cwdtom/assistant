@@ -34,6 +34,7 @@ from assistant_app.schemas.tools import (
     ThoughtsUpdateArgs,
     coerce_history_action_payload,
     coerce_schedule_action_payload,
+    coerce_thoughts_action_payload,
 )
 
 
@@ -165,6 +166,19 @@ def _coerce_schedule_command_arguments(
     return None
 
 
+def _coerce_thoughts_command_arguments(
+    raw_payload: dict[str, object],
+) -> ThoughtsAddArgs | ThoughtsListArgs | ThoughtsIdArgs | ThoughtsUpdateArgs | None:
+    try:
+        runtime_payload = coerce_thoughts_action_payload(raw_payload)
+    except (ValidationError, ValueError):
+        return None
+    arguments = runtime_payload.arguments
+    if isinstance(arguments, (ThoughtsAddArgs, ThoughtsListArgs, ThoughtsIdArgs, ThoughtsUpdateArgs)):
+        return arguments
+    return None
+
+
 def parse_history_list_command(command: str) -> HistoryListCommand | None:
     history_limit = _parse_history_list_limit(command)
     if history_limit is None:
@@ -196,24 +210,34 @@ def parse_thoughts_add_command(command: str) -> ThoughtsAddCommand | None:
     content = command.removeprefix("/thoughts add").strip()
     if not content:
         return None
-    return ThoughtsAddCommand(arguments=ThoughtsAddArgs(content=content))
+    arguments = _coerce_thoughts_command_arguments({"action": "add", "content": content})
+    if not isinstance(arguments, ThoughtsAddArgs):
+        return None
+    return ThoughtsAddCommand(arguments=arguments)
 
 
 def parse_thoughts_list_command(command: str) -> ThoughtsListCommand | None:
     parsed_status = _parse_thoughts_list_status_input(command.removeprefix("/thoughts list").strip())
     if parsed_status is _INVALID_OPTION_VALUE:
         return None
+    raw_payload: dict[str, object] = {"action": "list"}
     if isinstance(parsed_status, str):
         normalized_status = cast(Literal["未完成", "完成", "删除"], parsed_status)
-        return ThoughtsListCommand(arguments=ThoughtsListArgs(status=normalized_status))
-    return ThoughtsListCommand()
+        raw_payload["status"] = normalized_status
+    arguments = _coerce_thoughts_command_arguments(raw_payload)
+    if not isinstance(arguments, ThoughtsListArgs):
+        return None
+    return ThoughtsListCommand(arguments=arguments)
 
 
 def parse_thoughts_get_command(command: str) -> ThoughtsGetCommand | None:
     thought_id = _parse_positive_int(command.removeprefix("/thoughts get ").strip())
     if thought_id is None:
         return None
-    return ThoughtsGetCommand(arguments=ThoughtsIdArgs(id=thought_id))
+    arguments = _coerce_thoughts_command_arguments({"action": "get", "id": thought_id})
+    if not isinstance(arguments, ThoughtsIdArgs):
+        return None
+    return ThoughtsGetCommand(arguments=arguments)
 
 
 def parse_thoughts_update_command(command: str) -> ThoughtsUpdateCommand | None:
@@ -227,14 +251,55 @@ def parse_thoughts_update_command(command: str) -> ThoughtsUpdateCommand | None:
     }
     if has_status:
         arguments["status"] = status
-    return ThoughtsUpdateCommand(arguments=ThoughtsUpdateArgs.model_validate(arguments))
+    coerced_arguments = _coerce_thoughts_command_arguments(arguments | {"action": "update"})
+    if not isinstance(coerced_arguments, ThoughtsUpdateArgs):
+        return None
+    return ThoughtsUpdateCommand(arguments=coerced_arguments)
 
 
 def parse_thoughts_delete_command(command: str) -> ThoughtsDeleteCommand | None:
     thought_id = _parse_positive_int(command.removeprefix("/thoughts delete ").strip())
     if thought_id is None:
         return None
-    return ThoughtsDeleteCommand(arguments=ThoughtsIdArgs(id=thought_id))
+    arguments = _coerce_thoughts_command_arguments({"action": "delete", "id": thought_id})
+    if not isinstance(arguments, ThoughtsIdArgs):
+        return None
+    return ThoughtsDeleteCommand(arguments=arguments)
+
+
+def parse_tool_command_payload(command: str) -> RuntimePlannerActionPayload | None:
+    parsed_command: CliCommandBase | None = None
+    if command == "/history list" or command.startswith("/history list "):
+        parsed_command = parse_history_list_command(command)
+    elif command.startswith("/history search "):
+        parsed_command = parse_history_search_command(command)
+    elif command == "/thoughts add" or command.startswith("/thoughts add "):
+        parsed_command = parse_thoughts_add_command(command)
+    elif command == "/thoughts list" or command.startswith("/thoughts list "):
+        parsed_command = parse_thoughts_list_command(command)
+    elif command.startswith("/thoughts get "):
+        parsed_command = parse_thoughts_get_command(command)
+    elif command.startswith("/thoughts update "):
+        parsed_command = parse_thoughts_update_command(command)
+    elif command.startswith("/thoughts delete "):
+        parsed_command = parse_thoughts_delete_command(command)
+    elif command == "/schedule list" or command.startswith("/schedule list "):
+        parsed_command = parse_schedule_list_command(command)
+    elif command.startswith("/schedule view "):
+        parsed_command = parse_schedule_view_command(command)
+    elif command.startswith("/schedule get "):
+        parsed_command = parse_schedule_get_command(command)
+    elif command.startswith("/schedule add"):
+        parsed_command = parse_schedule_add_command(command)
+    elif command.startswith("/schedule update "):
+        parsed_command = parse_schedule_update_command(command)
+    elif command.startswith("/schedule delete "):
+        parsed_command = parse_schedule_delete_command(command)
+    elif command.startswith("/schedule repeat "):
+        parsed_command = parse_schedule_repeat_command(command)
+    if parsed_command is None:
+        return None
+    return parsed_command.to_runtime_payload()
 
 
 def parse_schedule_list_command(command: str) -> ScheduleListCommand | None:
@@ -398,6 +463,7 @@ __all__ = [
     "parse_schedule_update_command",
     "parse_schedule_view_command",
     "parse_thoughts_add_command",
+    "parse_tool_command_payload",
     "parse_thoughts_delete_command",
     "parse_thoughts_get_command",
     "parse_thoughts_list_command",

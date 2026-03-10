@@ -18,6 +18,8 @@ def build_json_planner_tool_executor(
         action_payload: RuntimePlannerActionPayload | None = None,
     ) -> PlannerObservation:
         normalized_input = action_input.strip()
+        if action_payload is not None and route.typed_payload_executor is not None:
+            return route.typed_payload_executor(action_payload, normalized_input)
         if route.legacy_command_prefix is not None:
             legacy_observation = _maybe_execute_legacy_tool_command(
                 normalized_input=normalized_input,
@@ -27,8 +29,6 @@ def build_json_planner_tool_executor(
             )
             if legacy_observation is not None:
                 return legacy_observation
-        if action_payload is not None and route.typed_payload_executor is not None:
-            return route.typed_payload_executor(action_payload, normalized_input)
         payload = parse_json_object(normalized_input)
         if payload is None:
             return PlannerObservation(
