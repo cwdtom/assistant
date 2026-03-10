@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Callable
-from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any
 
 from assistant_app.agent_components.command_handlers import (
     handle_command as _handle_command_impl,
@@ -17,40 +14,24 @@ from assistant_app.agent_components.command_handlers import (
 )
 from assistant_app.agent_components.models import (
     ClarificationTurn,
-    CompletedSubtask,
-    InnerReActContext,
-    OuterPlanContext,
     PendingPlanTask,
     PlannerObservation,
-    PlannerTextMessage,
-    PlannerToolMessage,
-    PlanStep,
     TaskInterruptedError,
-    ThoughtMessage,
-    ThoughtToolCallingError,
 )
 from assistant_app.agent_components.parsing_utils import (
     _parse_history_list_limit,
     _parse_history_search_input,
 )
 from assistant_app.agent_components.planner_loop import (
-    emit_decision_progress as _emit_decision_progress_impl,
-)
-from assistant_app.agent_components.planner_loop import (
-    initialize_plan_once as _initialize_plan_once_impl,
-)
-from assistant_app.agent_components.planner_loop import (
-    run_inner_react_loop as _run_inner_react_loop_impl,
-)
-from assistant_app.agent_components.planner_loop import (
     run_outer_plan_loop as _run_outer_plan_loop_impl,
 )
-from assistant_app.agent_components.planner_loop import (
-    run_replan_gate as _run_replan_gate_impl,
+from assistant_app.agent_components.planner_payload_requester import (
+    PlannerPayloadRequester,
 )
+from assistant_app.agent_components.planner_session import PlannerSession
+from assistant_app.agent_components.planner_tool_executor import PlannerToolExecutor
 from assistant_app.agent_components.render_helpers import (
     _strip_think_blocks,
-    _truncate_text,
     _try_parse_json,
 )
 from assistant_app.agent_components.tools.history import (
@@ -59,58 +40,15 @@ from assistant_app.agent_components.tools.history import (
 from assistant_app.agent_components.tools.internet_search import (
     execute_internet_search_planner_action as _execute_internet_search_planner_action_impl,
 )
-from assistant_app.agent_components.tools.planner_tool_routing import (
-    JsonPlannerToolRoute,
-    build_json_planner_tool_executor,
-)
 from assistant_app.agent_components.tools.schedule import (
     execute_schedule_system_action as _execute_schedule_system_action_impl,
 )
 from assistant_app.agent_components.tools.thoughts import (
     execute_thoughts_system_action as _execute_thoughts_system_action_impl,
 )
-from assistant_app.db import AssistantDB, ChatTurn, ScheduleItem
+from assistant_app.db import AssistantDB, ScheduleItem
 from assistant_app.llm import LLMClient
-from assistant_app.planner_plan_replan import (
-    PLAN_ONCE_PROMPT,
-    REPLAN_PROMPT,
-    normalize_plan_decision,
-    normalize_replan_decision,
-)
-from assistant_app.planner_thought import (
-    THOUGHT_PROMPT,
-    build_thought_tool_schemas,
-    normalize_thought_decision,
-    normalize_thought_tool_call,
-    resolve_current_subtask_tool_names,
-)
-from assistant_app.schemas.planner import (
-    AssistantToolMessage,
-    ClarificationTurnPayload,
-    CompletedSubtaskPayload,
-    ObservationPayload,
-    PlannerContextPayload,
-    PlanPromptPayload,
-    PlanResponsePayload,
-    PlanStepPayload,
-    ReplanDoneDecision,
-    ReplannedDecision,
-    ReplanPromptPayload,
-    ReplanResponsePayload,
-    ThoughtAskUserDecision,
-    ThoughtContextPayload,
-    ThoughtContinueDecision,
-    ThoughtCurrentSubtaskPayload,
-    ThoughtDecision,
-    ThoughtDecisionMessagePayload,
-    ThoughtDoneDecision,
-    ThoughtObservationMessagePayload,
-    ThoughtPromptPayload,
-    ThoughtResponsePayload,
-    parse_tool_reply_payload,
-)
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
-from assistant_app.schemas.tools import parse_json_object, validate_thought_tool_arguments
 from assistant_app.search import BingSearchProvider, SearchProvider, fetch_webpage_main_text
 
 __all__ = [
@@ -129,12 +67,10 @@ DEFAULT_PLAN_CONTINUOUS_FAILURE_LIMIT = 3
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 DEFAULT_INTERNET_SEARCH_TOP_K = 3
 DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
-UNKNOWN_APP_VERSION = "unknown"
-PLAN_HISTORY_LOOKBACK_HOURS = 24
-PLAN_HISTORY_MAX_TURNS = 50
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
+UNKNOWN_APP_VERSION = "unknown"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PayloadT = TypeVar("PayloadT")
+
 
 class AssistantAgent:
     def __init__(
@@ -171,38 +107,75 @@ class AssistantAgent:
         self._app_logger.propagate = False
         if not self._app_logger.handlers:
             self._app_logger.addHandler(logging.NullHandler())
-        self._llm_trace_call_seq = 0
+
         self._pending_plan_task: PendingPlanTask | None = None
-        self._progress_callback = progress_callback
         self._last_task_completed = False
         self._skip_history_once = False
         self._interrupt_lock = threading.Lock()
         self._interrupt_requested = False
+
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
-        self._plan_replan_retry_count = max(plan_replan_retry_count, 0)
-        self._plan_observation_char_limit = max(plan_observation_char_limit, 1)
-        self._plan_observation_history_limit = max(plan_observation_history_limit, 1)
         self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
         self._task_cancel_command = task_cancel_command.strip() or DEFAULT_TASK_CANCEL_COMMAND
         self._internet_search_top_k = max(internet_search_top_k, 1)
         self._schedule_max_window_days = max(schedule_max_window_days, 1)
-        self._user_profile_max_chars = max(user_profile_max_chars, 1)
-        self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
+        normalized_retry_count = max(plan_replan_retry_count, 0)
+        normalized_observation_char_limit = max(plan_observation_char_limit, 1)
+        normalized_observation_history_limit = max(plan_observation_history_limit, 1)
+        normalized_user_profile_max_chars = max(user_profile_max_chars, 1)
+
+        self._planner_session = PlannerSession(
+            db=self.db,
+            app_logger=self._app_logger,
+            plan_replan_max_steps=self._plan_replan_max_steps,
+            plan_observation_char_limit=normalized_observation_char_limit,
+            plan_observation_history_limit=normalized_observation_history_limit,
+            user_profile_path=user_profile_path,
+            user_profile_max_chars=normalized_user_profile_max_chars,
+            project_root=PROJECT_ROOT,
+            progress_callback=progress_callback,
+        )
+        self._planner_payload_requester = PlannerPayloadRequester(
+            llm_client=self.llm_client,
+            llm_trace_logger=self._llm_trace_logger,
+            plan_replan_retry_count=normalized_retry_count,
+            session=self._planner_session,
+        )
+        self._planner_tool_executor = PlannerToolExecutor(
+            command_executor=self._handle_command,
+            schedule_executor=lambda payload, raw_input: self._execute_schedule_system_action(
+                payload,
+                raw_input=raw_input,
+            ),
+            history_executor=lambda payload, raw_input: self._execute_history_system_action(
+                payload,
+                raw_input=raw_input,
+            ),
+            history_search_executor=lambda payload, raw_input: self._execute_history_system_action(
+                payload,
+                raw_input=raw_input,
+                observation_tool="history_search",
+            ),
+            thoughts_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
+                payload,
+                raw_input=raw_input,
+            ),
+            internet_search_executor=self._execute_internet_search_planner_action,
+        )
+
         self._user_profile_refresh_runner = user_profile_refresh_runner
         self._final_response_rewriter = final_response_rewriter
         self._app_version = app_version.strip() or UNKNOWN_APP_VERSION
-        self._subtask_result_callback: Callable[[str], None] | None = None
         self._schedule_sync_service = schedule_sync_service
-        self._planner_tool_routes = self._build_planner_tool_routes()
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
-        self._progress_callback = callback
+        self._planner_session.set_progress_callback(callback)
 
     def set_user_profile_refresh_runner(self, runner: Callable[[], str] | None) -> None:
         self._user_profile_refresh_runner = runner
 
     def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None:
-        self._subtask_result_callback = callback
+        self._planner_session.set_subtask_result_callback(callback)
 
     def set_schedule_sync_service(self, service: Any | None) -> None:
         self._schedule_sync_service = service
@@ -258,31 +231,6 @@ class AssistantAgent:
                 },
             )
 
-    @staticmethod
-    def _outer_context(task: PendingPlanTask) -> OuterPlanContext:
-        if task.outer_context is None:
-            task.outer_context = OuterPlanContext(goal=task.goal)
-        return task.outer_context
-
-    def _new_inner_context(self, task: PendingPlanTask) -> InnerReActContext:
-        outer = self._outer_context(task)
-        outer_messages = self._ensure_outer_messages(task)
-        return InnerReActContext(
-            current_subtask=self._current_plan_item_text(task),
-            completed_subtasks=[
-                CompletedSubtask(item=item.item, result=item.result) for item in outer.completed_subtasks
-            ],
-            observations=[],
-            thought_messages=[PlannerTextMessage(role="system", content=THOUGHT_PROMPT), *deepcopy(outer_messages)],
-            response=None,
-        )
-
-    def _ensure_inner_context(self, task: PendingPlanTask) -> InnerReActContext:
-        if task.inner_context is None:
-            task.inner_context = self._new_inner_context(task)
-        assert task.inner_context is not None
-        return task.inner_context
-
     def handle_input(self, user_input: str) -> str:
         text = user_input.strip()
         if not text:
@@ -316,36 +264,26 @@ class AssistantAgent:
     def _handle_input_text(self, text: str) -> str:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
-
         if text == self._task_cancel_command:
             if self._pending_plan_task is None:
                 return "当前没有进行中的任务。"
             self._pending_plan_task = None
             return "已取消当前任务。"
-
         if text.startswith("/"):
             return self._handle_command(text)
-
         if not self.llm_client:
             return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
 
         pending_task = self._pending_plan_task
         if pending_task is not None:
             self._pending_plan_task = None
-            outer = self._outer_context(pending_task)
+            outer = self._planner_session.outer_context(pending_task)
             outer.clarification_history.append(ClarificationTurn(role="user_answer", content=text))
             pending_task.awaiting_clarification = False
             pending_task.needs_replan = True
-            return self._run_outer_plan_loop(task=pending_task)
+            return _run_outer_plan_loop_impl(self, task=pending_task)
 
-        task = PendingPlanTask(goal=text)
-        return self._run_outer_plan_loop(task=task)
-
-    @staticmethod
-    def _message_to_payload(
-        message: PlannerTextMessage | AssistantToolMessage | PlannerToolMessage,
-    ) -> dict[str, Any]:
-        return message.model_dump(exclude_none=True)
+        return _run_outer_plan_loop_impl(self, task=PendingPlanTask(goal=text))
 
     def _save_turn_history(self, *, user_text: str, assistant_text: str) -> None:
         try:
@@ -357,722 +295,11 @@ class AssistantAgent:
                 exc_info=True,
             )
 
-    def _run_outer_plan_loop(self, task: PendingPlanTask) -> str:
-        return _run_outer_plan_loop_impl(self, task)
-
-    def _emit_decision_progress(self, task: PendingPlanTask) -> None:
-        _emit_decision_progress_impl(self, task)
-
-    def _initialize_plan_once(self, task: PendingPlanTask) -> bool:
-        return _initialize_plan_once_impl(self, task)
-
-    def _run_replan_gate(self, task: PendingPlanTask) -> tuple[str, str | None]:
-        return _run_replan_gate_impl(self, task)
-
-    def _run_inner_react_loop(self, task: PendingPlanTask) -> tuple[str, str | None]:
-        return _run_inner_react_loop_impl(self, task)
-
-    def _request_plan_payload(self, task: PendingPlanTask) -> PlanResponsePayload | None:
-        if not self.llm_client:
-            return None
-
-        planner_messages = self._build_plan_messages(task)
-        payload = self._request_payload_with_retry(
-            planner_messages,
-            normalize_plan_decision,
-            lambda decision, raw_response: PlanResponsePayload(
-                decision=decision,
-                raw_response=raw_response,
-            ),
-        )
-        if payload is None:
-            return None
-        raw_user_message = planner_messages[-1].get("content")
-        if isinstance(raw_user_message, str):
-            self._append_outer_message_turn(
-                task=task,
-                user_message_content=raw_user_message,
-                assistant_response=payload.raw_response,
-            )
-        return payload
-
-    def _request_thought_payload(self, task: PendingPlanTask) -> ThoughtResponsePayload | None:
-        if not self.llm_client:
-            return None
-
-        planner_messages = self._ensure_thought_messages(task)
-        context_payload = ThoughtPromptPayload(
-            phase="thought",
-            current_plan_item=self._current_plan_item_text(task),
-            **self._build_thought_context(task).model_dump(mode="python"),
-        )
-        planner_messages.append(
-            PlannerTextMessage(
-                role="user",
-                content=json.dumps(context_payload.model_dump(mode="json"), ensure_ascii=False),
-            )
-        )
-        request_messages = [self._message_to_payload(item) for item in deepcopy(planner_messages)]
-        payload = self._request_thought_payload_with_retry(task, request_messages)
-        if payload is None:
-            return None
-        if payload.assistant_message is not None:
-            self._append_thought_assistant_message(task, payload.assistant_message)
-        else:
-            # Backward-compatible path for clients without tool-calling support.
-            self._append_thought_decision_message(task, payload.decision)
-        return payload
-
-    def _request_replan_payload(self, task: PendingPlanTask) -> ReplanResponsePayload | None:
-        if not self.llm_client:
-            return None
-
-        planner_messages = self._build_replan_messages(task)
-        def _build_replan_response(
-            decision: ReplannedDecision | ReplanDoneDecision,
-            raw_response: str,
-        ) -> ReplanResponsePayload:
-            return ReplanResponsePayload(decision=decision, raw_response=raw_response)
-
-        replan_normalizer = cast(
-            Callable[[dict[str, Any]], ReplannedDecision | ReplanDoneDecision | None],
-            normalize_replan_decision,
-        )
-        payload = self._request_payload_with_retry(
-            planner_messages,
-            replan_normalizer,
-            _build_replan_response,
-        )
-        if payload is None:
-            return None
-        raw_user_message = planner_messages[-1].get("content")
-        if isinstance(raw_user_message, str):
-            self._append_outer_message_turn(
-                task=task,
-                user_message_content=raw_user_message,
-                assistant_response=payload.raw_response,
-            )
-        return payload
-
-    def _request_payload_with_retry(
-        self,
-        messages: list[dict[str, Any]],
-        normalizer: Callable[[dict[str, Any]], Any | None],
-        payload_builder: Callable[[Any, str], PayloadT],
-    ) -> PayloadT | None:
-        max_attempts = 1 + self._plan_replan_retry_count
-        phase = self._llm_trace_phase(messages)
-        for attempt in range(1, max_attempts + 1):
-            self._raise_if_task_interrupted()
-            call_id = self._next_llm_trace_call_id()
-            self._log_llm_trace_event(
-                {
-                    "event": "llm_request",
-                    "call_id": call_id,
-                    "phase": phase,
-                    "attempt": attempt,
-                    "max_attempts": max_attempts,
-                    "messages": messages,
-                }
-            )
-            try:
-                raw = self._llm_reply_for_planner(messages)
-            except Exception as exc:
-                self._log_llm_trace_event(
-                    {
-                        "event": "llm_response_error",
-                        "call_id": call_id,
-                        "phase": phase,
-                        "attempt": attempt,
-                        "error": repr(exc),
-                    }
-                )
-                continue
-            self._raise_if_task_interrupted()
-            self._log_llm_trace_event(
-                {
-                    "event": "llm_response",
-                    "call_id": call_id,
-                    "phase": phase,
-                    "attempt": attempt,
-                    "response": raw,
-                }
-            )
-            payload = _try_parse_json(_strip_think_blocks(raw).strip())
-            if not isinstance(payload, dict):
-                self._log_planner_payload_validation_failure(
-                    phase=phase,
-                    reason="response_not_json_object",
-                    payload_type=self._classify_json_text_payload(raw),
-                    attempt=attempt,
-                )
-                continue
-
-            decision = normalizer(payload)
-            if decision is not None:
-                return payload_builder(decision, raw)
-            self._log_planner_payload_validation_failure(
-                phase=phase,
-                reason="schema_validation_failed",
-                payload_type="dict",
-                attempt=attempt,
-            )
-        return None
-
-    def _request_thought_payload_with_retry(
-        self,
-        task: PendingPlanTask,
-        messages: list[dict[str, Any]],
-    ) -> ThoughtResponsePayload | None:
-        max_attempts = 1 + self._plan_replan_retry_count
-        phase = self._llm_trace_phase(messages)
-        thought_tool_names = self._current_thought_tool_names(task)
-        thought_tool_schemas = build_thought_tool_schemas(thought_tool_names)
-        allowed_tool_names = set(thought_tool_names)
-        for attempt in range(1, max_attempts + 1):
-            self._raise_if_task_interrupted()
-            call_id = self._next_llm_trace_call_id()
-            self._log_llm_trace_event(
-                {
-                    "event": "llm_request",
-                    "call_id": call_id,
-                    "phase": phase,
-                    "attempt": attempt,
-                    "max_attempts": max_attempts,
-                    "messages": messages,
-                    "tools": thought_tool_schemas,
-                }
-            )
-            try:
-                response = self._llm_reply_for_thought(
-                    messages,
-                    thought_tool_schemas=thought_tool_schemas,
-                    allowed_tool_names=allowed_tool_names,
-                )
-            except ThoughtToolCallingError:
-                raise
-            except Exception as exc:
-                self._log_llm_trace_event(
-                    {
-                        "event": "llm_response_error",
-                        "call_id": call_id,
-                        "phase": phase,
-                        "attempt": attempt,
-                        "error": repr(exc),
-                    }
-                )
-                continue
-
-            self._raise_if_task_interrupted()
-            self._log_llm_trace_event(
-                {
-                    "event": "llm_response",
-                    "call_id": call_id,
-                    "phase": phase,
-                    "attempt": attempt,
-                    "response": response.model_dump(mode="json", exclude_none=True) if response is not None else None,
-                }
-            )
-            if response is not None:
-                return response
-        return None
-
-    def _build_plan_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
-        outer_messages = deepcopy(self._ensure_outer_messages(task))
-        context_payload = PlanPromptPayload(
-            phase="plan",
-            **self._build_planner_context(task).model_dump(mode="python"),
-        )
-        messages = [PlannerTextMessage(role="system", content=PLAN_ONCE_PROMPT), *outer_messages]
-        messages.append(
-            PlannerTextMessage(
-                role="user",
-                content=json.dumps(context_payload.model_dump(mode="json"), ensure_ascii=False),
-            )
-        )
-        return [self._message_to_payload(item) for item in messages]
-
-    def _ensure_thought_messages(self, task: PendingPlanTask) -> list[ThoughtMessage]:
-        inner = self._ensure_inner_context(task)
-        if inner.thought_messages:
-            return inner.thought_messages
-        outer_messages = deepcopy(self._ensure_outer_messages(task))
-        inner.thought_messages = [PlannerTextMessage(role="system", content=THOUGHT_PROMPT), *outer_messages]
-        return inner.thought_messages
-
-    def _append_thought_assistant_message(
-        self,
-        task: PendingPlanTask,
-        assistant_message: AssistantToolMessage,
-    ) -> None:
-        messages = self._ensure_thought_messages(task)
-        messages.append(assistant_message.model_copy(deep=True))
-
-    def _append_thought_decision_message(self, task: PendingPlanTask, decision: ThoughtDecision) -> None:
-        messages = self._ensure_thought_messages(task)
-        decision_payload = ThoughtDecisionMessagePayload(phase="thought_decision", decision=decision)
-        messages.append(
-            PlannerTextMessage(
-                role="assistant",
-                content=json.dumps(decision_payload.model_dump(mode="json", exclude_none=True), ensure_ascii=False),
-            )
-        )
-
-    def _append_thought_tool_result_message(
-        self,
-        task: PendingPlanTask,
-        *,
-        observation: PlannerObservation,
-        tool_call_id: str,
-    ) -> None:
-        messages = self._ensure_thought_messages(task)
-        tool_payload = self._serialize_observation(observation)
-        messages.append(
-            PlannerToolMessage(
-                tool_call_id=tool_call_id,
-                content=json.dumps(tool_payload.model_dump(mode="json"), ensure_ascii=False),
-            )
-        )
-
-    def _append_thought_observation_message(self, task: PendingPlanTask, observation: PlannerObservation) -> None:
-        messages = self._ensure_thought_messages(task)
-        observation_payload = ThoughtObservationMessagePayload(
-            phase="thought_observation",
-            observation=self._serialize_observation(observation),
-        )
-        messages.append(
-            PlannerTextMessage(
-                role="user",
-                content=json.dumps(observation_payload.model_dump(mode="json"), ensure_ascii=False),
-            )
-        )
-
-    def _build_replan_messages(self, task: PendingPlanTask) -> list[dict[str, str]]:
-        outer_messages = deepcopy(self._ensure_outer_messages(task))
-        context_payload = ReplanPromptPayload(
-            phase="replan",
-            current_plan_item=self._current_plan_item_text(task),
-            **self._build_planner_context(task).model_dump(mode="python"),
-        )
-        messages = [PlannerTextMessage(role="system", content=REPLAN_PROMPT), *outer_messages]
-        messages.append(
-            PlannerTextMessage(
-                role="user",
-                content=json.dumps(context_payload.model_dump(mode="json"), ensure_ascii=False),
-            )
-        )
-        return [self._message_to_payload(item) for item in messages]
-
-    def _ensure_outer_messages(self, task: PendingPlanTask) -> list[PlannerTextMessage]:
-        outer = self._outer_context(task)
-        if outer.outer_messages is not None:
-            return outer.outer_messages
-        recent_chat_turns = self.db.recent_turns_for_planner(
-            lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
-            limit=PLAN_HISTORY_MAX_TURNS,
-        )
-        outer.outer_messages = self._serialize_chat_turns_as_messages(recent_chat_turns)
-        return outer.outer_messages
-
-    def _append_outer_message_turn(
-        self,
-        *,
-        task: PendingPlanTask,
-        user_message_content: str,
-        assistant_response: str,
-    ) -> None:
-        outer_messages = self._ensure_outer_messages(task)
-        outer_messages.append(PlannerTextMessage(role="user", content=user_message_content))
-        outer_messages.append(PlannerTextMessage(role="assistant", content=assistant_response))
-
-    def _build_planner_context(self, task: PendingPlanTask) -> PlannerContextPayload:
-        outer = self._outer_context(task)
-        return PlannerContextPayload(
-            goal=outer.goal,
-            clarification_history=self._serialize_clarification_history(outer.clarification_history),
-            step_count=task.step_count,
-            max_steps=self._plan_replan_max_steps,
-            latest_plan=self._serialize_latest_plan(outer.latest_plan),
-            current_plan_index=outer.current_plan_index,
-            completed_subtasks=self._serialize_completed_subtasks(outer.completed_subtasks),
-            user_profile=self._serialize_user_profile(),
-            time=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        )
-
-    def _build_thought_context(self, task: PendingPlanTask) -> ThoughtContextPayload:
-        outer = self._outer_context(task)
-        inner = self._ensure_inner_context(task)
-        current_subtask_observations = self._serialize_observations(
-            inner.observations[-self._plan_observation_history_limit :]
-        )
-        completed_subtasks = self._serialize_completed_subtasks(inner.completed_subtasks)
-        current_tools = self._current_thought_tool_names(task)
-        current_subtask = ThoughtCurrentSubtaskPayload(
-            item=inner.current_subtask,
-            index=outer.current_plan_index + 1 if inner.current_subtask else None,
-            total=len(outer.latest_plan) if inner.current_subtask and outer.latest_plan else None,
-            tools=current_tools,
-        )
-        return ThoughtContextPayload(
-            clarification_history=self._serialize_clarification_history(outer.clarification_history),
-            step_count=task.step_count,
-            max_steps=self._plan_replan_max_steps,
-            current_subtask=current_subtask,
-            completed_subtasks=completed_subtasks,
-            current_subtask_observations=current_subtask_observations,
-            user_profile=self._serialize_user_profile(),
-            time=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        )
-
-    @staticmethod
-    def _serialize_observation(observation: PlannerObservation) -> ObservationPayload:
-        return ObservationPayload(
-            tool=observation.tool,
-            input=observation.input_text,
-            ok=observation.ok,
-            result=observation.result,
-        )
-
-    @staticmethod
-    def _serialize_observations(observations: list[PlannerObservation]) -> list[ObservationPayload]:
-        return [AssistantAgent._serialize_observation(item) for item in observations]
-
-    @staticmethod
-    def _serialize_completed_subtasks(
-        completed_subtasks: list[CompletedSubtask],
-    ) -> list[CompletedSubtaskPayload]:
-        return [CompletedSubtaskPayload(item=item.item, result=item.result) for item in completed_subtasks]
-
-    @staticmethod
-    def _serialize_latest_plan(latest_plan: list[PlanStep]) -> list[PlanStepPayload]:
-        return [PlanStepPayload(task=item.item, completed=item.completed, tools=item.tools) for item in latest_plan]
+    def reload_user_profile(self) -> bool:
+        return self._planner_session.reload_user_profile()
 
     def _serialize_user_profile(self) -> str | None:
-        if not self._user_profile_content:
-            return None
-        return self._user_profile_content
-
-    def reload_user_profile(self) -> bool:
-        loaded_path, loaded_content = self._load_user_profile(self._user_profile_path)
-        self._user_profile_path = loaded_path
-        self._user_profile_content = loaded_content
-        return loaded_content is not None
-
-    def _load_user_profile(self, user_profile_path: str) -> tuple[str, str | None]:
-        raw_path = user_profile_path.strip()
-        if not raw_path:
-            return "", None
-        resolved_path = self._resolve_user_profile_path(raw_path)
-        try:
-            content = resolved_path.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
-            self._app_logger.warning(
-                "user profile file not found",
-                extra={
-                    "event": "user_profile_not_found",
-                    "context": {"path": str(resolved_path)},
-                },
-            )
-            return str(resolved_path), None
-        except (OSError, UnicodeError):
-            self._app_logger.warning(
-                "failed to read user profile file",
-                extra={
-                    "event": "user_profile_read_failed",
-                    "context": {"path": str(resolved_path)},
-                },
-                exc_info=True,
-            )
-            return str(resolved_path), None
-        if not content:
-            return str(resolved_path), None
-        if len(content) > self._user_profile_max_chars:
-            raise ValueError(
-                "USER_PROFILE_PATH 对应文件内容超长："
-                f"{len(content)} 字符，最大允许 {self._user_profile_max_chars} 字符。"
-            )
-        return str(resolved_path), content
-
-    @staticmethod
-    def _resolve_user_profile_path(user_profile_path: str) -> Path:
-        path = Path(user_profile_path).expanduser()
-        if path.is_absolute():
-            return path.resolve()
-        return (PROJECT_ROOT / path).resolve()
-
-    @staticmethod
-    def _serialize_clarification_history(
-        clarification_history: list[ClarificationTurn],
-    ) -> list[ClarificationTurnPayload]:
-        return [ClarificationTurnPayload(role=item.role, content=item.content) for item in clarification_history]
-
-    @staticmethod
-    def _serialize_chat_turns_as_messages(chat_turns: list[ChatTurn]) -> list[PlannerTextMessage]:
-        history_messages: list[PlannerTextMessage] = []
-        for item in chat_turns:
-            if item.user_content.strip():
-                history_messages.append(PlannerTextMessage(role="user", content=item.user_content))
-            if item.assistant_content.strip():
-                history_messages.append(PlannerTextMessage(role="assistant", content=item.assistant_content))
-        return history_messages
-
-    @staticmethod
-    def _current_plan_item_text(task: PendingPlanTask) -> str:
-        step = AssistantAgent._current_plan_step(task)
-        if step is None:
-            return ""
-        return step.item
-
-    @staticmethod
-    def _current_plan_step(task: PendingPlanTask) -> PlanStep | None:
-        if task.outer_context is None:
-            return None
-        if not task.outer_context.latest_plan:
-            return None
-        if task.outer_context.current_plan_index < 0:
-            return None
-        if task.outer_context.current_plan_index >= len(task.outer_context.latest_plan):
-            return None
-        return task.outer_context.latest_plan[task.outer_context.current_plan_index]
-
-    def _current_thought_tool_names(self, task: PendingPlanTask) -> list[str]:
-        current_step = self._current_plan_step(task)
-        raw_tools: Any = []
-        if current_step is not None:
-            raw_tools = current_step.tools
-        return resolve_current_subtask_tool_names(raw_tools)
-
-    @staticmethod
-    def _sync_current_plan_index(outer: OuterPlanContext) -> None:
-        if not outer.latest_plan:
-            outer.current_plan_index = 0
-            return
-        start = min(max(outer.current_plan_index, 0), len(outer.latest_plan))
-        for idx in range(start, len(outer.latest_plan)):
-            if not outer.latest_plan[idx].completed:
-                outer.current_plan_index = idx
-                return
-        for idx, step in enumerate(outer.latest_plan):
-            if not step.completed:
-                outer.current_plan_index = idx
-                return
-        outer.current_plan_index = len(outer.latest_plan)
-
-    def _llm_reply_for_planner(self, messages: list[dict[str, Any]]) -> str:
-        if self.llm_client is None:
-            return ""
-
-        reply_json = getattr(self.llm_client, "reply_json", None)
-        if callable(reply_json):
-            try:
-                return str(reply_json(messages))
-            except Exception:
-                pass
-        return self.llm_client.reply(messages)
-
-    def _llm_reply_for_thought(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        thought_tool_schemas: list[dict[str, Any]],
-        allowed_tool_names: set[str],
-    ) -> ThoughtResponsePayload | None:
-        if self.llm_client is None:
-            return None
-
-        reply_with_tools = getattr(self.llm_client, "reply_with_tools", None)
-        if not callable(reply_with_tools):
-            raw = self._llm_reply_for_planner(messages)
-            parsed_response = _try_parse_json(_strip_think_blocks(raw).strip())
-            if not isinstance(parsed_response, dict):
-                self._log_planner_payload_validation_failure(
-                    phase="thought",
-                    reason="response_not_json_object",
-                    payload_type=self._classify_json_text_payload(raw),
-                )
-                return None
-            decision = normalize_thought_decision(parsed_response)
-            if decision is None:
-                self._log_planner_payload_validation_failure(
-                    phase="thought",
-                    reason="schema_validation_failed",
-                    payload_type="dict",
-                )
-                return None
-            if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
-                self._log_planner_payload_validation_failure(
-                    phase="thought",
-                    reason="tool_not_allowed",
-                    payload_type="dict",
-                )
-                return None
-            return ThoughtResponsePayload(decision=decision)
-
-        try:
-            raw_tool_response = reply_with_tools(messages, tools=thought_tool_schemas, tool_choice="auto")
-        except RuntimeError as exc:
-            message = str(exc)
-            lowered = message.lower()
-            if "thinking" in lowered or "reasoning_content" in lowered or "reasoner" in lowered:
-                raise ThoughtToolCallingError(message) from exc
-            raise
-
-        tool_response = parse_tool_reply_payload(raw_tool_response)
-        if tool_response is None:
-            self._log_planner_payload_validation_failure(
-                phase="thought",
-                reason="tool_reply_payload_invalid",
-                payload_type=type(raw_tool_response).__name__,
-            )
-            return None
-
-        reasoning_content = str(tool_response.reasoning_content or "").strip()
-        if reasoning_content:
-            raise ThoughtToolCallingError(
-                "当前版本 thought 阶段暂不支持 thinking 模式（检测到 reasoning_content），"
-                "请切换到非 thinking 模式后重试。"
-            )
-
-        assistant_message = tool_response.assistant_message
-        tool_calls = assistant_message.tool_calls
-        if tool_calls:
-            if len(tool_calls) > 1:
-                raise ThoughtToolCallingError(
-                    f"thought 阶段每轮最多调用 1 个工具（本轮收到 {len(tool_calls)} 个），请重试。"
-                )
-            first_tool_call = tool_calls[0]
-            tool_name = first_tool_call.function.name.strip().lower()
-            parsed_arguments = parse_json_object(first_tool_call.function.arguments)
-            if parsed_arguments is None:
-                self._log_thought_tool_arguments_validation_failure(
-                    tool_name=tool_name,
-                    reason="arguments_not_json_object",
-                )
-                return None
-            validated_arguments = validate_thought_tool_arguments(tool_name, parsed_arguments)
-            if validated_arguments is None:
-                self._log_thought_tool_arguments_validation_failure(
-                    tool_name=tool_name,
-                    reason="arguments_schema_invalid_or_unknown_tool",
-                )
-                return None
-            decision = normalize_thought_tool_call(first_tool_call.model_dump())
-            if decision is None:
-                self._log_thought_tool_arguments_validation_failure(
-                    tool_name=tool_name,
-                    reason="decision_mapping_failed",
-                )
-                return None
-            if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
-                self._log_planner_payload_validation_failure(
-                    phase="thought",
-                    reason="tool_not_allowed",
-                    payload_type="tool_call",
-                )
-                return None
-            call_id = first_tool_call.id.strip() or None
-            return ThoughtResponsePayload(
-                decision=decision,
-                assistant_message=assistant_message,
-                tool_call_id=call_id,
-            )
-
-        content = str(assistant_message.content or "").strip()
-        parsed_content = _try_parse_json(_strip_think_blocks(content))
-        if not isinstance(parsed_content, dict):
-            self._log_planner_payload_validation_failure(
-                phase="thought",
-                reason="response_not_json_object",
-                payload_type=self._classify_json_text_payload(content),
-            )
-            return None
-        decision = normalize_thought_decision(parsed_content)
-        if decision is None:
-            self._log_planner_payload_validation_failure(
-                phase="thought",
-                reason="schema_validation_failed",
-                payload_type="dict",
-            )
-            return None
-        if not self._is_thought_decision_tool_allowed(decision, allowed_tool_names):
-            self._log_planner_payload_validation_failure(
-                phase="thought",
-                reason="tool_not_allowed",
-                payload_type="dict",
-            )
-            return None
-        return ThoughtResponsePayload(
-            decision=decision,
-            assistant_message=assistant_message,
-        )
-
-    @staticmethod
-    def _is_thought_decision_tool_allowed(decision: ThoughtDecision, allowed_tool_names: set[str]) -> bool:
-        if isinstance(decision, ThoughtContinueDecision):
-            return decision.next_action.tool in allowed_tool_names
-        if isinstance(decision, ThoughtAskUserDecision):
-            return "ask_user" in allowed_tool_names
-        if isinstance(decision, ThoughtDoneDecision):
-            return "done" in allowed_tool_names
-        return False
-
-    def _next_llm_trace_call_id(self) -> int:
-        self._llm_trace_call_seq += 1
-        return self._llm_trace_call_seq
-
-    def _llm_trace_phase(self, messages: list[dict[str, Any]]) -> str:
-        if not messages:
-            return "unknown"
-        payload = _try_parse_json(str(messages[-1].get("content", "")))
-        if not isinstance(payload, dict):
-            return "unknown"
-        phase = str(payload.get("phase") or "").strip().lower()
-        return phase or "unknown"
-
-    @staticmethod
-    def _classify_json_text_payload(raw_text: str) -> str:
-        text = raw_text.strip()
-        if not text:
-            return "empty"
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return "invalid_json"
-        return type(parsed).__name__
-
-    def _log_planner_payload_validation_failure(
-        self,
-        *,
-        phase: str,
-        reason: str,
-        payload_type: str,
-        attempt: int | None = None,
-    ) -> None:
-        payload: dict[str, Any] = {
-            "event": "planner_payload_validation_failed",
-            "phase": phase,
-            "reason": reason,
-            "payload_type": payload_type,
-        }
-        if attempt is not None:
-            payload["attempt"] = attempt
-        self._log_llm_trace_event(payload)
-
-    def _log_thought_tool_arguments_validation_failure(self, *, tool_name: str, reason: str) -> None:
-        self._log_llm_trace_event(
-            {
-                "event": "thought_tool_arguments_validation_failed",
-                "phase": "thought",
-                "tool_name": tool_name,
-                "reason": reason,
-            }
-        )
-
-    def _log_llm_trace_event(self, payload: dict[str, Any]) -> None:
-        try:
-            self._llm_trace_logger.info(json.dumps(payload, ensure_ascii=False))
-        except Exception:
-            return
+        return self._planner_session.serialize_user_profile()
 
     def _execute_planner_tool(
         self,
@@ -1081,84 +308,11 @@ class AssistantAgent:
         action_input: str,
         action_payload: RuntimePlannerActionPayload | None = None,
     ) -> PlannerObservation:
-        handler = self._planner_tool_routes.get(action_tool)
-        if handler is None:
-            return PlannerObservation(
-                tool=action_tool or "unknown",
-                input_text=action_input,
-                ok=False,
-                result=f"未知工具: {action_tool}",
-            )
-        return handler(action_input, action_payload)
-
-    def _build_planner_tool_routes(
-        self,
-    ) -> dict[str, Callable[[str, RuntimePlannerActionPayload | None], PlannerObservation]]:
-        json_routes: dict[str, JsonPlannerToolRoute] = {
-            "schedule": JsonPlannerToolRoute(
-                tool="schedule",
-                invalid_json_result="schedule 工具参数无效：需要 JSON 对象。",
-                legacy_command_prefix="/schedule",
-                payload_executor=lambda payload, raw_input: self._execute_schedule_system_action(
-                    payload, raw_input=raw_input
-                ),
-                typed_payload_executor=lambda payload, raw_input: self._execute_schedule_system_action(
-                    payload, raw_input=raw_input
-                ),
-            ),
-            "history": JsonPlannerToolRoute(
-                tool="history",
-                invalid_json_result="history 工具参数无效：需要 JSON 对象。",
-                legacy_command_prefix="/history",
-                payload_executor=lambda payload, raw_input: self._execute_history_system_action(
-                    payload, raw_input=raw_input
-                ),
-                typed_payload_executor=lambda payload, raw_input: self._execute_history_system_action(
-                    payload, raw_input=raw_input
-                ),
-            ),
-            "history_search": JsonPlannerToolRoute(
-                tool="history_search",
-                invalid_json_result="history_search 工具参数无效：需要 JSON 对象。",
-                legacy_command_prefix="/history search",
-                compat_action="search",
-                payload_executor=lambda payload, raw_input: self._execute_history_system_action(
-                    payload, raw_input=raw_input, observation_tool="history_search"
-                ),
-                typed_payload_executor=lambda payload, raw_input: self._execute_history_system_action(
-                    payload, raw_input=raw_input, observation_tool="history_search"
-                ),
-            ),
-            "thoughts": JsonPlannerToolRoute(
-                tool="thoughts",
-                invalid_json_result="thoughts 工具参数无效：需要 JSON 对象。",
-                legacy_command_prefix="/thoughts",
-                payload_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
-                    payload, raw_input=raw_input
-                ),
-                typed_payload_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
-                    payload, raw_input=raw_input
-                ),
-            ),
-        }
-        routes = {
-            name: build_json_planner_tool_executor(route=route, command_executor=self._handle_command)
-            for name, route in json_routes.items()
-        }
-
-        def _execute_internet_search_route(
-            action_input: str,
-            action_payload: RuntimePlannerActionPayload | None = None,
-        ) -> PlannerObservation:
-            return _execute_internet_search_planner_action_impl(
-                self,
-                action_input=action_input,
-                action_payload=action_payload,
-                fetch_main_text=fetch_webpage_main_text,
-            )
-
-        routes["internet_search"] = _execute_internet_search_route
-        return routes
+        return self._planner_tool_executor.execute(
+            action_tool=action_tool,
+            action_input=action_input,
+            action_payload=action_payload,
+        )
 
     def _execute_schedule_system_action(
         self,
@@ -1188,163 +342,18 @@ class AssistantAgent:
         *,
         raw_input: str,
     ) -> PlannerObservation:
-        return _execute_thoughts_system_action_impl(
-            self,
-            payload,
-            raw_input=raw_input,
-        )
+        return _execute_thoughts_system_action_impl(self, payload, raw_input=raw_input)
 
-    def _append_observation(self, task: PendingPlanTask, observation: PlannerObservation) -> PlannerObservation:
-        truncated = _truncate_text(observation.result, self._plan_observation_char_limit)
-        normalized = PlannerObservation(
-            tool=observation.tool,
-            input_text=observation.input_text,
-            ok=observation.ok,
-            result=truncated,
-        )
-        task.observations.append(normalized)
-        inner = self._ensure_inner_context(task)
-        inner.observations.append(normalized)
-        return normalized
-
-    def _append_planner_decision_observation(
+    def _execute_internet_search_planner_action(
         self,
-        task: PendingPlanTask,
-        *,
-        phase: str,
-        decision: Any,
-    ) -> None:
-        normalized_phase = phase.strip().lower()
-        if normalized_phase not in {"plan", "thought", "replan"}:
-            normalized_phase = "planner"
-        if hasattr(decision, "model_dump"):
-            serialized = decision.model_dump(exclude_none=True)
-        elif isinstance(decision, dict):
-            serialized = decision
-        else:
-            serialized = {"value": str(decision)}
-        result = _truncate_text(
-            json.dumps(serialized, ensure_ascii=False, separators=(",", ":")),
-            self._plan_observation_char_limit,
-        )
-        status = normalized_phase
-        if isinstance(serialized, dict):
-            status = str(serialized.get("status") or normalized_phase).strip() or normalized_phase
-        self._append_observation(
-            task,
-            PlannerObservation(
-                tool=normalized_phase,
-                input_text=status,
-                ok=True,
-                result=result,
-            ),
-        )
-
-    def _append_completed_subtask(self, task: PendingPlanTask, *, item: str, result: str) -> None:
-        normalized_item = item.strip() or "当前子任务"
-        normalized_result = result.strip() or "子任务已完成。"
-        outer = self._outer_context(task)
-        outer.completed_subtasks.append(
-            CompletedSubtask(
-                item=normalized_item,
-                result=_truncate_text(normalized_result, self._plan_observation_char_limit),
-            )
-        )
-
-    def _notify_replan_continue_subtask_result(self, task: PendingPlanTask) -> None:
-        callback = self._subtask_result_callback
-        if callback is None:
-            return
-        outer = self._outer_context(task)
-        completed_subtasks = outer.completed_subtasks
-        total_completed = len(completed_subtasks)
-        if total_completed <= 0:
-            return
-        if task.last_notified_completed_subtask_count >= total_completed:
-            return
-        task.last_notified_completed_subtask_count = total_completed
-        latest_item = completed_subtasks[-1].item.strip()
-        if not latest_item:
-            return
-        latest_result = f"{latest_item}已完成"
-        try:
-            callback(latest_result)
-        except Exception:
-            self._app_logger.warning(
-                "failed to notify replan continue subtask result",
-                extra={"event": "replan_continue_subtask_notify_failed"},
-                exc_info=True,
-            )
-
-    def _notify_plan_goal_result(self, task: PendingPlanTask, expanded_goal: str) -> None:
-        callback = self._subtask_result_callback
-        if callback is None or task.plan_goal_notified:
-            return
-        goal_text = expanded_goal.strip()
-        if not goal_text:
-            return
-        task.plan_goal_notified = True
-        try:
-            callback(f"任务目标：{goal_text}")
-        except Exception:
-            self._app_logger.warning(
-                "failed to notify plan expanded goal",
-                extra={"event": "plan_goal_notify_failed"},
-                exc_info=True,
-            )
-
-    @staticmethod
-    def _latest_success_observation_result(task: PendingPlanTask) -> str:
-        llm_tools = {"plan", "thought", "replan"}
-        for item in reversed(task.observations):
-            if item.ok and item.tool not in llm_tools:
-                return item.result
-        return ""
-
-    @staticmethod
-    def _merge_summary_with_detail(*, summary: str, detail: str) -> str:
-        normalized_summary = summary.strip()
-        normalized_detail = detail.strip()
-        if not normalized_summary:
-            return normalized_detail
-        if not normalized_detail:
-            return normalized_summary
-        if normalized_detail in normalized_summary:
-            return normalized_summary
-        if not AssistantAgent._is_structured_query_result(normalized_detail):
-            return normalized_summary
-        return f"{normalized_summary}\n\n执行结果：\n{normalized_detail}"
-
-    @staticmethod
-    def _is_structured_query_result(result: str) -> bool:
-        if "\n|" in result:
-            return True
-        prefixes = (
-            "搜索结果",
-            "日程列表",
-            "日历视图(",
-            "日程详情",
-            "想法列表",
-            "想法详情",
-            "互联网搜索结果",
-        )
-        return result.startswith(prefixes)
-
-    def _format_step_limit_response(self, task: PendingPlanTask) -> str:
-        llm_tools = {"planner", "plan", "thought", "replan"}
-        completed = [obs for obs in task.observations if obs.ok and obs.tool not in llm_tools]
-        failed = [obs for obs in task.observations if not obs.ok]
-        completed_lines = [f"- {item.tool}: {item.input_text}" for item in completed[-3:]] or ["- 暂无已完成动作。"]
-        failed_reason = failed[-1].result if failed else "需要更多信息才能继续。"
-        return (
-            f"已达到最大执行步数（{self._plan_replan_max_steps}）。\n"
-            "已完成部分:\n"
-            f"{chr(10).join(completed_lines)}\n"
-            "未完成原因:\n"
-            f"- {failed_reason}\n"
-            "下一步建议:\n"
-            "- 你可以补充更具体的时间、编号或关键词；\n"
-            "- 或直接使用 /schedule 或 /thoughts 命令完成关键操作。"
+        action_input: str,
+        action_payload: RuntimePlannerActionPayload | None = None,
+    ) -> PlannerObservation:
+        return _execute_internet_search_planner_action_impl(
+            self,
+            action_input=action_input,
+            action_payload=action_payload,
+            fetch_main_text=fetch_webpage_main_text,
         )
 
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
@@ -1360,13 +369,13 @@ class AssistantAgent:
                     "context": {"goal": task.goal},
                 },
             )
-        self._emit_progress("任务状态：已完成。")
+        self._planner_session.emit_progress("任务状态：已完成。")
         return response
 
     def _finalize_interrupted_task(self, task: PendingPlanTask) -> str:
         if self._pending_plan_task is task:
             self._pending_plan_task = None
-        self._emit_progress("任务状态：已中断。")
+        self._planner_session.emit_progress("任务状态：已中断。")
         self._clear_interrupt_request()
         return "当前任务已被新消息中断，正在按最新输入重新执行。"
 
@@ -1381,16 +390,6 @@ class AssistantAgent:
         normalized = rewritten.strip()
         return normalized or response
 
-    @staticmethod
-    def _planner_unavailable_text() -> str:
-        return "抱歉，当前计划执行服务暂时不可用。你可以稍后重试，或先使用 /schedule 或 /thoughts 命令继续操作。"
-
-    def _emit_progress(self, message: str) -> None:
-        callback = self._progress_callback
-        if callback is None:
-            return
-        callback(message)
-
     def _raise_if_task_interrupted(self) -> None:
         if self._is_interrupt_requested():
             raise TaskInterruptedError("task interrupted by newer input")
@@ -1402,43 +401,6 @@ class AssistantAgent:
     def _clear_interrupt_request(self) -> None:
         with self._interrupt_lock:
             self._interrupt_requested = False
-
-    def _emit_plan_progress(self, task: PendingPlanTask) -> None:
-        outer = self._outer_context(task)
-        if not outer.latest_plan:
-            return
-        signature = tuple((step.item, step.completed, tuple(step.tools)) for step in outer.latest_plan)
-        if task.last_reported_plan_signature == signature:
-            return
-        task.last_reported_plan_signature = signature
-        lines = ["计划列表："]
-        for idx, step in enumerate(outer.latest_plan, start=1):
-            status = "完成" if step.completed else "未完成"
-            lines.append(f"{idx}. [{status}] {step.item}")
-        self._emit_progress("\n".join(lines))
-
-    def _emit_current_plan_item_progress(self, task: PendingPlanTask) -> None:
-        outer = self._outer_context(task)
-        if not outer.latest_plan:
-            return
-        if outer.current_plan_index < 0 or outer.current_plan_index >= len(outer.latest_plan):
-            return
-        index = outer.current_plan_index + 1
-        total = len(outer.latest_plan)
-        self._emit_progress(f"当前计划项：{index}/{total} - {outer.latest_plan[outer.current_plan_index].item}")
-
-    @staticmethod
-    def _progress_total_text(task: PendingPlanTask) -> str:
-        if task.outer_context is None or not task.outer_context.latest_plan:
-            return "未定"
-        # Replan may shorten current plan. Keep denominator >= executed steps to avoid "20/1" style confusion.
-        return str(max(task.step_count, len(task.outer_context.latest_plan)))
-
-    @staticmethod
-    def _current_plan_total_text(task: PendingPlanTask) -> str | None:
-        if task.outer_context is None or not task.outer_context.latest_plan:
-            return None
-        return str(len(task.outer_context.latest_plan))
 
     def _handle_command(self, command: str) -> str:
         return _handle_command_impl(self, command)

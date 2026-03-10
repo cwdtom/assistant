@@ -174,11 +174,13 @@ python main.py
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环
 - `assistant_app/agent.py`：命令分发与自然语言流程编排
-- `assistant_app/agent_components/`：`agent.py` 拆分后的组件目录（command handlers / planner loop / parsing utils / render helpers / tools / 基于 Pydantic 的内部状态模型）
-- `assistant_app/planner_plan_replan.py`：plan/replan 核心循环
+- `assistant_app/agent_components/`：`agent.py` 拆分后的组件目录（command handlers / planner loop / planner session / planner payload requester / planner tool executor / parsing utils / render helpers / tools / 内部状态模型）
+- `assistant_app/planner_plan_replan.py`：plan/replan prompt 与 payload normalizer
+- `assistant_app/planner_thought.py`：thought prompt、工具 schema 组装与 tool-call 决策归一化
 - `assistant_app/db.py`：SQLite 数据访问
 - `assistant_app/llm.py`：模型网关
 - `assistant_app/schemas/`：Pydantic schema 基类，以及 domain / planner / tools / feishu / proactive / user_profile 等结构化 payload 模型
+  - `assistant_app.schemas` 仅重导出基类与稳定的核心 domain 类型；planner/tool/compat payload 需从对应子模块直接导入
 - `tests/`：单元测试
 - `main.py`：本地启动入口
 
