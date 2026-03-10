@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%230a84ff'/%3E%3Cstop offset='100%25' stop-color='%2334c759'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='18' fill='url(%23g)'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Helvetica Neue, Arial, sans-serif' font-size='30' font-weight='700' fill='white'%3EA%3C/text%3E%3C/svg%3E"
+    />
+    <meta
+      name="description"
+      content="一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、本地提醒和飞书接入。"
+    />
+    <meta name="theme-color" content="#f5f5f7" />
+    <title>Assistant | AI Agent 个人助手</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page-bg: #f5f5f7;
+        --panel-bg: rgba(255, 255, 255, 0.72);
+        --panel-strong: rgba(255, 255, 255, 0.9);
+        --ink-strong: #111111;
+        --ink: #1d1d1f;
+        --ink-soft: #6e6e73;
+        --line: rgba(17, 17, 17, 0.08);
+        --shadow: 0 30px 80px rgba(15, 23, 42, 0.12);
+        --shadow-soft: 0 18px 40px rgba(15, 23, 42, 0.08);
+        --accent: #0071e3;
+        --accent-soft: rgba(0, 113, 227, 0.12);
+        --mint: #1f8f6d;
+        --radius-xl: 32px;
+        --radius-lg: 24px;
+        --radius-md: 18px;
+        --radius-sm: 12px;
+        --container: min(1120px, calc(100vw - 40px));
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        font-family: "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(0, 113, 227, 0.16), transparent 38%),
+          radial-gradient(circle at 85% 15%, rgba(31, 143, 109, 0.12), transparent 26%),
+          linear-gradient(180deg, #fbfbfd 0%, var(--page-bg) 55%, #eef1f6 100%);
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(17, 17, 17, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(17, 17, 17, 0.03) 1px, transparent 1px);
+        background-size: 100px 100px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 85%);
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .shell {
+        width: var(--container);
+        margin: 0 auto;
+      }
+
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        backdrop-filter: blur(24px);
+        background: rgba(245, 245, 247, 0.68);
+        border-bottom: 1px solid rgba(17, 17, 17, 0.05);
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        min-height: 72px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 0.95rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 14px;
+        color: white;
+        background: linear-gradient(135deg, #0a84ff 0%, #34c759 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--ink-soft);
+        font-size: 0.94rem;
+      }
+
+      .nav-links a {
+        transition: color 180ms ease;
+      }
+
+      .nav-links a:hover {
+        color: var(--ink-strong);
+      }
+
+      main {
+        padding: 34px 0 88px;
+      }
+
+      section {
+        margin-top: 28px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+        gap: 28px;
+        align-items: stretch;
+        padding: 32px;
+        border-radius: var(--radius-xl);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.6));
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        position: relative;
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.08), transparent 30%),
+          radial-gradient(circle at 90% 10%, rgba(52, 199, 89, 0.08), transparent 24%);
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        width: fit-content;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.9rem;
+        font-weight: 700;
+      }
+
+      .hero-copy {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 22px;
+      }
+
+      .hero h1 {
+        margin: 0;
+        font-size: clamp(2.5rem, 4vw, 4.5rem);
+        line-height: 1.02;
+        letter-spacing: -0.05em;
+        color: var(--ink-strong);
+      }
+
+      .hero p {
+        margin: 0;
+        max-width: 34rem;
+        font-size: 1.08rem;
+        line-height: 1.75;
+        color: var(--ink-soft);
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 48px;
+        padding: 0 20px;
+        border-radius: 999px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        transition:
+          transform 200ms ease,
+          box-shadow 200ms ease,
+          background 200ms ease;
+      }
+
+      .button:hover {
+        transform: translateY(-1px);
+      }
+
+      .button-primary {
+        background: var(--accent);
+        color: white;
+        box-shadow: 0 16px 28px rgba(0, 113, 227, 0.24);
+      }
+
+      .button-secondary {
+        background: rgba(255, 255, 255, 0.84);
+        border: 1px solid rgba(17, 17, 17, 0.08);
+        color: var(--ink-strong);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .hero-meta {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .meta-card {
+        padding: 16px;
+        border-radius: var(--radius-md);
+        background: rgba(255, 255, 255, 0.74);
+        border: 1px solid rgba(255, 255, 255, 0.78);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .meta-card strong,
+      .stat strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.88rem;
+        color: var(--ink-soft);
+      }
+
+      .meta-card span,
+      .stat span {
+        display: block;
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--ink-strong);
+      }
+
+      .hero-visual {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 18px;
+        align-content: center;
+        min-height: 100%;
+      }
+
+      .mock-window {
+        border-radius: 28px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.78);
+        box-shadow: var(--shadow);
+        transform: rotate(-2deg);
+      }
+
+      .window-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 18px;
+        background: rgba(245, 245, 247, 0.92);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .dot-red {
+        background: #ff5f57;
+      }
+
+      .dot-yellow {
+        background: #febc2e;
+      }
+
+      .dot-green {
+        background: #28c840;
+      }
+
+      .window-body {
+        padding: 18px;
+        background:
+          linear-gradient(180deg, rgba(250, 250, 252, 0.98), rgba(241, 244, 249, 0.88)),
+          white;
+      }
+
+      .terminal {
+        display: grid;
+        gap: 12px;
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 0.92rem;
+        color: #16324f;
+      }
+
+      .terminal-line {
+        display: flex;
+        gap: 10px;
+        padding: 11px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(15, 23, 42, 0.06);
+      }
+
+      .prompt {
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .overlay-card {
+        align-self: end;
+        margin-left: 40px;
+        padding: 18px;
+        border-radius: 24px;
+        background: linear-gradient(180deg, rgba(24, 24, 27, 0.9), rgba(39, 39, 42, 0.88));
+        color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 24px 52px rgba(15, 23, 42, 0.22);
+        transform: rotate(3deg);
+      }
+
+      .overlay-card strong {
+        display: block;
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.65);
+        margin-bottom: 0;
+      }
+
+      .section-panel {
+        padding: 30px;
+        border-radius: var(--radius-xl);
+        background: var(--panel-bg);
+        border: 1px solid rgba(255, 255, 255, 0.82);
+        box-shadow: var(--shadow-soft);
+        backdrop-filter: blur(24px);
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 22px;
+      }
+
+      .section-heading h2 {
+        margin: 0;
+        font-size: clamp(1.8rem, 3vw, 2.8rem);
+        letter-spacing: -0.04em;
+      }
+
+      .section-heading p {
+        margin: 0;
+        max-width: 34rem;
+        line-height: 1.7;
+        color: var(--ink-soft);
+      }
+
+      .capability-grid,
+      .command-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        height: 100%;
+        padding: 22px;
+        border-radius: var(--radius-lg);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.74));
+        border: 1px solid rgba(17, 17, 17, 0.06);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .card h3 {
+        margin: 0 0 12px;
+        font-size: 1.15rem;
+      }
+
+      .card p {
+        margin: 0;
+        line-height: 1.74;
+        color: var(--ink-soft);
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 18px 0 0;
+      }
+
+      .pill {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(17, 17, 17, 0.04);
+        color: var(--ink);
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+
+      .quickstart-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 0.74fr);
+        gap: 20px;
+      }
+
+      .steps {
+        display: grid;
+        gap: 14px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 52px 1fr;
+        gap: 16px;
+        padding: 18px;
+        border-radius: var(--radius-lg);
+        background: rgba(255, 255, 255, 0.84);
+        border: 1px solid rgba(17, 17, 17, 0.06);
+      }
+
+      .step-index {
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(0, 113, 227, 0.12), rgba(0, 113, 227, 0.24));
+        color: var(--accent);
+        font-size: 1.1rem;
+        font-weight: 800;
+      }
+
+      .step h3,
+      .step p {
+        margin: 0;
+      }
+
+      .step p {
+        margin-top: 8px;
+        color: var(--ink-soft);
+        line-height: 1.72;
+      }
+
+      .code-shell {
+        margin-top: 12px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 0.9rem;
+        line-height: 1.75;
+        overflow-x: auto;
+      }
+
+      .side-stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .stat-card {
+        padding: 22px;
+        border-radius: var(--radius-lg);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 249, 253, 0.84));
+        border: 1px solid rgba(17, 17, 17, 0.06);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .stat {
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(17, 17, 17, 0.03);
+      }
+
+      .placeholder-panel {
+        padding: 20px;
+        border-radius: 26px;
+        background:
+          radial-gradient(circle at top right, rgba(0, 113, 227, 0.12), transparent 34%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 244, 250, 0.86));
+        border: 1px solid rgba(17, 17, 17, 0.05);
+        overflow: hidden;
+      }
+
+      .placeholder-panel strong {
+        display: block;
+        margin-bottom: 12px;
+        font-size: 0.95rem;
+      }
+
+      .sync-mock {
+        display: grid;
+        gap: 14px;
+        padding: 16px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(17, 17, 17, 0.06);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+      }
+
+      .sync-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .sync-title {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--ink-strong);
+      }
+
+      .sync-badge {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(31, 143, 109, 0.12);
+        color: var(--mint);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .sync-columns {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        gap: 10px;
+        align-items: stretch;
+      }
+
+      .sync-column {
+        display: grid;
+        gap: 10px;
+      }
+
+      .sync-label {
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .sync-event {
+        display: grid;
+        gap: 6px;
+        padding: 12px;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(247, 249, 253, 0.98), rgba(238, 243, 249, 0.92));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+      }
+
+      .sync-event strong {
+        margin: 0;
+        font-size: 0.88rem;
+      }
+
+      .sync-event span {
+        color: var(--ink-soft);
+        font-size: 0.8rem;
+        line-height: 1.5;
+      }
+
+      .sync-bridge {
+        display: grid;
+        place-items: center;
+        min-width: 34px;
+        color: var(--accent);
+        font-size: 1.2rem;
+        font-weight: 800;
+      }
+
+      .sync-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-top: 4px;
+        color: var(--ink-soft);
+        font-size: 0.8rem;
+      }
+
+      .command-card pre {
+        margin: 16px 0 0;
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.96);
+        color: #e2e8f0;
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 0.88rem;
+        line-height: 1.7;
+        overflow-x: auto;
+      }
+
+      .repo-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr);
+        gap: 20px;
+        align-items: center;
+      }
+
+      .repo-panel h2 {
+        margin: 0 0 14px;
+        font-size: clamp(1.8rem, 3vw, 2.8rem);
+        letter-spacing: -0.04em;
+      }
+
+      .repo-panel p {
+        margin: 0;
+        color: var(--ink-soft);
+        line-height: 1.75;
+      }
+
+      .repo-links {
+        display: grid;
+        gap: 12px;
+      }
+
+      .repo-link {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 18px 20px;
+        border-radius: 22px;
+        background: var(--panel-strong);
+        border: 1px solid rgba(17, 17, 17, 0.06);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .repo-link strong {
+        font-size: 1rem;
+      }
+
+      .repo-link span {
+        color: var(--ink-soft);
+        font-size: 0.92rem;
+      }
+
+      footer {
+        padding: 26px 0 40px;
+        color: var(--ink-soft);
+        font-size: 0.95rem;
+      }
+
+      @keyframes float-up {
+        from {
+          opacity: 0;
+          transform: translateY(18px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .hero,
+      .section-panel {
+        animation: float-up 720ms ease both;
+      }
+
+      .section-panel:nth-of-type(2) {
+        animation-delay: 90ms;
+      }
+
+      .section-panel:nth-of-type(3) {
+        animation-delay: 150ms;
+      }
+
+      .section-panel:nth-of-type(4) {
+        animation-delay: 210ms;
+      }
+
+      @media (max-width: 980px) {
+        .hero,
+        .quickstart-grid,
+        .repo-panel,
+        .capability-grid,
+        .command-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-meta {
+          grid-template-columns: 1fr;
+        }
+
+        .overlay-card {
+          margin-left: 0;
+          transform: none;
+        }
+
+        .mock-window {
+          transform: none;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .nav {
+          min-height: 64px;
+          align-items: start;
+          flex-direction: column;
+          justify-content: center;
+          padding: 14px 0;
+        }
+
+        .nav-links {
+          flex-wrap: wrap;
+          gap: 12px 16px;
+        }
+
+        main {
+          padding-top: 18px;
+        }
+
+        .hero,
+        .section-panel {
+          padding: 22px;
+          border-radius: 28px;
+        }
+
+        .section-heading {
+          align-items: start;
+          flex-direction: column;
+        }
+
+        .step {
+          grid-template-columns: 1fr;
+        }
+
+        .step-index {
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="shell nav">
+        <a class="brand" href="#hero" aria-label="Assistant landing page">
+          <span class="brand-mark">A</span>
+          <span>Assistant</span>
+        </a>
+        <nav class="nav-links" aria-label="页面导航">
+          <a href="#capabilities">能力</a>
+          <a href="#quickstart">开始</a>
+          <a href="#commands">命令</a>
+          <a href="#repo">仓库</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="hero" id="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <div class="eyebrow">Local-first · Chinese-first · GitHub Pages</div>
+          <h1 id="hero-title">一个中文优先的 AI Agent 个人助手。</h1>
+          <p>
+            一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、本地提醒和飞书接入。
+          </p>
+          <div class="cta-row">
+            <a class="button button-primary" href="https://github.com/cwdtom/assistant" target="_blank" rel="noreferrer">
+              打开仓库
+            </a>
+            <a
+              class="button button-secondary"
+              href="https://github.com/cwdtom/assistant#readme"
+              target="_blank"
+              rel="noreferrer"
+            >
+              查看 README
+            </a>
+          </div>
+          <div class="hero-meta">
+            <div class="meta-card">
+              <strong>运行方式</strong>
+              <span>Python 3.10+ · SQLite · OpenAI SDK</span>
+            </div>
+            <div class="meta-card">
+              <strong>核心模型接入</strong>
+              <span>DeepSeek API / OpenAI-compatible endpoint</span>
+            </div>
+            <div class="meta-card">
+              <strong>使用场景</strong>
+              <span>个人计划、提醒、聊天、检索与任务执行</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="mock-window" data-placeholder="hero-window">
+            <div class="window-bar">
+              <span class="dot dot-red"></span>
+              <span class="dot dot-yellow"></span>
+              <span class="dot dot-green"></span>
+            </div>
+            <div class="window-body terminal">
+              <div class="terminal-line"><span class="prompt">$</span><span>./scripts/bootstrap.sh --dev</span></div>
+              <div class="terminal-line"><span class="prompt">/</span><span>schedule list</span></div>
+              <div class="terminal-line"><span class="prompt">?</span><span>帮我安排明天下午的复盘，并设置提醒</span></div>
+            </div>
+          </div>
+          <div class="overlay-card" data-placeholder="hero-overlay">
+            <strong>聊天任务示例</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-panel" id="capabilities" aria-labelledby="capabilities-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="capabilities-title">围绕真实任务，而不是单纯对话。</h2>
+          </div>
+          <p>
+            当前仓库聚焦本地执行路径：计划拆解、结构化 tool-calling、日程与想法的 SQLite 持久化、本地提醒线程，以及可选
+            Feishu 长连接与日历同步。
+          </p>
+        </div>
+        <div class="capability-grid">
+          <article class="card">
+            <h3>自然语言任务执行</h3>
+            <p>
+              非 `/` 输入会进入 plan → thought → act → observe → replan 链路，适合把“帮我安排今天的事”这类模糊目标转成可执行步骤。
+            </p>
+            <div class="pill-row">
+              <span class="pill">Plan/Replan</span>
+              <span class="pill">Structured Tool Calls</span>
+              <span class="pill">Progress Feedback</span>
+            </div>
+          </article>
+          <article class="card">
+            <h3>本地日程与提醒</h3>
+            <p>
+              日程支持 CRUD、时长、重复规则、提醒时间、日历视图和标签过滤，单次任务与循环任务都可以在本地线程中触发提醒。
+            </p>
+            <div class="pill-row">
+              <span class="pill">SQLite</span>
+              <span class="pill">Repeat Rules</span>
+              <span class="pill">Reminder Thread</span>
+            </div>
+          </article>
+          <article class="card">
+            <h3>可选外部通道扩展</h3>
+            <p>
+              在不破坏本地优先原则的前提下，可按配置接入 Feishu 消息、Feishu 日历同步，以及基于上下文的主动提醒。
+            </p>
+            <div class="pill-row">
+              <span class="pill">Feishu</span>
+              <span class="pill">Calendar Sync</span>
+              <span class="pill">Proactive Notify</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section-panel" id="quickstart" aria-labelledby="quickstart-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="quickstart-title">快速开始，不需要前端堆栈。</h2>
+          </div>
+          <p>
+            仓库本身是一个 Python CLI 项目，GitHub Pages 只负责展示说明页。你可以直接使用现有脚本完成初始化、配置与运行。
+          </p>
+        </div>
+        <div class="quickstart-grid">
+          <div class="steps">
+            <article class="step">
+              <div class="step-index">01</div>
+              <div>
+                <h3>初始化环境</h3>
+                <p>推荐直接使用一键脚本创建虚拟环境、安装依赖并初始化数据库。</p>
+                <div class="code-shell">./scripts/bootstrap.sh
+./scripts/bootstrap.sh --dev</div>
+              </div>
+            </article>
+            <article class="step">
+              <div class="step-index">02</div>
+              <div>
+                <h3>填充配置</h3>
+                <p>复制 `.env.example` 为 `.env`，至少填入 `DEEPSEEK_API_KEY`。模型与运行开关都通过环境变量控制。</p>
+                <div class="code-shell">cp .env.example .env</div>
+              </div>
+            </article>
+            <article class="step">
+              <div class="step-index">03</div>
+              <div>
+                <h3>启动 Assistant</h3>
+                <p>可以直接运行入口，也可以使用附带脚本管理后台实例、状态与重启。</p>
+                <div class="code-shell">python main.py
+./scripts/assistant.sh start
+./scripts/assistant.sh status</div>
+              </div>
+            </article>
+          </div>
+
+          <aside class="side-stack">
+            <div class="stat-card">
+              <strong>当前运行画像</strong>
+              <div class="stat-grid">
+                <div class="stat">
+                  <strong>语言</strong>
+                  <span>中文优先</span>
+                </div>
+                <div class="stat">
+                  <strong>存储</strong>
+                  <span>SQLite 本地持久化</span>
+                </div>
+                <div class="stat">
+                  <strong>模型网关</strong>
+                  <span>DeepSeek / OpenAI-compatible</span>
+                </div>
+                <div class="stat">
+                  <strong>可选能力</strong>
+                  <span>Playwright · Feishu</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="placeholder-panel" data-placeholder="quickstart-mock">
+              <strong>飞书日历同步</strong>
+              <div class="sync-mock" aria-label="飞书日历同步示意面板">
+                <div class="sync-topbar">
+                  <span class="sync-title">Calendar Sync</span>
+                  <span class="sync-badge">同步中</span>
+                </div>
+                <div class="sync-columns">
+                  <div class="sync-column">
+                    <p class="sync-label">Local Schedule</p>
+                    <div class="sync-event">
+                      <strong>产品复盘</strong>
+                      <span>周四 14:00 - 15:00</span>
+                    </div>
+                    <div class="sync-event">
+                      <strong>提醒提前 30 分钟</strong>
+                      <span>标签：work</span>
+                    </div>
+                  </div>
+                  <div class="sync-bridge">⇄</div>
+                  <div class="sync-column">
+                    <p class="sync-label">Feishu Calendar</p>
+                    <div class="sync-event">
+                      <strong>会议已同步</strong>
+                      <span>状态：最新</span>
+                    </div>
+                    <div class="sync-event">
+                      <strong>参与人已更新</strong>
+                      <span>双向对齐</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="sync-footer">
+                  <span>title + tag + start + end</span>
+                  <span>minute-level identity</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section-panel" id="commands" aria-labelledby="commands-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="commands-title">保留明确命令，也支持自然语言驱动。</h2>
+          </div>
+          <p>
+            你可以像传统 CLI 一样精确执行命令，也可以直接输入目标。当前 MVP 已覆盖帮助、版本、日期、画像刷新、主动提醒、日程、历史与碎片想法管理。
+          </p>
+        </div>
+        <div class="command-grid">
+          <article class="card command-card">
+            <h3>基础入口</h3>
+            <p>用最小命令确认环境是否正常，再逐步进入任务流。</p>
+            <pre>/help
+/version
+/date
+/profile refresh
+/notify</pre>
+          </article>
+          <article class="card command-card">
+            <h3>结构化管理</h3>
+            <p>对于日程、历史和碎片想法，命令接口保持稳定，适合直接脚本化或手工操作。</p>
+            <pre>/schedule list
+/history search 会议
+/thoughts list
+/schedule repeat &lt;id&gt; on</pre>
+          </article>
+          <article class="card command-card">
+            <h3>自然语言工作流</h3>
+            <p>如果你不想提前想好每个参数，直接交代目标即可，Agent 会在工具边界内拆解与执行。</p>
+            <pre>帮我梳理今天剩余待办
+把明天下午空出来做复盘
+搜索一下这个周末的天气</pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="section-panel" id="repo" aria-labelledby="repo-title">
+        <div class="repo-panel">
+          <div>
+            <h2 id="repo-title">继续查看代码、配置与完整说明。</h2>
+            <p>
+              这个页面只负责把仓库重点快速呈现出来。真正的运行细节、环境变量、命令契约与项目结构仍以仓库内的
+              `README.md`、`AGENTS.md` 和源码为准。
+            </p>
+          </div>
+          <div class="repo-links">
+            <a class="repo-link" href="https://github.com/cwdtom/assistant" target="_blank" rel="noreferrer">
+              <div>
+                <strong>GitHub Repository</strong>
+                <span>查看代码、Issue 与提交历史</span>
+              </div>
+              <span>↗</span>
+            </a>
+            <a
+              class="repo-link"
+              href="https://github.com/cwdtom/assistant#readme"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <div>
+                <strong>README</strong>
+                <span>获取完整的启动方式、环境变量和命令说明</span>
+              </div>
+              <span>↗</span>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="shell">
+      <p>Assistant · 中文优先的 AI Agent 个人助手 · GitHub Pages landing page</p>
+    </footer>
+
+    <script>
+      window.addEventListener("DOMContentLoaded", () => {
+        const placeholders = document.querySelectorAll("[data-placeholder]").length;
+        console.info("github_pages_landing_loaded", {
+          page: "assistant-github-pages",
+          theme: "apple-inspired",
+          placeholders,
+        });
+      });
+    </script>
+  </body>
+</html>

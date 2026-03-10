@@ -1,6 +1,6 @@
 # CLI AI Personal Assistant (Current Code Snapshot)
 
-一个中文优先的本地 CLI 个人助手。当前代码已实现：
+一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、本地提醒和飞书接入。当前代码已实现：
 - 自然语言任务执行（plan -> thought -> act -> observe -> replan）
 - thought 阶段默认使用 chat tool-calling（结构化参数）直接调用本地系统函数
 - 日程管理（CRUD、时长、重复规则、提醒、日历视图）
