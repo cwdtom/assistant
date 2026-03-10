@@ -100,6 +100,19 @@ class ScheduleRepeatTimesValue(FrozenModel):
         return normalize_repeat_times_value(value, field_name="value")
 
 
+class NormalizedTagValue(DefaultTagValue):
+    pass
+
+
+class ScheduleDurationValue(FrozenModel):
+    duration_minutes: int = Field(ge=1)
+
+    @field_validator("duration_minutes", mode="before")
+    @classmethod
+    def normalize_duration_minutes(cls, value: Any) -> int:
+        return PositiveIntValue.model_validate({"value": value}).value
+
+
 class ThoughtContentValue(FrozenModel):
     content: str = Field(min_length=1)
 
@@ -167,11 +180,13 @@ __all__ = [
     "DefaultTagValue",
     "HistoryListLimitValue",
     "MAX_HISTORY_LIST_LIMIT",
+    "NormalizedTagValue",
     "OptionalScheduleDateTimeValue",
     "OptionalTagValue",
     "OptionalThoughtStatusValue",
     "PositiveIntValue",
     "ScheduleDateTimeValue",
+    "ScheduleDurationValue",
     "ScheduleRepeatTimesValue",
     "ScheduleViewAnchorValue",
     "THOUGHT_STATUS_VALUES",

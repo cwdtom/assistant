@@ -90,12 +90,6 @@ from assistant_app.schemas.search import (
     BochaWebPageItem,
     BochaWebPagesPayload,
 )
-from assistant_app.schemas.storage import (
-    NormalizedTagValue,
-    ScheduleDurationValue,
-    ThoughtContentValue,
-    ThoughtStatusValue,
-)
 from assistant_app.schemas.tools import (
     AskUserArgs,
     DoneArgs,
@@ -134,12 +128,16 @@ from assistant_app.schemas.user_profile import UserProfileRefreshPreparation, Us
 from assistant_app.schemas.values import (
     DefaultTagValue,
     HistoryListLimitValue,
+    NormalizedTagValue,
     OptionalScheduleDateTimeValue,
     OptionalTagValue,
     PositiveIntValue,
     ScheduleDateTimeValue,
+    ScheduleDurationValue,
     ScheduleRepeatTimesValue,
     ScheduleViewAnchorValue,
+    ThoughtContentValue,
+    ThoughtStatusValue,
 )
 
 __all__ = [

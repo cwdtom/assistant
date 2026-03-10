@@ -18,16 +18,18 @@ from assistant_app.schemas.domain import (
     ThoughtItem,
 )
 from assistant_app.schemas.storage import (
-    NormalizedTagValue,
     ScheduleBatchCreateInput,
     ScheduleCreateInput,
-    ScheduleDurationValue,
     ScheduleRecurrenceInput,
     ScheduleUpdateInput,
-    ThoughtContentValue,
     ThoughtCreateInput,
-    ThoughtStatusValue,
     ThoughtUpdateInput,
+)
+from assistant_app.schemas.values import (
+    NormalizedTagValue,
+    ScheduleDurationValue,
+    ThoughtContentValue,
+    ThoughtStatusValue,
 )
 
 _UNSET = object()

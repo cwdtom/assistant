@@ -58,6 +58,18 @@ class ToolSchemaTest(unittest.TestCase):
 
         self.assertIsNone(parsed)
 
+    def test_validate_thought_tool_arguments_rejects_explicit_null_schedule_duration(self) -> None:
+        parsed = validate_thought_tool_arguments(
+            'schedule_add',
+            {
+                'event_time': '2026-03-07 10:00',
+                'title': '站会',
+                'duration_minutes': None,
+            },
+        )
+
+        self.assertIsNone(parsed)
+
     def test_validate_thought_tool_arguments_rejects_invalid_fetch_url(self) -> None:
         parsed = validate_thought_tool_arguments('internet_search_fetch_url', {'url': 'ftp://example.com'})
 
@@ -85,6 +97,20 @@ class ToolSchemaTest(unittest.TestCase):
                 'function': {
                     'name': 'schedule_view',
                     'arguments': json.dumps({'view': 'quarter'}, ensure_ascii=False),
+                },
+            }
+        )
+
+        self.assertIsNone(decision)
+
+    def test_normalize_thought_tool_call_rejects_explicit_null_thought_status(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_thought_update',
+                'type': 'function',
+                'function': {
+                    'name': 'thoughts_update',
+                    'arguments': json.dumps({'id': 3, 'content': '更新', 'status': None}, ensure_ascii=False),
                 },
             }
         )

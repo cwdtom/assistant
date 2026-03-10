@@ -351,24 +351,6 @@ def _execute_typed_schedule_system_action(
         )
 
     if tool_name == "schedule_add" and isinstance(arguments, ScheduleAddArgs):
-        if "duration_minutes" in arguments.model_fields_set and arguments.duration_minutes is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.add duration_minutes 需为 >=1 的整数。",
-            )
-        if "interval_minutes" in arguments.model_fields_set and arguments.interval_minutes is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.add interval_minutes 需为 >=1 的整数。",
-            )
-        if "times" in arguments.model_fields_set and arguments.times is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.add times 需为 -1 或 >=2 的整数。",
-            )
         repeat_interval_minutes = arguments.interval_minutes
         if "times" in arguments.model_fields_set:
             assert arguments.times is not None
@@ -400,24 +382,6 @@ def _execute_typed_schedule_system_action(
         return _observe_schedule_get(agent, raw_input=raw_input, schedule_id=arguments.id)
 
     if tool_name == "schedule_update" and isinstance(arguments, ScheduleUpdateArgs):
-        if "duration_minutes" in arguments.model_fields_set and arguments.duration_minutes is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.update duration_minutes 需为 >=1 的整数。",
-            )
-        if "interval_minutes" in arguments.model_fields_set and arguments.interval_minutes is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.update interval_minutes 需为 >=1 的整数。",
-            )
-        if "times" in arguments.model_fields_set and arguments.times is None:
-            return _schedule_observation(
-                raw_input=raw_input,
-                ok=False,
-                result="schedule.update times 需为 -1 或 >=2 的整数。",
-            )
         repeat_interval_minutes = (
             arguments.interval_minutes if "interval_minutes" in arguments.model_fields_set else None
         )

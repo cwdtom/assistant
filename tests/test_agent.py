@@ -32,6 +32,8 @@ from assistant_app.schemas.tools import (
     ScheduleAddArgs,
     ScheduleUpdateArgs,
     ThoughtsUpdateArgs,
+    coerce_history_action_payload,
+    coerce_schedule_action_payload,
     coerce_thoughts_action_payload,
 )
 from assistant_app.search import SearchResult
@@ -2762,6 +2764,63 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertEqual(command_payload, compat_payload)
 
+    def test_schedule_add_cli_and_json_payload_share_runtime_payload(self) -> None:
+        command_payload = parse_tool_command_payload(
+            "/schedule add 2026-03-01 09:30 项目同步 --tag Work --duration 45 "
+            "--remind 2026-03-01 09:00 --interval 60 --times 3 --remind-start 2026-03-01 08:45"
+        )
+        self.assertIsNotNone(command_payload)
+        assert command_payload is not None
+
+        compat_payload = coerce_schedule_action_payload(
+            {
+                "action": "add",
+                "event_time": "2026-03-01 09:30",
+                "title": "项目同步",
+                "tag": "Work",
+                "duration_minutes": 45,
+                "remind_at": "2026-03-01 09:00",
+                "interval_minutes": 60,
+                "times": 3,
+                "remind_start_time": "2026-03-01 08:45",
+            }
+        )
+
+        self.assertEqual(command_payload, compat_payload)
+
+    def test_schedule_update_cli_and_json_payload_share_runtime_payload(self) -> None:
+        command_payload = parse_tool_command_payload(
+            "/schedule update 7 2026-03-01 10:00 项目复盘 --tag review --duration 30 --interval 60 --times -1"
+        )
+        self.assertIsNotNone(command_payload)
+        assert command_payload is not None
+
+        compat_payload = coerce_schedule_action_payload(
+            {
+                "action": "update",
+                "id": 7,
+                "event_time": "2026-03-01 10:00",
+                "title": "项目复盘",
+                "tag": "review",
+                "duration_minutes": 30,
+                "interval_minutes": 60,
+                "times": -1,
+            }
+        )
+
+        self.assertEqual(command_payload, compat_payload)
+
+    def test_history_search_cli_and_json_payload_share_runtime_payload(self) -> None:
+        command_payload = parse_tool_command_payload("/history search 周报 --limit 5")
+        self.assertIsNotNone(command_payload)
+        assert command_payload is not None
+
+        compat_payload = coerce_history_action_payload(
+            {"action": "search", "keyword": "周报", "limit": 5}
+        )
+
+        self.assertEqual(command_payload, compat_payload)
+
     def test_thoughts_tool_update_rejects_explicit_null_status(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
         thought_id = self.db.add_thought("记得买牛奶")
@@ -2880,6 +2939,44 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNotNone(updated)
         assert updated is not None
         self.assertEqual(updated.tag, "default")
+
+    def test_schedule_tool_add_rejects_explicit_null_duration(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+
+        observation = agent._execute_schedule_system_action(
+            payload={
+                "action": "add",
+                "event_time": "2026-03-01 11:00",
+                "title": "项目同步",
+                "duration_minutes": None,
+            },
+            raw_input='{"action":"add","event_time":"2026-03-01 11:00","title":"项目同步","duration_minutes":null}',
+        )
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(observation.result, "schedule.add duration_minutes 需为 >=1 的整数。")
+
+    def test_schedule_tool_update_rejects_explicit_null_times(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+        schedule_id = self.db.add_schedule("项目同步", "2026-03-01 10:00")
+
+        observation = agent._execute_schedule_system_action(
+            payload={
+                "action": "update",
+                "id": schedule_id,
+                "event_time": "2026-03-01 11:00",
+                "title": "项目同步",
+                "interval_minutes": 60,
+                "times": None,
+            },
+            raw_input=(
+                '{"action":"update","id":1,"event_time":"2026-03-01 11:00",'
+                '"title":"项目同步","interval_minutes":60,"times":null}'
+            ),
+        )
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(observation.result, "schedule.update times 需为 -1 或 >=2 的整数。")
 
     def test_schedule_tool_repeat_with_dict_payload_updates_rule_state(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

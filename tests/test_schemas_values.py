@@ -5,16 +5,17 @@ import unittest
 from assistant_app.schemas.domain import ScheduleItem
 from assistant_app.schemas.proactive import ProactiveScheduleContextItem
 from assistant_app.schemas.storage import (
-    NormalizedTagValue,
     ScheduleCreateInput,
     ScheduleRecurrenceInput,
     ScheduleUpdateInput,
 )
 from assistant_app.schemas.values import (
     DefaultTagValue,
+    NormalizedTagValue,
     OptionalScheduleDateTimeValue,
     OptionalTagValue,
     ScheduleDateTimeValue,
+    ScheduleDurationValue,
     ScheduleRepeatTimesValue,
 )
 
@@ -151,6 +152,32 @@ class ValueNormalizationConsistencyTest(unittest.TestCase):
 
         self.assertEqual(schedule_item.repeat_times, 3)
         self.assertEqual(proactive_item.repeat_times, 3)
+
+    def test_duration_normalization_is_consistent_across_layers(self) -> None:
+        raw_duration = " 45 "
+
+        self.assertEqual(ScheduleDurationValue.model_validate({"duration_minutes": raw_duration}).duration_minutes, 45)
+        self.assertEqual(
+            ScheduleCreateInput.model_validate(
+                {
+                    "title": "项目同步",
+                    "event_time": "2026-03-09 10:00",
+                    "duration_minutes": raw_duration,
+                }
+            ).duration_minutes,
+            45,
+        )
+        self.assertEqual(
+            ScheduleUpdateInput.model_validate(
+                {
+                    "schedule_id": 1,
+                    "title": "项目同步",
+                    "event_time": "2026-03-09 10:00",
+                    "duration_minutes": raw_duration,
+                }
+            ).duration_minutes,
+            45,
+        )
 
 
 if __name__ == "__main__":
