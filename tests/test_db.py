@@ -8,9 +8,11 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from assistant_app.db import AssistantDB
 from assistant_app.logging_setup import JsonLinesFormatter
+from assistant_app.schemas.tools import coerce_schedule_action_payload
 
 
 class AssistantDBTest(unittest.TestCase):
@@ -541,6 +543,70 @@ class AssistantDBTest(unittest.TestCase):
             )
         )
 
+    def test_db_add_schedule_matches_tool_payload_normalization(self) -> None:
+        compat_payload = coerce_schedule_action_payload(
+            {
+                "action": "add",
+                "event_time": "2026-03-09 10:00",
+                "title": "项目同步",
+                "tag": " Work ",
+                "duration_minutes": " 45 ",
+                "remind_at": "2026-03-09 09:30",
+            }
+        )
+        args = compat_payload.arguments
+
+        create_kwargs: dict[str, Any] = {
+            "title": "项目同步",
+            "event_time": "2026-03-09 10:00",
+            "tag": " Work ",
+            "duration_minutes": " 45 ",
+            "remind_at": "2026-03-09 09:30",
+        }
+        schedule_id = self.db.add_schedule(**create_kwargs)
+        item = self.db.get_schedule(schedule_id)
+
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.event_time, args.event_time)
+        self.assertEqual(item.tag, args.tag or "default")
+        self.assertEqual(item.duration_minutes, args.duration_minutes)
+        self.assertEqual(item.remind_at, args.remind_at)
+
+    def test_db_update_schedule_matches_tool_payload_normalization(self) -> None:
+        schedule_id = self.db.add_schedule("项目同步", "2026-03-09 10:00", tag="work", duration_minutes=30)
+        compat_payload = coerce_schedule_action_payload(
+            {
+                "action": "update",
+                "id": schedule_id,
+                "event_time": "2026-03-09 11:00",
+                "title": "项目复盘",
+                "tag": " Review ",
+                "duration_minutes": " 50 ",
+                "remind_at": "2026-03-09 10:30",
+            }
+        )
+        args = compat_payload.arguments
+
+        update_kwargs: dict[str, Any] = {
+            "title": "项目复盘",
+            "event_time": "2026-03-09 11:00",
+            "tag": " Review ",
+            "duration_minutes": " 50 ",
+            "remind_at": "2026-03-09 10:30",
+        }
+        updated = self.db.update_schedule(schedule_id, **update_kwargs)
+        item = self.db.get_schedule(schedule_id)
+
+        self.assertTrue(updated)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.event_time, args.event_time)
+        self.assertEqual(item.title, args.title)
+        self.assertEqual(item.tag, args.tag or "default")
+        self.assertEqual(item.duration_minutes, args.duration_minutes)
+        self.assertEqual(item.remind_at, args.remind_at)
+
     def test_db_logs_input_validation_failure_for_invalid_update_schedule(self) -> None:
         stream = io.StringIO()
         logger = logging.getLogger("test.db.validation_failure")
@@ -572,6 +638,9 @@ class AssistantDBTest(unittest.TestCase):
             self.assertIsInstance(context, dict)
             assert isinstance(context, dict)
             self.assertEqual(context.get("method"), "update_schedule")
+            self.assertEqual(context.get("code"), "greater_than_equal")
+            self.assertEqual(context.get("field"), "duration_minutes")
+            self.assertEqual(context.get("message"), "Input should be greater than or equal to 1")
             self.assertIn("duration_minutes", str(context.get("reason")))
         finally:
             for handler in list(logger.handlers):

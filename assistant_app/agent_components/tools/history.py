@@ -20,6 +20,7 @@ from assistant_app.schemas.tools import (
     HistorySearchArgs,
     coerce_history_action_payload,
 )
+from assistant_app.schemas.validation_errors import first_validation_issue
 
 
 def execute_history_system_action(
@@ -115,18 +116,11 @@ def _normalized_history_limit(limit: int | None) -> int:
 
 def _history_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
     action = str(payload.get("action") or "").strip().lower()
-    errors = exc.errors(include_url=False)
-    first_error = (
-        errors[0]
-        if errors
-        else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
-    )
-    location = first_error.get("loc", ())
-    field_names = {str(item) for item in location}
+    issue = first_validation_issue(exc)
     if action not in {"list", "search"}:
         return "history.action 非法。"
-    if "limit" in field_names:
+    if issue.field == "limit":
         return f"history.{action} limit 必须为正整数。"
-    if action == "search" and "keyword" in field_names:
+    if action == "search" and issue.field == "keyword":
         return "history.search keyword 不能为空。"
     return "history.action 非法。"

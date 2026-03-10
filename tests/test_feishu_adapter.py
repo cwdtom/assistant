@@ -1278,9 +1278,9 @@ class FeishuAdapterTest(unittest.TestCase):
         )
         runner._send_text_to_open_id = lambda _open_id, _text: None
 
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "open_id is required"):
             runner.send_proactive_text(open_id=" ", text="主动提醒")
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "text is required"):
             runner.send_proactive_text(open_id="ou_target", text="  ")
 
     def test_feishu_runner_send_proactive_text_strips_whitespace(self) -> None:

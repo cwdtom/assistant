@@ -19,6 +19,7 @@ from assistant_app.schemas.tools import (
     ThoughtsUpdateArgs,
     coerce_thoughts_action_payload,
 )
+from assistant_app.schemas.validation_errors import first_validation_issue
 
 
 def execute_thoughts_system_action(
@@ -217,10 +218,5 @@ def _done_observation(*, agent: Any, action: str, raw_input: str, result: str) -
 
 
 def _first_validation_error_message(exc: ValidationError) -> str:
-    errors = exc.errors(include_url=False)
-    if not errors:
-        return "thoughts 工具参数无效。"
-    message = str(errors[0].get("msg") or "").strip()
-    if message.startswith("Value error, "):
-        message = message.removeprefix("Value error, ").strip()
+    message = first_validation_issue(exc).message
     return message or "thoughts 工具参数无效。"

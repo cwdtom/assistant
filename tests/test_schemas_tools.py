@@ -11,6 +11,9 @@ from assistant_app.planner_thought import build_thought_tool_schemas, normalize_
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
 from assistant_app.schemas.tools import (
     ProactiveHistoryListArgs,
+    coerce_history_action_payload,
+    coerce_schedule_action_payload,
+    coerce_thoughts_action_payload,
     parse_json_object,
     validate_thought_tool_arguments,
 )
@@ -116,6 +119,90 @@ class ToolSchemaTest(unittest.TestCase):
         )
 
         self.assertIsNone(decision)
+
+    def test_normalize_thought_tool_call_schedule_payload_matches_system_action_contract(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_schedule_add',
+                'type': 'function',
+                'function': {
+                    'name': 'schedule_add',
+                    'arguments': json.dumps(
+                        {
+                            'event_time': '2026-03-08 09:30',
+                            'title': '项目同步',
+                            'tag': ' Work ',
+                            'duration_minutes': '45',
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        assert decision.next_action is not None
+        assert decision.next_action.payload is not None
+        self.assertEqual(
+            decision.next_action.payload,
+            coerce_schedule_action_payload(
+                {
+                    'action': 'add',
+                    'event_time': '2026-03-08 09:30',
+                    'title': '项目同步',
+                    'tag': ' Work ',
+                    'duration_minutes': '45',
+                }
+            ),
+        )
+
+    def test_normalize_thought_tool_call_history_payload_matches_system_action_contract(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_history_search',
+                'type': 'function',
+                'function': {
+                    'name': 'history_search',
+                    'arguments': json.dumps({'keyword': '周报', 'limit': '5'}, ensure_ascii=False),
+                },
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        assert decision.next_action is not None
+        assert decision.next_action.payload is not None
+        self.assertEqual(
+            decision.next_action.payload,
+            coerce_history_action_payload({'action': 'search', 'keyword': '周报', 'limit': '5'}),
+        )
+
+    def test_normalize_thought_tool_call_thoughts_payload_matches_system_action_contract(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_thought_update',
+                'type': 'function',
+                'function': {
+                    'name': 'thoughts_update',
+                    'arguments': json.dumps(
+                        {'id': 3, 'content': '记得补周报', 'status': '完成'},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        assert decision.next_action is not None
+        assert decision.next_action.payload is not None
+        self.assertEqual(
+            decision.next_action.payload,
+            coerce_thoughts_action_payload(
+                {'action': 'update', 'id': 3, 'content': '记得补周报', 'status': '完成'}
+            ),
+        )
 
 
 class ProactiveToolSchemaTest(unittest.TestCase):

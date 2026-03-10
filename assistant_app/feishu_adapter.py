@@ -21,6 +21,7 @@ from assistant_app.schemas.feishu import (
     parse_feishu_response_status,
     parse_feishu_text_message,
 )
+from assistant_app.schemas.validation_errors import first_validation_issue
 
 DEFAULT_FEISHU_SEND_RETRY_COUNT = 3
 DEFAULT_FEISHU_SEND_RETRY_BACKOFF_SECONDS = 0.5
@@ -533,13 +534,7 @@ class FeishuLongConnectionRunner:
                 }
             )
         except ValidationError as exc:
-            errors = exc.errors(include_url=False)
-            first_error = (
-                errors[0]
-                if errors
-                else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
-            )
-            field_name = str(first_error.get("loc", [""])[0])
+            field_name = first_validation_issue(exc).field
             if field_name == "open_id":
                 raise ValueError("open_id is required") from exc
             if field_name == "text":

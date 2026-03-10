@@ -25,6 +25,7 @@ from assistant_app.schemas.storage import (
     ThoughtCreateInput,
     ThoughtUpdateInput,
 )
+from assistant_app.schemas.validation_errors import first_validation_issue
 from assistant_app.schemas.values import (
     NormalizedTagValue,
     ScheduleDurationValue,
@@ -781,21 +782,18 @@ class AssistantDB:
             return cur.rowcount > 0
 
     def _log_input_validation_failed(self, *, method: str, exc: ValidationError) -> None:
-        errors = exc.errors(include_url=False)
-        first_error = (
-            errors[0]
-            if errors
-            else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
-        )
-        location = ".".join(str(part) for part in first_error.get("loc", ())) or "unknown"
-        message = str(first_error.get("msg") or "validation error").strip()
-        reason = f"{location}: {message}"
+        issue = first_validation_issue(exc)
+        field_name = issue.field or "unknown"
+        reason = f"{field_name}: {issue.message}"
         self._logger.warning(
             "db input validation failed",
             extra={
                 "event": "db_input_validation_failed",
                 "context": {
                     "method": method,
+                    "code": issue.code,
+                    "field": issue.field,
+                    "message": issue.message,
                     "reason": reason,
                 },
             },

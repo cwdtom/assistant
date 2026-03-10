@@ -30,6 +30,7 @@ from assistant_app.schemas.tools import (
     ScheduleViewArgs,
     coerce_schedule_action_payload,
 )
+from assistant_app.schemas.validation_errors import first_validation_issue
 
 
 def execute_schedule_system_action(
@@ -431,38 +432,32 @@ def _execute_typed_schedule_system_action(
 
 def _schedule_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
     action = str(payload.get("action") or "").strip().lower()
-    errors = exc.errors(include_url=False)
-    first_error = (
-        errors[0]
-        if errors
-        else {"type": "value_error", "loc": (), "msg": "validation error", "input": None}
-    )
-    location = first_error.get("loc", ())
-    field_names = {str(item) for item in location}
-    message = str(first_error.get("msg") or "").removeprefix("Value error, ").strip()
+    issue = first_validation_issue(exc)
+    field_name = issue.field
+    message = issue.message
 
     if message.startswith("schedule."):
         return message
     if action not in {"add", "list", "get", "view", "update", "delete", "repeat"}:
         return "schedule.action 非法。"
-    if action == "view" and "view" in field_names:
+    if action == "view" and field_name == "view":
         return "schedule.view 需要合法 view(day|week|month)。"
-    if action == "view" and ("anchor" in field_names or message == "anchor must match view"):
+    if action == "view" and (field_name == "anchor" or message == "anchor must match view"):
         return "schedule.view 的 anchor 非法。"
-    if "id" in field_names:
+    if field_name == "id":
         return "schedule.id 必须为正整数。"
-    if action in {"add", "update"} and field_names.intersection({"event_time", "title"}):
+    if action in {"add", "update"} and field_name in {"event_time", "title"}:
         return f"schedule.{action} 缺少 event_time/title 或格式非法。"
-    if action in {"add", "update"} and "remind_at" in field_names:
+    if action in {"add", "update"} and field_name == "remind_at":
         return f"schedule.{action} remind_at 格式非法。"
-    if action in {"add", "update"} and "remind_start_time" in field_names:
+    if action in {"add", "update"} and field_name == "remind_start_time":
         return f"schedule.{action} remind_start_time 格式非法。"
-    if action in {"add", "update"} and "duration_minutes" in field_names:
+    if action in {"add", "update"} and field_name == "duration_minutes":
         return f"schedule.{action} duration_minutes 需为 >=1 的整数。"
-    if action in {"add", "update"} and "interval_minutes" in field_names:
+    if action in {"add", "update"} and field_name == "interval_minutes":
         return f"schedule.{action} interval_minutes 需为 >=1 的整数。"
-    if action in {"add", "update"} and "times" in field_names:
+    if action in {"add", "update"} and field_name == "times":
         return f"schedule.{action} times 需为 -1 或 >=2 的整数。"
-    if action == "repeat" and "enabled" in field_names:
+    if action == "repeat" and field_name == "enabled":
         return "schedule.repeat 需要 enabled 布尔值。"
     return "schedule.action 非法。"
