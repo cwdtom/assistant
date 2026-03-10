@@ -55,6 +55,10 @@ def _is_proactive_reminder_configured(target_open_id: str) -> bool:
     return bool(target_open_id.strip())
 
 
+def _is_proactive_notify_available(llm_client: Any) -> bool:
+    return callable(getattr(llm_client, "reply_with_tools", None))
+
+
 def _is_feishu_calendar_sync_configured(calendar_id: str) -> bool:
     return bool(calendar_id.strip())
 
@@ -277,6 +281,11 @@ def main() -> None:
             internet_search_top_k=config.internet_search_top_k,
             final_content_rewriter=persona_rewriter.rewrite_final_response,
         )
+        if _is_proactive_notify_available(llm_client):
+            agent.set_proactive_notify_runner(
+                proactive_reminder_service.run_manual_trigger,
+                target_open_id=config.proactive_reminder_target_open_id,
+            )
     timer_engine: TimerEngine | None = None
     feishu_runner = None
     if config.timer_enabled:

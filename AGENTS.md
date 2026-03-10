@@ -32,6 +32,7 @@ Supported input forms in CLI:
 - `/help`
 - `/version`
 - `/profile refresh`
+- `/notify`
 - `/history list [--limit <>=1>]`
 - `/history search <关键词> [--limit <>=1>]`
 - `/thoughts add|list|get|update|delete`
@@ -126,6 +127,7 @@ Optional runtime flags (all supported in `.env`):
 - Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
 - Schedule includes `duration_minutes` (default `60` on create).
 - `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
+- `/notify` supports manually triggering one proactive reminder decision; it bypasses interval gating, still respects the proactive score threshold, and returns `score/reason` summary in CLI.
 - Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
@@ -164,6 +166,7 @@ Optional runtime flags (all supported in `.env`):
 - Proactive ReAct allows `internet_search` as optional evidence and injects `USER_PROFILE_PATH` content into prompt when available.
 - Proactive reminder default context window: schedule in next 24h + chat_history in last 24h.
 - Proactive reminder runs on timer periodic tasks; proactive `done` returns `score/message/reason`, and Feishu send happens only when `score >= PROACTIVE_REMINDER_SCORE_THRESHOLD`.
+- Proactive reminder sends do not persist synthetic turns into `chat_history`.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).

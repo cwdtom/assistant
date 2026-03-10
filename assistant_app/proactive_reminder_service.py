@@ -11,6 +11,7 @@ from assistant_app.llm import LLMClient
 from assistant_app.proactive_context import build_proactive_context_snapshot
 from assistant_app.proactive_react import ProactiveReactRunner
 from assistant_app.proactive_tools import ProactiveToolExecutor
+from assistant_app.schemas.proactive import ProactiveDecision, ProactiveExecutionResult
 from assistant_app.search import SearchProvider
 
 
@@ -84,14 +85,112 @@ class ProactiveReminderService:
                 },
             },
         )
+        self._execute_once(now=now, raise_on_failure=False)
+
+    def run_manual_trigger(self) -> ProactiveExecutionResult:
+        self._ensure_manual_trigger_available()
+        result = self._execute_once(now=self._clock(), raise_on_failure=True)
+        if result is None:
+            raise RuntimeError("主动提醒未产出有效决策。")
+        return result
+
+    def _execute_once(
+        self,
+        *,
+        now: datetime,
+        raise_on_failure: bool,
+    ) -> ProactiveExecutionResult | None:
 
         if not self._target_open_id:
             self._logger.warning(
                 "proactive target open_id missing",
                 extra={"event": "proactive_target_missing"},
             )
-            return
+            return self._raise_or_none(
+                RuntimeError("缺少 PROACTIVE_REMINDER_TARGET_OPEN_ID，无法执行主动提醒。"),
+                raise_on_failure=raise_on_failure,
+            )
 
+        decision = self._run_decision(now=now, raise_on_failure=raise_on_failure)
+        if decision is None:
+            return None
+        result = ProactiveExecutionResult(
+            score=decision.score,
+            threshold=self._score_threshold,
+            notify=decision.score >= self._score_threshold,
+            reason=decision.reason,
+            message=decision.message.strip(),
+        )
+        self._logger.info(
+            "proactive gate decided: score=%s threshold=%s notify=%s",
+            result.score,
+            result.threshold,
+            result.notify,
+            extra={
+                "event": "proactive_gate_decision",
+                "context": {
+                    "score": result.score,
+                    "threshold": result.threshold,
+                    "notify": result.notify,
+                },
+            },
+        )
+        if not result.notify:
+            return result
+        if not result.message:
+            self._logger.warning(
+                "proactive send skipped: empty message",
+                extra={"event": "proactive_send_skipped_empty_message"},
+            )
+            return self._raise_or_none(
+                RuntimeError("主动提醒消息为空，无法发送。"),
+                raise_on_failure=raise_on_failure,
+            )
+        final_content = self._rewrite_content(result.message)
+        if final_content != result.message:
+            result = result.model_copy(update={"message": final_content})
+        segments = split_semantic_messages(final_content)
+
+        self._logger.info(
+            "proactive send started",
+            extra={
+                "event": "proactive_send_start",
+                "context": {
+                    "target_open_id": self._target_open_id,
+                    "message_length": len(final_content),
+                },
+            },
+        )
+        try:
+            for segment in segments:
+                self._send_text_to_open_id(self._target_open_id, segment)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "proactive send failed",
+                extra={
+                    "event": "proactive_send_failed",
+                    "context": {"error": repr(exc)},
+                },
+            )
+            return self._raise_or_none(exc, raise_on_failure=raise_on_failure)
+        self._logger.info(
+            "proactive send completed",
+            extra={
+                "event": "proactive_send_done",
+                "context": {
+                    "target_open_id": self._target_open_id,
+                    "segment_count": len(segments),
+                },
+            },
+        )
+        return result
+
+    def _run_decision(
+        self,
+        *,
+        now: datetime,
+        raise_on_failure: bool,
+    ) -> ProactiveDecision | None:
         snapshot = build_proactive_context_snapshot(
             db=self._db,
             now=now,
@@ -121,89 +220,32 @@ class ProactiveReminderService:
             internet_search_allowed=True,
         )
         decision = react_runner.run_once(context_payload=prompt_payload)
-        if decision is None:
-            return
-        should_notify = decision.score >= self._score_threshold
-        self._logger.info(
-            "proactive gate decided: score=%s threshold=%s notify=%s",
-            decision.score,
-            self._score_threshold,
-            should_notify,
-            extra={
-                "event": "proactive_gate_decision",
-                "context": {
-                    "score": decision.score,
-                    "threshold": self._score_threshold,
-                    "notify": should_notify,
-                },
-            },
-        )
-        if not should_notify:
-            return
-        content = decision.message.strip()
-        if not content:
-            self._logger.warning(
-                "proactive send skipped: empty message",
-                extra={"event": "proactive_send_skipped_empty_message"},
-            )
-            return
-        final_content = self._rewrite_content(content)
-        segments = split_semantic_messages(final_content)
-
-        self._logger.info(
-            "proactive send started",
-            extra={
-                "event": "proactive_send_start",
-                "context": {
-                    "target_open_id": self._target_open_id,
-                    "message_length": len(final_content),
-                },
-            },
-        )
-        try:
-            for segment in segments:
-                self._send_text_to_open_id(self._target_open_id, segment)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "proactive send failed",
-                extra={
-                    "event": "proactive_send_failed",
-                    "context": {"error": repr(exc)},
-                },
-            )
-            return
-        self._logger.info(
-            "proactive send completed",
-            extra={
-                "event": "proactive_send_done",
-                "context": {
-                    "target_open_id": self._target_open_id,
-                    "segment_count": len(segments),
-                },
-            },
+        if decision is not None:
+            return decision
+        return self._raise_or_none(
+            RuntimeError("主动提醒未产出有效决策。"),
+            raise_on_failure=raise_on_failure,
         )
 
-        marker = (
-            f"[proactive_tick] now={now.strftime('%Y-%m-%d %H:%M')} "
-            f"score={decision.score} threshold={self._score_threshold} reason={decision.reason}"
-        )
-        try:
-            self._db.save_turn(user_content=marker, assistant_content=final_content)
-            self._logger.info(
-                "proactive history saved",
-                extra={
-                    "event": "proactive_history_saved",
-                    "context": {"saved": True},
-                },
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "proactive history save failed",
-                extra={
-                    "event": "proactive_history_save_failed",
-                    "context": {"error": repr(exc)},
-                },
-            )
+    def _ensure_manual_trigger_available(self) -> None:
+        if not self._target_open_id:
+            raise RuntimeError("缺少 PROACTIVE_REMINDER_TARGET_OPEN_ID，无法执行主动提醒。")
+        llm_client = self._llm_client
+        if llm_client is None:
+            raise RuntimeError("当前未配置 LLM，无法执行主动提醒。")
+        reply_with_tools = getattr(llm_client, "reply_with_tools", None)
+        if not callable(reply_with_tools):
+            raise RuntimeError("当前 LLM 不支持 tool-calling，无法执行主动提醒。")
+
+    @staticmethod
+    def _raise_or_none(
+        exc: Exception,
+        *,
+        raise_on_failure: bool,
+    ) -> None:
+        if raise_on_failure:
+            raise exc
+        return None
 
     def _rewrite_content(self, content: str) -> str:
         rewriter = self._final_content_rewriter

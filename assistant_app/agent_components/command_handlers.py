@@ -30,8 +30,13 @@ from assistant_app.schemas.commands import (
     parse_thoughts_list_command,
     parse_thoughts_update_command,
 )
+from assistant_app.schemas.proactive import ProactiveExecutionResult
 
 UNKNOWN_APP_VERSION = "unknown"
+PROACTIVE_NOTIFY_UNAVAILABLE_MESSAGE = (
+    "当前未启用主动提醒服务。"
+    "请检查 FEISHU_APP_ID、FEISHU_APP_SECRET、PROACTIVE_REMINDER_TARGET_OPEN_ID 与 LLM 配置。"
+)
 
 
 def help_text() -> str:
@@ -40,6 +45,7 @@ def help_text() -> str:
         "/help\n"
         "/version\n"
         "/profile refresh\n"
+        "/notify\n"
         "/history list [--limit <>=1>]\n"
         "/history search <关键词> [--limit <>=1>]\n"
         "/thoughts add <内容>\n"
@@ -93,6 +99,10 @@ def handle_command(agent: Any, command: str) -> str:
                 },
             )
             return f"刷新 user_profile 失败: {exc}"
+    if command == "/notify":
+        return _execute_proactive_notify_command(agent)
+    if command.split(maxsplit=1)[0] == "/notify":
+        return "用法: /notify"
 
     if command == "/history list" or command.startswith("/history list "):
         history_list_command = parse_history_list_command(command)
@@ -227,6 +237,46 @@ def _execute_schedule_cli_command(agent: Any, *, parsed_command: CliCommandBase,
     ).result
 
 
+def _execute_proactive_notify_command(agent: Any) -> str:
+    runner = agent._proactive_notify_runner
+    if runner is None:
+        return PROACTIVE_NOTIFY_UNAVAILABLE_MESSAGE
+    agent._app_logger.info(
+        "proactive manual trigger started",
+        extra={
+            "event": "proactive_manual_trigger_start",
+            "context": {"target_open_id": agent._proactive_notify_target_open_id},
+        },
+    )
+    try:
+        result = runner()
+    except Exception as exc:  # noqa: BLE001
+        agent._app_logger.warning(
+            "proactive manual trigger failed",
+            extra={
+                "event": "proactive_manual_trigger_failed",
+                "context": {
+                    "target_open_id": agent._proactive_notify_target_open_id,
+                    "error": repr(exc),
+                },
+            },
+        )
+        return f"执行主动提醒失败: {exc}"
+    agent._app_logger.info(
+        "proactive manual trigger completed",
+        extra={
+            "event": "proactive_manual_trigger_done",
+            "context": {
+                "target_open_id": agent._proactive_notify_target_open_id,
+                "score": result.score,
+                "threshold": result.threshold,
+                "notify": result.notify,
+            },
+        },
+    )
+    return _render_proactive_notify_result(result)
+
+
 def _execute_thoughts_cli_command(
     agent: Any,
     *,
@@ -283,3 +333,16 @@ def _fail_thoughts_command(agent: Any, *, action: str, exc: Exception) -> str:
         },
     )
     return f"thoughts 命令执行失败: {exc}"
+
+
+def _render_proactive_notify_result(result: ProactiveExecutionResult) -> str:
+    lines = [
+        "主动提醒执行完成：",
+        f"score={result.score}",
+        f"threshold={result.threshold}",
+        f"notify={'yes' if result.notify else 'no'}",
+        f"reason={result.reason}",
+    ]
+    if result.message:
+        lines.append(f"message={result.message}")
+    return "\n".join(lines)

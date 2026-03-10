@@ -132,6 +132,14 @@ class ProactiveOutputContract(FrozenModel):
     done_schema: ProactiveDoneSchemaContract = Field(default_factory=ProactiveDoneSchemaContract)
 
 
+class ProactiveExecutionResult(FrozenModel):
+    score: int = Field(ge=0, le=100)
+    threshold: int = Field(ge=0, le=100)
+    notify: bool
+    reason: str = Field(min_length=1)
+    message: str = ""
+
+
 class ProactivePromptPayload(FrozenModel):
     task: str = "proactive_reminder_decision"
     now: str = ""

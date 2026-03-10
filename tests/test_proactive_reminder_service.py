@@ -66,7 +66,7 @@ class ProactiveReminderServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_poll_scheduled_sends_segments_and_saves_history_when_score_meets_threshold(self) -> None:
+    def test_poll_scheduled_sends_segments_without_persisting_chat_history_when_score_meets_threshold(self) -> None:
         profile_path = Path(self.tmp.name) / "profile.md"
         profile_path.write_text("用户偏好：晨会前提醒", encoding="utf-8")
         llm = _FakeLLM(
@@ -100,11 +100,7 @@ class ProactiveReminderServiceTest(unittest.TestCase):
         service.poll_scheduled()
 
         self.assertEqual(self.sent, [("ou_target", "第一条提醒"), ("ou_target", "第二条提醒")])
-        turns = self.db.recent_turns(limit=5)
-        self.assertEqual(len(turns), 1)
-        self.assertIn("score=80", turns[0].user_content)
-        self.assertIn("threshold=80", turns[0].user_content)
-        self.assertEqual(turns[0].assistant_content, "第一条提醒\n\n第二条提醒")
+        self.assertEqual(self.db.recent_turns(limit=5), [])
         first_call_messages = llm.calls[0]["messages"]
         self.assertIn("用户偏好：晨会前提醒", first_call_messages[1]["content"])
 
@@ -193,6 +189,97 @@ class ProactiveReminderServiceTest(unittest.TestCase):
         self.assertTrue(any("failed to read proactive user profile" in item for item in captured.output))
         first_call_messages = llm.calls[0]["messages"]
         self.assertIn('"loaded": false', first_call_messages[1]["content"])
+
+    def test_run_manual_trigger_bypasses_due_interval_without_persisting_chat_history(self) -> None:
+        llm = _FakeLLM(
+            [
+                _done_payload(score=85, message="定时提醒", reason="先跑一轮定时触发"),
+                _done_payload(score=90, message="手动提醒", reason="手动触发应绕过间隔限制"),
+            ]
+        )
+        clock_now = {"value": self.now}
+        service = ProactiveReminderService(
+            db=self.db,
+            llm_client=llm,
+            search_provider=_FakeSearchProvider(),
+            logger=logging.getLogger("test.proactive_service.manual_due"),
+            target_open_id="ou_target",
+            send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
+            lookahead_hours=24,
+            interval_minutes=60,
+            night_quiet_hint="23:00-08:00",
+            score_threshold=80,
+            max_steps=20,
+            user_profile_path="",
+            internet_search_top_k=3,
+            clock=lambda: clock_now["value"],
+        )
+
+        service.poll_scheduled()
+        clock_now["value"] = self.now + timedelta(minutes=30)
+        result = service.run_manual_trigger()
+
+        self.assertEqual(result.score, 90)
+        self.assertEqual(result.threshold, 80)
+        self.assertTrue(result.notify)
+        self.assertEqual(result.reason, "手动触发应绕过间隔限制")
+        self.assertEqual(result.message, "手动提醒")
+        self.assertEqual(
+            self.sent,
+            [("ou_target", "定时提醒"), ("ou_target", "手动提醒")],
+        )
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(self.db.recent_turns(limit=5), [])
+
+    def test_run_manual_trigger_returns_notify_false_without_send_or_history(self) -> None:
+        llm = _FakeLLM([_done_payload(score=79, message="提醒", reason="价值不足")])
+        service = ProactiveReminderService(
+            db=self.db,
+            llm_client=llm,
+            search_provider=_FakeSearchProvider(),
+            logger=logging.getLogger("test.proactive_service.manual_low_score"),
+            target_open_id="ou_target",
+            send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
+            lookahead_hours=24,
+            interval_minutes=60,
+            night_quiet_hint="23:00-08:00",
+            score_threshold=80,
+            max_steps=20,
+            user_profile_path="",
+            internet_search_top_k=3,
+            clock=lambda: self.now,
+        )
+
+        result = service.run_manual_trigger()
+
+        self.assertEqual(result.score, 79)
+        self.assertEqual(result.threshold, 80)
+        self.assertFalse(result.notify)
+        self.assertEqual(result.reason, "价值不足")
+        self.assertEqual(result.message, "提醒")
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.db.recent_turns(limit=5), [])
+
+    def test_run_manual_trigger_raises_when_llm_unavailable(self) -> None:
+        service = ProactiveReminderService(
+            db=self.db,
+            llm_client=None,
+            search_provider=_FakeSearchProvider(),
+            logger=logging.getLogger("test.proactive_service.manual_unavailable"),
+            target_open_id="ou_target",
+            send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
+            lookahead_hours=24,
+            interval_minutes=60,
+            night_quiet_hint="23:00-08:00",
+            score_threshold=80,
+            max_steps=20,
+            user_profile_path="",
+            internet_search_top_k=3,
+            clock=lambda: self.now,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "当前未配置 LLM"):
+            service.run_manual_trigger()
 
 
 if __name__ == "__main__":

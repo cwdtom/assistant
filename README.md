@@ -141,6 +141,7 @@ python main.py
 - `/help`
 - `/version`
 - `/profile refresh`
+- `/notify`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
 - `/thoughts add|list|get|update|delete`
@@ -152,6 +153,7 @@ python main.py
 - `/thoughts delete` 为软删除（状态置为 `删除`）
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
 - `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
+- `/notify` 会立即手动触发一次主动提醒决策；该命令会绕过定时间隔限制，但仍遵守 `PROACTIVE_REMINDER_SCORE_THRESHOLD`，并返回本次 `score/reason` 与是否发送的摘要
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
@@ -167,6 +169,7 @@ python main.py
 - 若启用 Feishu，ack-only 空计划分支仅发送 ACK/DONE reaction，不发送正文文本
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 - 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估；LLM 在 `done` 中返回 `score/message/reason`，且仅当 `score >= PROACTIVE_REMINDER_SCORE_THRESHOLD` 时向固定 `open_id` 主动发送 Feishu 文本
+- 主动提醒发送不会把系统生成的提醒内容写入 `chat_history`
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；首次飞书->本地对账会延后到一个 `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES` 周期后
 - Feishu 日历周期对账由 timer 驱动；当 `TIMER_ENABLED=false` 时不会执行周期对账
