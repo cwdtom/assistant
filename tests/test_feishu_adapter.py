@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import tempfile
 import threading
 import time
 import unittest
@@ -14,6 +15,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency in some environments
     P2ImMessageReceiveV1 = None
 
+from assistant_app.agent import AssistantAgent
+from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import (
     FeishuEventProcessor,
     FeishuLongConnectionRunner,
@@ -24,6 +27,7 @@ from assistant_app.feishu_adapter import (
     split_text_chunks,
 )
 from assistant_app.logging_setup import JsonLinesFormatter
+from assistant_app.schemas.proactive import ProactiveExecutionResult
 
 
 class _FakeAgent:
@@ -828,6 +832,58 @@ class FeishuAdapterTest(unittest.TestCase):
         self._wait_until(lambda: len(reactions) == 2)
         self.assertEqual(reactions, [("om_done_empty", "Get"), ("om_done_empty", "DONE")])
         self.assertEqual(sent, [])
+
+    def test_event_processor_notify_command_with_real_agent_skips_fallback_text(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+
+        def _runner() -> ProactiveExecutionResult:
+            return ProactiveExecutionResult(
+                score=81,
+                threshold=80,
+                notify=True,
+                reason="未来24小时有重要事项",
+                message="请准备明早会议的三个要点。",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = AssistantDB(f"{tmp}/assistant.db")
+            agent = AssistantAgent(
+                db=db,
+                llm_client=None,
+                proactive_notify_runner=_runner,
+                proactive_notify_target_open_id="ou_target",
+            )
+            logger_name = "test.feishu_adapter.notify_completed_without_text"
+            with self.assertLogs(logger_name, level="INFO") as captured:
+                processor = FeishuEventProcessor(
+                    agent=agent,
+                    send_text=lambda chat_id, text: sent.append((chat_id, text)),
+                    send_reaction=lambda message_id, emoji_type: reactions.append((message_id, emoji_type)),
+                    logger=logging.getLogger(logger_name),
+                )
+                payload = {
+                    "event": {
+                        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                        "message": {
+                            "message_type": "text",
+                            "chat_type": "p2p",
+                            "message_id": "om_notify_empty",
+                            "chat_id": "oc_1",
+                            "content": '{"text":"/notify"}',
+                        },
+                    }
+                }
+
+                processor.handle_event(payload)
+                self._wait_until(lambda: len(reactions) == 2)
+
+        self.assertEqual(reactions, [("om_notify_empty", "Get"), ("om_notify_empty", "DONE")])
+        self.assertEqual(sent, [])
+        self.assertIn(
+            "feishu response skipped: message_id=om_notify_empty completed_without_text",
+            "\n".join(captured.output),
+        )
 
     def test_event_processor_async_subtask_progress_rewrites_then_sends(self) -> None:
         sent: list[tuple[str, str]] = []

@@ -116,6 +116,13 @@ def _write_progress_line(
     stream.flush()
 
 
+def _print_assistant_response(response: str, stream: TextIO = sys.stdout) -> None:
+    if response == "":
+        return
+    stream.write(f"助手> {response}\n")
+    stream.flush()
+
+
 def _resolve_progress_color(color: str) -> tuple[str, str]:
     normalized = color.strip().lower()
     if normalized in {"", "gray", "grey"}:
@@ -363,7 +370,7 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"助手> 处理失败: {exc}")
                 continue
-            print(f"助手> {response}")
+            _print_assistant_response(response)
     finally:
         proactive_sender_holder["send"] = None
         if feishu_runner is not None:

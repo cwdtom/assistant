@@ -31,13 +31,8 @@ from assistant_app.schemas.commands import (
     parse_thoughts_list_command,
     parse_thoughts_update_command,
 )
-from assistant_app.schemas.proactive import ProactiveExecutionResult
 
 UNKNOWN_APP_VERSION = "unknown"
-PROACTIVE_NOTIFY_UNAVAILABLE_MESSAGE = (
-    "当前未启用主动提醒服务。"
-    "请检查 FEISHU_APP_ID、FEISHU_APP_SECRET、PROACTIVE_REMINDER_TARGET_OPEN_ID 与 LLM 配置。"
-)
 
 
 def help_text() -> str:
@@ -111,7 +106,7 @@ def handle_command(agent: Any, command: str) -> str:
     if command == "/notify":
         return _execute_proactive_notify_command(agent)
     if command.split(maxsplit=1)[0] == "/notify":
-        return "用法: /notify"
+        return _complete_proactive_notify(agent)
 
     if command == "/history list" or command.startswith("/history list "):
         history_list_command = parse_history_list_command(command)
@@ -257,7 +252,7 @@ def _execute_system_cli_command(agent: Any, *, parsed_command: CliCommandBase, r
 def _execute_proactive_notify_command(agent: Any) -> str:
     runner = agent._proactive_notify_runner
     if runner is None:
-        return PROACTIVE_NOTIFY_UNAVAILABLE_MESSAGE
+        return _complete_proactive_notify(agent)
     agent._app_logger.info(
         "proactive manual trigger started",
         extra={
@@ -278,7 +273,7 @@ def _execute_proactive_notify_command(agent: Any) -> str:
                 },
             },
         )
-        return f"执行主动提醒失败: {exc}"
+        return _complete_proactive_notify(agent)
     agent._app_logger.info(
         "proactive manual trigger completed",
         extra={
@@ -291,7 +286,7 @@ def _execute_proactive_notify_command(agent: Any) -> str:
             },
         },
     )
-    return _render_proactive_notify_result(result)
+    return _complete_proactive_notify(agent)
 
 
 def _execute_thoughts_cli_command(
@@ -352,14 +347,6 @@ def _fail_thoughts_command(agent: Any, *, action: str, exc: Exception) -> str:
     return f"thoughts 命令执行失败: {exc}"
 
 
-def _render_proactive_notify_result(result: ProactiveExecutionResult) -> str:
-    lines = [
-        "主动提醒执行完成：",
-        f"score={result.score}",
-        f"threshold={result.threshold}",
-        f"notify={'yes' if result.notify else 'no'}",
-        f"reason={result.reason}",
-    ]
-    if result.message:
-        lines.append(f"message={result.message}")
-    return "\n".join(lines)
+def _complete_proactive_notify(agent: Any) -> str:
+    agent._last_task_completed = True
+    return ""

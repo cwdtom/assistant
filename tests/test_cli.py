@@ -17,6 +17,7 @@ from assistant_app.cli import (
     _is_feishu_calendar_sync_configured,
     _is_feishu_configured,
     _is_proactive_reminder_configured,
+    _print_assistant_response,
     _resolve_progress_color,
     _should_show_waiting,
 )
@@ -96,6 +97,20 @@ class CLIFeedbackTest(unittest.TestCase):
 
         self.assertEqual(result, "echo:/schedule list")
         self.assertEqual(stream.getvalue(), "")
+
+    def test_print_assistant_response_skips_empty_response(self) -> None:
+        stream = io.StringIO()
+
+        _print_assistant_response("", stream=stream)
+
+        self.assertEqual(stream.getvalue(), "")
+
+    def test_print_assistant_response_renders_non_empty_response(self) -> None:
+        stream = io.StringIO()
+
+        _print_assistant_response("echo:/notify", stream=stream)
+
+        self.assertEqual(stream.getvalue(), "助手> echo:/notify\n")
 
     def test_resolve_progress_color_off(self) -> None:
         prefix, suffix = _resolve_progress_color("off")
