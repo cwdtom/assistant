@@ -11,6 +11,7 @@ from assistant_app.schemas.tools import (
     InternetSearchArgs,
     InternetSearchFetchUrlArgs,
     coerce_history_action_payload,
+    coerce_internet_search_action_payload,
     coerce_schedule_action_payload,
     coerce_system_action_payload,
     coerce_thoughts_action_payload,
@@ -53,6 +54,8 @@ _COMPAT_ACTION_BY_TOOL_NAME: dict[str, str] = {
     "thoughts_update": "update",
     "thoughts_delete": "delete",
     "system_date": "date",
+    "internet_search_tool": "search",
+    "internet_search_fetch_url": "fetch_url",
 }
 
 _COMPAT_FIELDS_BY_TOOL_NAME: dict[str, tuple[str, ...]] = {
@@ -90,6 +93,8 @@ _COMPAT_FIELDS_BY_TOOL_NAME: dict[str, tuple[str, ...]] = {
     "thoughts_update": ("id", "content", "status"),
     "thoughts_delete": ("id",),
     "system_date": (),
+    "internet_search_tool": ("query",),
+    "internet_search_fetch_url": ("url",),
 }
 
 
@@ -102,7 +107,7 @@ def serialize_runtime_action_input(*, action_tool: str, payload: RuntimePlannerA
     if payload_tool != action_tool:
         raise ValueError("payload tool does not match action tool")
 
-    if action_tool in {"schedule", "history", "thoughts", "system"}:
+    if action_tool in {"schedule", "history", "thoughts", "system", "internet_search"}:
         compat_action = _COMPAT_ACTION_BY_TOOL_NAME.get(payload.tool_name)
         if compat_action is None:
             raise ValueError("unsupported compat action payload")
@@ -113,17 +118,6 @@ def serialize_runtime_action_input(*, action_tool: str, payload: RuntimePlannerA
                 compat_payload[field_name] = arguments[field_name]
         return json.dumps(compat_payload, ensure_ascii=False, separators=(",", ":"))
 
-    if action_tool == "internet_search":
-        if payload.tool_name == "internet_search_tool" and isinstance(payload.arguments, InternetSearchArgs):
-            return payload.arguments.query
-        if payload.tool_name == "internet_search_fetch_url" and isinstance(
-            payload.arguments, InternetSearchFetchUrlArgs
-        ):
-            return json.dumps(
-                {"action": "fetch_url", "url": payload.arguments.url},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
     raise ValueError("unsupported runtime action payload")
 
 
@@ -132,7 +126,7 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
     if not normalized_input:
         return None
 
-    if action_tool in {"schedule", "history", "thoughts", "system"}:
+    if action_tool in {"schedule", "history", "thoughts", "system", "internet_search"}:
         if normalized_input.startswith("/"):
             command_payload = parse_tool_command_payload(normalized_input)
             if command_payload is None:
@@ -142,49 +136,33 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
             return command_payload
 
         parsed_payload = parse_json_object(normalized_input)
-        if not isinstance(parsed_payload, dict):
-            return None
-        try:
-            if action_tool == "schedule":
-                return coerce_schedule_action_payload(parsed_payload)
-            if action_tool == "history":
-                return coerce_history_action_payload(parsed_payload)
-            if action_tool == "system":
-                return coerce_system_action_payload(parsed_payload)
-            return coerce_thoughts_action_payload(parsed_payload)
-        except (ValidationError, ValueError):
-            return None
-
-    if action_tool == "internet_search":
-        parsed_payload = parse_json_object(normalized_input)
         if isinstance(parsed_payload, dict):
-            action = str(parsed_payload.get("action") or "").strip().lower()
-            if action != "fetch_url":
+            try:
+                if action_tool == "schedule":
+                    return coerce_schedule_action_payload(parsed_payload)
+                if action_tool == "history":
+                    return coerce_history_action_payload(parsed_payload)
+                if action_tool == "system":
+                    return coerce_system_action_payload(parsed_payload)
+                if action_tool == "internet_search":
+                    return coerce_internet_search_action_payload(parsed_payload)
+                return coerce_thoughts_action_payload(parsed_payload)
+            except (ValidationError, ValueError):
                 return None
-            raw_url = parsed_payload.get("url")
-            if not isinstance(raw_url, str):
-                return None
+        if action_tool == "internet_search":
             try:
                 return RuntimePlannerActionPayload(
                     tool_name="internet_search_fetch_url",
-                    arguments=InternetSearchFetchUrlArgs(url=raw_url),
+                    arguments=InternetSearchFetchUrlArgs(url=normalized_input),
                 )
             except ValidationError:
-                return None
-
-        try:
-            return RuntimePlannerActionPayload(
-                tool_name="internet_search_fetch_url",
-                arguments=InternetSearchFetchUrlArgs(url=normalized_input),
-            )
-        except ValidationError:
-            try:
-                return RuntimePlannerActionPayload(
-                    tool_name="internet_search_tool",
-                    arguments=InternetSearchArgs(query=normalized_input),
-                )
-            except ValidationError:
-                return None
+                try:
+                    return RuntimePlannerActionPayload(
+                        tool_name="internet_search_tool",
+                        arguments=InternetSearchArgs(query=normalized_input),
+                    )
+                except ValidationError:
+                    return None
 
     return None
 

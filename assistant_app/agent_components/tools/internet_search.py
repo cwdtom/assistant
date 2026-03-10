@@ -15,7 +15,12 @@ from assistant_app.agent_components.render_helpers import (
 )
 from assistant_app.schemas.domain import HttpUrlValue
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
-from assistant_app.schemas.tools import InternetSearchArgs, InternetSearchFetchUrlArgs
+from assistant_app.schemas.tools import (
+    InternetSearchArgs,
+    InternetSearchFetchUrlArgs,
+    coerce_internet_search_action_payload,
+)
+from assistant_app.schemas.validation_errors import first_validation_issue
 
 
 def execute_internet_search_planner_action(
@@ -37,29 +42,36 @@ def execute_internet_search_planner_action(
             return typed_observation
     payload = _try_parse_json(normalized_input)
     if isinstance(payload, dict):
-        action = str(payload.get("action") or "").strip().lower()
-        if action == "fetch_url":
-            runtime_payload_or_observation = _coerce_fetch_url_runtime_payload(
-                payload,
-                raw_input=normalized_input,
-            )
-            if isinstance(runtime_payload_or_observation, PlannerObservation):
-                return runtime_payload_or_observation
-            typed_observation = _execute_typed_internet_search_action(
-                agent,
-                action_payload=runtime_payload_or_observation,
-                raw_input=normalized_input,
-                fetch_main_text=fetch_main_text,
-            )
-            if typed_observation is not None:
-                return typed_observation
-        if action:
+        try:
+            runtime_payload = coerce_internet_search_action_payload(payload)
+        except ValidationError as exc:
             return PlannerObservation(
                 tool="internet_search",
                 input_text=action_input,
                 ok=False,
-                result="internet_search.action 非法。",
+                result=_internet_search_validation_error_text(payload=payload, exc=exc),
             )
+        except ValueError as exc:
+            return PlannerObservation(
+                tool="internet_search",
+                input_text=action_input,
+                ok=False,
+                result=str(exc).strip() or "internet_search.action 非法。",
+            )
+        typed_observation = _execute_typed_internet_search_action(
+            agent,
+            action_payload=runtime_payload,
+            raw_input=normalized_input,
+            fetch_main_text=fetch_main_text,
+        )
+        if typed_observation is not None:
+            return typed_observation
+        return PlannerObservation(
+            tool="internet_search",
+            input_text=action_input,
+            ok=False,
+            result="internet_search.action 非法。",
+        )
     elif _is_direct_http_url(normalized_input):
         try:
             runtime_payload = RuntimePlannerActionPayload(
@@ -175,34 +187,6 @@ def _execute_internet_search_query_action(
     return PlannerObservation(tool="internet_search", input_text=normalized_query, ok=True, result=formatted)
 
 
-def _coerce_fetch_url_runtime_payload(
-    payload: dict[str, Any],
-    *,
-    raw_input: str,
-) -> RuntimePlannerActionPayload | PlannerObservation:
-    raw_url = str(payload.get("url") or "").strip()
-    if not raw_url:
-        return PlannerObservation(
-            tool="internet_search",
-            input_text=raw_input,
-            ok=False,
-            result="internet_search.fetch_url 缺少 url。",
-        )
-    try:
-        url = HttpUrlValue.model_validate({"url": raw_url}).url
-    except ValidationError:
-        return PlannerObservation(
-            tool="internet_search",
-            input_text=raw_input,
-            ok=False,
-            result="internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。",
-        )
-    return RuntimePlannerActionPayload(
-        tool_name="internet_search_fetch_url",
-        arguments=InternetSearchFetchUrlArgs(url=url),
-    )
-
-
 def _execute_internet_search_fetch_url(
     agent: Any,
     *,
@@ -270,3 +254,24 @@ def _execute_internet_search_fetch_url(
         ok=True,
         result=json.dumps(result_payload, ensure_ascii=False, separators=(",", ":")),
     )
+
+
+def _internet_search_validation_error_text(*, payload: dict[str, Any], exc: ValidationError) -> str:
+    action = str(payload.get("action") or "").strip().lower()
+    issue = first_validation_issue(exc)
+    if action == "search":
+        if issue.field == "query":
+            return "internet_search.search query 不能为空。"
+        return "internet_search.action 非法。"
+    if action == "fetch_url":
+        if issue.field == "url":
+            raw_url = str(payload.get("url") or "").strip()
+            if not raw_url:
+                return "internet_search.fetch_url 缺少 url。"
+            try:
+                HttpUrlValue.model_validate({"url": raw_url}).url
+            except ValidationError:
+                return "internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。"
+            return "internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。"
+        return "internet_search.action 非法。"
+    return "internet_search.action 非法。"

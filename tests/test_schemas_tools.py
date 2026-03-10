@@ -10,8 +10,11 @@ from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import build_thought_tool_schemas, normalize_thought_tool_call
 from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
 from assistant_app.schemas.tools import (
+    InternetSearchArgs,
+    InternetSearchFetchUrlArgs,
     ProactiveHistoryListArgs,
     coerce_history_action_payload,
+    coerce_internet_search_action_payload,
     coerce_schedule_action_payload,
     coerce_system_action_payload,
     coerce_thoughts_action_payload,
@@ -186,6 +189,18 @@ class ToolSchemaTest(unittest.TestCase):
             decision.next_action.payload,
             coerce_history_action_payload({'action': 'search', 'keyword': '周报', 'limit': '5'}),
         )
+
+    def test_coerce_internet_search_action_payload_search(self) -> None:
+        payload = coerce_internet_search_action_payload({'action': 'search', 'query': 'OpenAI Responses API'})
+
+        self.assertEqual(payload.tool_name, 'internet_search_tool')
+        self.assertEqual(payload.arguments, InternetSearchArgs(query='OpenAI Responses API'))
+
+    def test_coerce_internet_search_action_payload_fetch_url(self) -> None:
+        payload = coerce_internet_search_action_payload({'action': 'fetch_url', 'url': 'https://example.com'})
+
+        self.assertEqual(payload.tool_name, 'internet_search_fetch_url')
+        self.assertEqual(payload.arguments, InternetSearchFetchUrlArgs(url='https://example.com'))
 
     def test_normalize_thought_tool_call_thoughts_payload_matches_system_action_contract(self) -> None:
         decision = normalize_thought_tool_call(

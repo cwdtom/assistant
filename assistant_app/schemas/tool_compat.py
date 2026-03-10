@@ -10,6 +10,8 @@ from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.schemas.tool_args import (
     HistoryListArgs,
     HistorySearchArgs,
+    InternetSearchArgs,
+    InternetSearchFetchUrlArgs,
     ScheduleAddArgs,
     ScheduleIdArgs,
     ScheduleListArgs,
@@ -406,6 +408,38 @@ class ThoughtsUpdateCompatPayload(FrozenModel):
         )
 
 
+class InternetSearchCompatPayload(FrozenModel):
+    action: Literal["search"]
+    query: str = Field(min_length=1)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def normalize_query(cls, value: Any) -> str:
+        return _normalize_required_text(value, field_name="query")
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="internet_search_tool",
+            arguments=InternetSearchArgs.model_validate({"query": self.query}),
+        )
+
+
+class InternetSearchFetchUrlCompatPayload(FrozenModel):
+    action: Literal["fetch_url"]
+    url: str = Field(min_length=1)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def normalize_url(cls, value: Any) -> str:
+        return _normalize_required_text(value, field_name="url")
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="internet_search_fetch_url",
+            arguments=InternetSearchFetchUrlArgs.model_validate({"url": self.url}),
+        )
+
+
 class SystemDateCompatPayload(FrozenModel):
     action: Literal["date"]
 
@@ -433,6 +467,10 @@ ThoughtsCompatPayload = Annotated[
     ThoughtsAddCompatPayload | ThoughtsListCompatPayload | ThoughtsIdCompatPayload | ThoughtsUpdateCompatPayload,
     Field(discriminator="action"),
 ]
+InternetSearchCompatPayloadUnion = Annotated[
+    InternetSearchCompatPayload | InternetSearchFetchUrlCompatPayload,
+    Field(discriminator="action"),
+]
 SystemCompatPayload = Annotated[
     SystemDateCompatPayload,
     Field(discriminator="action"),
@@ -441,6 +479,9 @@ SystemCompatPayload = Annotated[
 _HISTORY_COMPAT_ADAPTER: TypeAdapter[HistoryCompatPayload] = TypeAdapter(HistoryCompatPayload)
 _SCHEDULE_COMPAT_ADAPTER: TypeAdapter[ScheduleCompatPayload] = TypeAdapter(ScheduleCompatPayload)
 _THOUGHTS_COMPAT_ADAPTER: TypeAdapter[ThoughtsCompatPayload] = TypeAdapter(ThoughtsCompatPayload)
+_INTERNET_SEARCH_COMPAT_ADAPTER: TypeAdapter[InternetSearchCompatPayloadUnion] = TypeAdapter(
+    InternetSearchCompatPayloadUnion
+)
 _SYSTEM_COMPAT_ADAPTER: TypeAdapter[SystemCompatPayload] = TypeAdapter(SystemCompatPayload)
 
 
@@ -460,6 +501,15 @@ def coerce_thoughts_action_payload(raw_payload: dict[str, Any]) -> RuntimePlanne
     if action not in {"add", "list", "get", "update", "delete"}:
         raise ValueError("thoughts.action 非法。")
     compat_payload = _THOUGHTS_COMPAT_ADAPTER.validate_python(normalized_payload)
+    return compat_payload.to_runtime_payload()
+
+
+def coerce_internet_search_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    normalized_payload = _normalize_action_payload(raw_payload)
+    action = normalized_payload.get("action")
+    if action not in {"search", "fetch_url"}:
+        raise ValueError("internet_search.action 非法。")
+    compat_payload = _INTERNET_SEARCH_COMPAT_ADAPTER.validate_python(normalized_payload)
     return compat_payload.to_runtime_payload()
 
 
@@ -494,6 +544,8 @@ def parse_json_object(raw_arguments: Any) -> dict[str, Any] | None:
 __all__ = [
     "HistoryListCompatPayload",
     "HistorySearchCompatPayload",
+    "InternetSearchCompatPayload",
+    "InternetSearchFetchUrlCompatPayload",
     "ScheduleAddCompatPayload",
     "ScheduleIdCompatPayload",
     "ScheduleListCompatPayload",
@@ -506,6 +558,7 @@ __all__ = [
     "ThoughtsListCompatPayload",
     "ThoughtsUpdateCompatPayload",
     "coerce_history_action_payload",
+    "coerce_internet_search_action_payload",
     "coerce_schedule_action_payload",
     "coerce_system_action_payload",
     "coerce_thoughts_action_payload",

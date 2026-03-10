@@ -28,6 +28,7 @@ from assistant_app.schemas.planner import ToolReplyPayload
 from assistant_app.schemas.proactive import ProactiveExecutionResult
 from assistant_app.schemas.routing import JsonPlannerToolRoute, RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
+    InternetSearchArgs,
     HistorySearchArgs,
     InternetSearchFetchUrlArgs,
     ScheduleAddArgs,
@@ -35,6 +36,7 @@ from assistant_app.schemas.tools import (
     SystemDateArgs,
     ThoughtsUpdateArgs,
     coerce_history_action_payload,
+    coerce_internet_search_action_payload,
     coerce_schedule_action_payload,
     coerce_system_action_payload,
     coerce_thoughts_action_payload,
@@ -2174,7 +2176,14 @@ class AssistantAgentTest(unittest.TestCase):
             {
                 "status": "continue",
                 "current_step": "",
-                "next_action": {"tool": "internet_search", "input": "OpenAI Responses API"},
+                "next_action": {
+                    "tool": "internet_search",
+                    "input": json.dumps(
+                        {"action": "search", "query": "OpenAI Responses API"},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
                 "question": None,
                 "response": None,
             },
@@ -2463,7 +2472,14 @@ class AssistantAgentTest(unittest.TestCase):
         fake_llm = FakeLLMClient(
             responses=[
                 _planner_planned(["搜索资料"]),
-                _thought_continue("internet_search", "OpenAI Responses API"),
+                _thought_continue(
+                    "internet_search",
+                    json.dumps(
+                        {"action": "search", "query": "OpenAI Responses API"},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
                 _planner_done("我找到了 3 条相关资料。"),
             ]
         )
@@ -2519,7 +2535,14 @@ class AssistantAgentTest(unittest.TestCase):
         )
 
         with self.assertLogs("assistant_app.app", level="INFO") as captured:
-            observation = agent._execute_planner_tool(action_tool="internet_search", action_input="OpenAI")
+            observation = agent._execute_planner_tool(
+                action_tool="internet_search",
+                action_input=json.dumps(
+                    {"action": "search", "query": "OpenAI"},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
 
         self.assertFalse(observation.ok)
         self.assertIn("搜索失败", observation.result)
@@ -2917,6 +2940,19 @@ class AssistantAgentTest(unittest.TestCase):
         compat_payload = coerce_system_action_payload({"action": "date"})
 
         self.assertEqual(command_payload, compat_payload)
+
+    def test_internet_search_json_payload_matches_runtime_payload(self) -> None:
+        compat_payload = coerce_internet_search_action_payload(
+            {"action": "search", "query": "OpenAI Responses API"}
+        )
+
+        self.assertEqual(
+            compat_payload,
+            RuntimePlannerActionPayload(
+                tool_name="internet_search_tool",
+                arguments=InternetSearchArgs(query="OpenAI Responses API"),
+            ),
+        )
 
     def test_schedule_add_cli_and_json_payload_share_runtime_payload(self) -> None:
         command_payload = parse_tool_command_payload(
