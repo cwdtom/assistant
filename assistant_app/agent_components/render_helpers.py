@@ -187,6 +187,9 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
     if tool == "thoughts":
         if text.startswith("thoughts.") or text.startswith("未找到想法 #") or text.startswith("暂无想法"):
             return False
+    if tool == "system":
+        if text.startswith("system."):
+            return False
 
     return True
 

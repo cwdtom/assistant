@@ -31,6 +31,7 @@ Current MVP constraints:
 Supported input forms in CLI:
 - `/help`
 - `/version`
+- `/date`
 - `/profile refresh`
 - `/notify`
 - `/history list [--limit <>=1>]`
@@ -151,7 +152,7 @@ Optional runtime flags (all supported in `.env`):
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
 - Plan phase allows empty `plan` as ack-only completion (for short confirmation/thanks messages like `谢谢/好的/明白了`); this path skips thought/replan, skips `chat_history` persistence, and does not emit `任务目标：...` progress message.
-- Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）+ `thoughts` group（展开为 `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`，用于记录碎片想法）.
+- Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）+ `thoughts` group（展开为 `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`，用于记录碎片想法）+ `system` group（展开为 `system_date`，用于读取当前本地时间）.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。

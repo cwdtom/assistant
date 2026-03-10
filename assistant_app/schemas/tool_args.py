@@ -205,6 +205,10 @@ class InternetSearchFetchUrlArgs(ThoughtToolArgsBase):
         return HttpUrlValue.model_validate({"url": value}).url
 
 
+class SystemDateArgs(ThoughtToolArgsBase):
+    pass
+
+
 class AskUserArgs(ThoughtToolArgsBase):
     question: str = Field(min_length=1, description="单个澄清问题文本。")
 
@@ -293,6 +297,7 @@ THOUGHT_TOOL_ARGS_MODELS: dict[str, type[ThoughtToolArgsBase]] = {
     "thoughts_delete": ThoughtsIdArgs,
     "internet_search_tool": InternetSearchArgs,
     "internet_search_fetch_url": InternetSearchFetchUrlArgs,
+    "system_date": SystemDateArgs,
     "ask_user": AskUserArgs,
     "done": DoneArgs,
 }
@@ -348,6 +353,7 @@ __all__ = [
     "ScheduleRepeatArgs",
     "ScheduleUpdateArgs",
     "ScheduleViewArgs",
+    "SystemDateArgs",
     "THOUGHT_TOOL_ARGS_MODELS",
     "ThoughtToolArgsBase",
     "ThoughtsAddArgs",

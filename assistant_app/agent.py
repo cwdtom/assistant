@@ -43,6 +43,9 @@ from assistant_app.agent_components.tools.internet_search import (
 from assistant_app.agent_components.tools.schedule import (
     execute_schedule_system_action as _execute_schedule_system_action_impl,
 )
+from assistant_app.agent_components.tools.system import (
+    execute_system_system_action as _execute_system_system_action_impl,
+)
 from assistant_app.agent_components.tools.thoughts import (
     execute_thoughts_system_action as _execute_thoughts_system_action_impl,
 )
@@ -160,6 +163,10 @@ class AssistantAgent:
                 observation_tool="history_search",
             ),
             thoughts_executor=lambda payload, raw_input: self._execute_thoughts_system_action(
+                payload,
+                raw_input=raw_input,
+            ),
+            system_executor=lambda payload, raw_input: self._execute_system_system_action(
                 payload,
                 raw_input=raw_input,
             ),
@@ -357,6 +364,15 @@ class AssistantAgent:
         raw_input: str,
     ) -> PlannerObservation:
         return _execute_thoughts_system_action_impl(self, payload, raw_input=raw_input)
+
+    def _execute_system_system_action(
+        self,
+        payload: dict[str, Any] | RuntimePlannerActionPayload,
+        *,
+        raw_input: str,
+        source: str = "planner",
+    ) -> PlannerObservation:
+        return _execute_system_system_action_impl(self, payload, raw_input=raw_input, source=source)
 
     def _execute_internet_search_planner_action(
         self,

@@ -12,6 +12,7 @@ from assistant_app.schemas.tools import (
     InternetSearchFetchUrlArgs,
     coerce_history_action_payload,
     coerce_schedule_action_payload,
+    coerce_system_action_payload,
     coerce_thoughts_action_payload,
     parse_json_object,
 )
@@ -31,6 +32,7 @@ _ACTION_TOOL_BY_TOOL_NAME: dict[str, str] = {
     "thoughts_get": "thoughts",
     "thoughts_update": "thoughts",
     "thoughts_delete": "thoughts",
+    "system_date": "system",
     "internet_search_tool": "internet_search",
     "internet_search_fetch_url": "internet_search",
 }
@@ -50,6 +52,7 @@ _COMPAT_ACTION_BY_TOOL_NAME: dict[str, str] = {
     "thoughts_get": "get",
     "thoughts_update": "update",
     "thoughts_delete": "delete",
+    "system_date": "date",
 }
 
 _COMPAT_FIELDS_BY_TOOL_NAME: dict[str, tuple[str, ...]] = {
@@ -86,6 +89,7 @@ _COMPAT_FIELDS_BY_TOOL_NAME: dict[str, tuple[str, ...]] = {
     "thoughts_get": ("id",),
     "thoughts_update": ("id", "content", "status"),
     "thoughts_delete": ("id",),
+    "system_date": (),
 }
 
 
@@ -98,7 +102,7 @@ def serialize_runtime_action_input(*, action_tool: str, payload: RuntimePlannerA
     if payload_tool != action_tool:
         raise ValueError("payload tool does not match action tool")
 
-    if action_tool in {"schedule", "history", "thoughts"}:
+    if action_tool in {"schedule", "history", "thoughts", "system"}:
         compat_action = _COMPAT_ACTION_BY_TOOL_NAME.get(payload.tool_name)
         if compat_action is None:
             raise ValueError("unsupported compat action payload")
@@ -128,7 +132,7 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
     if not normalized_input:
         return None
 
-    if action_tool in {"schedule", "history", "thoughts"}:
+    if action_tool in {"schedule", "history", "thoughts", "system"}:
         if normalized_input.startswith("/"):
             command_payload = parse_tool_command_payload(normalized_input)
             if command_payload is None:
@@ -145,6 +149,8 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
                 return coerce_schedule_action_payload(parsed_payload)
             if action_tool == "history":
                 return coerce_history_action_payload(parsed_payload)
+            if action_tool == "system":
+                return coerce_system_action_payload(parsed_payload)
             return coerce_thoughts_action_payload(parsed_payload)
         except (ValidationError, ValueError):
             return None

@@ -28,12 +28,14 @@ from assistant_app.schemas.tools import (
     ScheduleRepeatArgs,
     ScheduleUpdateArgs,
     ScheduleViewArgs,
+    SystemDateArgs,
     ThoughtsAddArgs,
     ThoughtsIdArgs,
     ThoughtsListArgs,
     ThoughtsUpdateArgs,
     coerce_history_action_payload,
     coerce_schedule_action_payload,
+    coerce_system_action_payload,
     coerce_thoughts_action_payload,
 )
 
@@ -57,6 +59,12 @@ class HistorySearchCommand(CliCommandBase):
     action_tool: Literal["history"] = "history"
     tool_name: Literal["history_search"] = "history_search"
     arguments: HistorySearchArgs
+
+
+class DateCommand(CliCommandBase):
+    action_tool: Literal["system"] = "system"
+    tool_name: Literal["system_date"] = "system_date"
+    arguments: SystemDateArgs = Field(default_factory=SystemDateArgs)
 
 
 class ThoughtsAddCommand(CliCommandBase):
@@ -179,6 +187,17 @@ def _coerce_thoughts_command_arguments(
     return None
 
 
+def _coerce_system_command_arguments(raw_payload: dict[str, object]) -> SystemDateArgs | None:
+    try:
+        runtime_payload = coerce_system_action_payload(raw_payload)
+    except (ValidationError, ValueError):
+        return None
+    arguments = runtime_payload.arguments
+    if isinstance(arguments, SystemDateArgs):
+        return arguments
+    return None
+
+
 def parse_history_list_command(command: str) -> HistoryListCommand | None:
     history_limit = _parse_history_list_limit(command)
     if history_limit is None:
@@ -204,6 +223,15 @@ def parse_history_search_command(command: str) -> HistorySearchCommand | None:
     if not isinstance(arguments, HistorySearchArgs):
         return None
     return HistorySearchCommand(arguments=arguments)
+
+
+def parse_date_command(command: str) -> DateCommand | None:
+    if command != "/date":
+        return None
+    arguments = _coerce_system_command_arguments({"action": "date"})
+    if not isinstance(arguments, SystemDateArgs):
+        return None
+    return DateCommand(arguments=arguments)
 
 
 def parse_thoughts_add_command(command: str) -> ThoughtsAddCommand | None:
@@ -269,7 +297,9 @@ def parse_thoughts_delete_command(command: str) -> ThoughtsDeleteCommand | None:
 
 def parse_tool_command_payload(command: str) -> RuntimePlannerActionPayload | None:
     parsed_command: CliCommandBase | None = None
-    if command == "/history list" or command.startswith("/history list "):
+    if command == "/date" or command.startswith("/date "):
+        parsed_command = parse_date_command(command)
+    elif command == "/history list" or command.startswith("/history list "):
         parsed_command = parse_history_list_command(command)
     elif command.startswith("/history search "):
         parsed_command = parse_history_search_command(command)
@@ -439,6 +469,7 @@ def parse_schedule_repeat_command(command: str) -> ScheduleRepeatCommand | None:
 
 __all__ = [
     "CliCommandBase",
+    "DateCommand",
     "HistoryListCommand",
     "HistorySearchCommand",
     "ScheduleAddCommand",
@@ -453,6 +484,7 @@ __all__ = [
     "ThoughtsGetCommand",
     "ThoughtsListCommand",
     "ThoughtsUpdateCommand",
+    "parse_date_command",
     "parse_history_list_command",
     "parse_history_search_command",
     "parse_schedule_add_command",

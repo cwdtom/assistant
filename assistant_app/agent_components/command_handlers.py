@@ -17,6 +17,7 @@ from assistant_app.schemas.commands import (
     ThoughtsUpdateCommand,
     parse_history_list_command,
     parse_history_search_command,
+    parse_date_command,
     parse_schedule_add_command,
     parse_schedule_delete_command,
     parse_schedule_get_command,
@@ -44,6 +45,7 @@ def help_text() -> str:
         "可用命令:\n"
         "/help\n"
         "/version\n"
+        "/date\n"
         "/profile refresh\n"
         "/notify\n"
         "/history list [--limit <>=1>]\n"
@@ -80,6 +82,13 @@ def handle_command(agent: Any, command: str) -> str:
         return f"当前版本：v{agent._app_version}"
     if command.split(maxsplit=1)[0] == "/version":
         return "用法: /version"
+    if command == "/date":
+        date_command = parse_date_command(command)
+        if date_command is None:
+            return "用法: /date"
+        return _execute_system_cli_command(agent, parsed_command=date_command, raw_input=command)
+    if command.split(maxsplit=1)[0] == "/date":
+        return "用法: /date"
 
     if command == "/profile refresh":
         runner = agent._user_profile_refresh_runner
@@ -234,6 +243,14 @@ def _execute_schedule_cli_command(agent: Any, *, parsed_command: CliCommandBase,
         agent,
         payload=parsed_command.to_runtime_payload(),
         raw_input=raw_input,
+    ).result
+
+
+def _execute_system_cli_command(agent: Any, *, parsed_command: CliCommandBase, raw_input: str) -> str:
+    return agent._execute_system_system_action(
+        parsed_command.to_runtime_payload(),
+        raw_input=raw_input,
+        source="cli",
     ).result
 
 

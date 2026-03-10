@@ -140,6 +140,7 @@ python main.py
 ## Command Overview
 - `/help`
 - `/version`
+- `/date`
 - `/profile refresh`
 - `/notify`
 - `/schedule add|list|get|update|delete|repeat|view`
@@ -147,6 +148,7 @@ python main.py
 - `/thoughts add|list|get|update|delete`
 
 说明：
+- `/date` 无参数，返回当前本地时间，格式为 `YYYY-MM-DD HH:MM:SS`
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
 - `/thoughts list` 支持 `--status <未完成|完成|删除>`；默认仅展示 `未完成|完成`
@@ -158,7 +160,7 @@ python main.py
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
-- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法）
+- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法），`system` -> `system_date`（读取当前本地时间）
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
 - 当 rerank 请求失败时，会自动降级重试为非 rerank Bocha 搜索
 - `internet_search` 在收到裸 `http/https` URL 输入时会自动按 `fetch_url` 路径执行（不再按关键词搜索）

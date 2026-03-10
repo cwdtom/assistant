@@ -34,7 +34,7 @@ THOUGHT_PROMPT = """
 可用工具名：
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
 - internet_search_tool、internet_search_fetch_url、history_list、history_search
-- thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete
+- thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete、system_date
 - ask_user、done
 
 规则：
@@ -68,6 +68,7 @@ _THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("thoughts_get", "记录碎片想法：查看单条想法详情。", ("current_step",)),
     ("thoughts_update", "记录碎片想法：更新内容，并可选更新状态。", ("current_step",)),
     ("thoughts_delete", "记录碎片想法：软删除（状态置为删除）。", ("current_step",)),
+    ("system_date", "读取当前本地时间，返回 YYYY-MM-DD HH:MM:SS。", ("current_step",)),
     ("ask_user", "向用户提一个澄清问题。", ()),
     ("done", "声明当前子任务完成，并提供本轮最终结论。", ()),
 )

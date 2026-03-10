@@ -16,6 +16,7 @@ from assistant_app.schemas.tool_args import (
     ScheduleRepeatArgs,
     ScheduleUpdateArgs,
     ScheduleViewArgs,
+    SystemDateArgs,
     ThoughtsAddArgs,
     ThoughtsIdArgs,
     ThoughtsListArgs,
@@ -405,6 +406,16 @@ class ThoughtsUpdateCompatPayload(FrozenModel):
         )
 
 
+class SystemDateCompatPayload(FrozenModel):
+    action: Literal["date"]
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="system_date",
+            arguments=SystemDateArgs(),
+        )
+
+
 HistoryCompatPayload = Annotated[
     HistoryListCompatPayload | HistorySearchCompatPayload,
     Field(discriminator="action"),
@@ -422,10 +433,15 @@ ThoughtsCompatPayload = Annotated[
     ThoughtsAddCompatPayload | ThoughtsListCompatPayload | ThoughtsIdCompatPayload | ThoughtsUpdateCompatPayload,
     Field(discriminator="action"),
 ]
+SystemCompatPayload = Annotated[
+    SystemDateCompatPayload,
+    Field(discriminator="action"),
+]
 
 _HISTORY_COMPAT_ADAPTER: TypeAdapter[HistoryCompatPayload] = TypeAdapter(HistoryCompatPayload)
 _SCHEDULE_COMPAT_ADAPTER: TypeAdapter[ScheduleCompatPayload] = TypeAdapter(ScheduleCompatPayload)
 _THOUGHTS_COMPAT_ADAPTER: TypeAdapter[ThoughtsCompatPayload] = TypeAdapter(ThoughtsCompatPayload)
+_SYSTEM_COMPAT_ADAPTER: TypeAdapter[SystemCompatPayload] = TypeAdapter(SystemCompatPayload)
 
 
 def coerce_history_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
@@ -444,6 +460,15 @@ def coerce_thoughts_action_payload(raw_payload: dict[str, Any]) -> RuntimePlanne
     if action not in {"add", "list", "get", "update", "delete"}:
         raise ValueError("thoughts.action 非法。")
     compat_payload = _THOUGHTS_COMPAT_ADAPTER.validate_python(normalized_payload)
+    return compat_payload.to_runtime_payload()
+
+
+def coerce_system_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    normalized_payload = _normalize_action_payload(raw_payload)
+    action = normalized_payload.get("action")
+    if action != "date":
+        raise ValueError("system.action 非法。")
+    compat_payload = _SYSTEM_COMPAT_ADAPTER.validate_python(normalized_payload)
     return compat_payload.to_runtime_payload()
 
 
@@ -475,12 +500,14 @@ __all__ = [
     "ScheduleRepeatCompatPayload",
     "ScheduleUpdateCompatPayload",
     "ScheduleViewCompatPayload",
+    "SystemDateCompatPayload",
     "ThoughtsAddCompatPayload",
     "ThoughtsIdCompatPayload",
     "ThoughtsListCompatPayload",
     "ThoughtsUpdateCompatPayload",
     "coerce_history_action_payload",
     "coerce_schedule_action_payload",
+    "coerce_system_action_payload",
     "coerce_thoughts_action_payload",
     "parse_json_object",
 ]

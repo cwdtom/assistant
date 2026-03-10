@@ -13,6 +13,7 @@ from assistant_app.schemas.tools import (
     ProactiveHistoryListArgs,
     coerce_history_action_payload,
     coerce_schedule_action_payload,
+    coerce_system_action_payload,
     coerce_thoughts_action_payload,
     parse_json_object,
     validate_thought_tool_arguments,
@@ -44,6 +45,14 @@ class ToolSchemaTest(unittest.TestCase):
         properties = ask_user_schema["function"]["parameters"]["properties"]
         self.assertIn("question", properties)
         self.assertIn("current_step", properties)
+
+    def test_build_thought_tool_schemas_expands_system_group(self) -> None:
+        schemas = build_thought_tool_schemas(["system"])
+        system_date_schema = next(item for item in schemas if item["function"]["name"] == "system_date")
+
+        properties = system_date_schema["function"]["parameters"]["properties"]
+        self.assertEqual(properties, {})
+        self.assertFalse(system_date_schema["function"]["parameters"]["additionalProperties"])
 
     def test_parse_json_object_rejects_non_object_json(self) -> None:
         self.assertIsNone(parse_json_object('[1,2,3]'))
@@ -202,6 +211,27 @@ class ToolSchemaTest(unittest.TestCase):
             coerce_thoughts_action_payload(
                 {'action': 'update', 'id': 3, 'content': '记得补周报', 'status': '完成'}
             ),
+        )
+
+    def test_normalize_thought_tool_call_system_payload_matches_system_action_contract(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_system_date',
+                'type': 'function',
+                'function': {
+                    'name': 'system_date',
+                    'arguments': json.dumps({}, ensure_ascii=False),
+                },
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        assert decision.next_action is not None
+        assert decision.next_action.payload is not None
+        self.assertEqual(
+            decision.next_action.payload,
+            coerce_system_action_payload({'action': 'date'}),
         )
 
 

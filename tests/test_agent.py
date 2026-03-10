@@ -32,9 +32,11 @@ from assistant_app.schemas.tools import (
     InternetSearchFetchUrlArgs,
     ScheduleAddArgs,
     ScheduleUpdateArgs,
+    SystemDateArgs,
     ThoughtsUpdateArgs,
     coerce_history_action_payload,
     coerce_schedule_action_payload,
+    coerce_system_action_payload,
     coerce_thoughts_action_payload,
 )
 from assistant_app.search import SearchResult
@@ -558,7 +560,24 @@ class AssistantAgentTest(unittest.TestCase):
 
         result = agent.handle_input("/help")
 
+        self.assertIn("/date", result)
         self.assertIn("/notify", result)
+
+    def test_date_command_returns_current_local_datetime(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        with patch("assistant_app.agent_components.tools.system.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2026, 3, 10, 15, 16, 17)
+            result = agent.handle_input("/date")
+
+        self.assertEqual(result, "2026-03-10 15:16:17")
+
+    def test_date_command_rejects_extra_args(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        result = agent.handle_input("/date now")
+
+        self.assertEqual(result, "用法: /date")
 
     def test_version_command_rejects_extra_args(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None, app_version="1.2.3")
@@ -1868,6 +1887,26 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(set(first_tool_names), expected_thoughts_tools)
         self.assertNotIn("thoughts", first_tool_names)
 
+    def test_thought_tool_calling_expands_system_group_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["查看时间", "总结"],
+                    tools_by_task={"查看时间": ["system"], "总结": []},
+                ),
+                _planner_done("已获取时间。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response = agent.handle_input("现在几点")
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        self.assertEqual(set(first_tool_names), {"system_date", "ask_user", "done"})
+        self.assertNotIn("system", first_tool_names)
+
     def test_thought_tool_calling_accepts_typed_tool_reply_payload(self) -> None:
         fake_llm = FakeTypedToolCallingLLMClient(
             responses=[
@@ -2838,6 +2877,27 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("planner_tool_thoughts_start", merged)
         self.assertIn("planner_tool_thoughts_done", merged)
 
+    def test_system_tool_supports_runtime_typed_payload_and_logs(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())
+
+        with patch("assistant_app.agent_components.tools.system.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2026, 3, 10, 15, 16, 17)
+            with self.assertLogs("assistant_app.app", level="INFO") as captured:
+                observation = agent._execute_planner_tool(
+                    action_tool="system",
+                    action_input="not-json",
+                    action_payload=RuntimePlannerActionPayload(
+                        tool_name="system_date",
+                        arguments=SystemDateArgs(),
+                    ),
+                )
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(observation.result, "2026-03-10 15:16:17")
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_system_date_start", merged)
+        self.assertIn("planner_tool_system_date_done", merged)
+
     def test_thoughts_cli_and_json_payload_share_runtime_payload(self) -> None:
         command_payload = parse_tool_command_payload("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
         self.assertIsNotNone(command_payload)
@@ -2846,6 +2906,15 @@ class AssistantAgentTest(unittest.TestCase):
         compat_payload = coerce_thoughts_action_payload(
             {"action": "update", "id": 1, "content": "记得买牛奶和鸡蛋", "status": "完成"}
         )
+
+        self.assertEqual(command_payload, compat_payload)
+
+    def test_system_cli_and_json_payload_share_runtime_payload(self) -> None:
+        command_payload = parse_tool_command_payload("/date")
+        self.assertIsNotNone(command_payload)
+        assert command_payload is not None
+
+        compat_payload = coerce_system_action_payload({"action": "date"})
 
         self.assertEqual(command_payload, compat_payload)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from assistant_app.schemas.commands import (
+    parse_date_command,
     parse_history_list_command,
     parse_history_search_command,
     parse_schedule_add_command,
@@ -10,10 +11,29 @@ from assistant_app.schemas.commands import (
     parse_schedule_view_command,
     parse_thoughts_list_command,
     parse_thoughts_update_command,
+    parse_tool_command_payload,
 )
 
 
 class CommandSchemaTest(unittest.TestCase):
+    def test_parse_date_command_builds_typed_payload(self) -> None:
+        command = parse_date_command("/date")
+
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertEqual(command.tool_name, "system_date")
+        self.assertEqual(command.to_runtime_payload().tool_name, "system_date")
+
+    def test_parse_date_command_rejects_extra_args(self) -> None:
+        self.assertIsNone(parse_date_command("/date now"))
+
+    def test_parse_tool_command_payload_supports_date_command(self) -> None:
+        payload = parse_tool_command_payload("/date")
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(payload.tool_name, "system_date")
+
     def test_parse_history_search_command_builds_typed_payload(self) -> None:
         command = parse_history_search_command("/history search 牛奶 --limit 5")
 

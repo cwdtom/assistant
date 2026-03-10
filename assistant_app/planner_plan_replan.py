@@ -18,6 +18,9 @@ PLANNER_CAPABILITIES_TEXT = """
 - thoughts：记录和管理碎片想法（新增、列表、详情、更新、软删除）
   - 常用动作：add/list/get/update/delete
   - 关键字段：content（想法内容）、status（未完成|完成|删除）、id（想法 ID）
+- system：系统信息读取
+  - 常用动作：date
+  - 关键字段：无；用于读取当前本地时间
 - ask_user：当信息不足时向用户发起澄清（question 文本，由 thought 阶段触发）
 """.strip()
 
@@ -61,7 +64,7 @@ PLAN_ONCE_PROMPT = f"""
 - 非空 plan 应按执行顺序排列
 - plan 每项都必须包含 task/completed/tools
 - plan 中每项的 completed 必须为 false
-- tools 仅填写该子任务所需工具，工具名可用：schedule|internet_search|history|thoughts
+- tools 仅填写该子任务所需工具，工具名可用：schedule|internet_search|history|thoughts|system
 - {PLAN_INTENT_EXPANSION_RULE}
 - {PLANNER_HISTORY_RULE}
 - {PLANNER_USER_PROFILE_RULE}
@@ -88,7 +91,7 @@ REPLAN_PROMPT = f"""
 - status=replanned: 必须输出计划数组（至少 1 项）
 - status=replanned: plan 每项都必须包含 task/completed/tools
 - status=replanned: 至少要有 1 项 completed=false，表示仍有后续可执行任务
-- status=replanned: tools 仅填写该子任务可执行工具名，工具名可用：schedule|internet_search|history|thoughts
+- status=replanned: tools 仅填写该子任务可执行工具名，工具名可用：schedule|internet_search|history|thoughts|system
 - 若基于当前 latest_plan/completed_subtasks/clarification_history 已能直接回答 goal，
   必须输出 status=done，并在 response 给出问题答案；不要继续扩写计划
 - status=done: 必须输出最终结论 response，不要再给后续计划

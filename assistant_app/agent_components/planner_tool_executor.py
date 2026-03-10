@@ -22,6 +22,7 @@ class PlannerToolExecutor:
         history_executor: JsonRouteExecutor,
         history_search_executor: JsonRouteExecutor,
         thoughts_executor: JsonRouteExecutor,
+        system_executor: JsonRouteExecutor,
         internet_search_executor: InternetSearchRouteExecutor,
     ) -> None:
         self._routes = self._build_routes(
@@ -30,6 +31,7 @@ class PlannerToolExecutor:
             history_executor=history_executor,
             history_search_executor=history_search_executor,
             thoughts_executor=thoughts_executor,
+            system_executor=system_executor,
             internet_search_executor=internet_search_executor,
         )
 
@@ -58,6 +60,7 @@ class PlannerToolExecutor:
         history_executor: JsonRouteExecutor,
         history_search_executor: JsonRouteExecutor,
         thoughts_executor: JsonRouteExecutor,
+        system_executor: JsonRouteExecutor,
         internet_search_executor: InternetSearchRouteExecutor,
     ) -> dict[str, Callable[[str, RuntimePlannerActionPayload | None], PlannerObservation]]:
         json_routes: dict[str, JsonPlannerToolRoute] = {
@@ -89,6 +92,13 @@ class PlannerToolExecutor:
                 legacy_command_prefix="/thoughts",
                 payload_executor=lambda payload, raw_input: thoughts_executor(payload, raw_input),
                 typed_payload_executor=lambda payload, raw_input: thoughts_executor(payload, raw_input),
+            ),
+            "system": JsonPlannerToolRoute(
+                tool="system",
+                invalid_json_result="system 工具参数无效：需要 JSON 对象。",
+                legacy_command_prefix="/date",
+                payload_executor=lambda payload, raw_input: system_executor(payload, raw_input),
+                typed_payload_executor=lambda payload, raw_input: system_executor(payload, raw_input),
             ),
         }
         routes = {
