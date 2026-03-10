@@ -27,4 +27,3 @@ class UserProfileRefreshPreparation(FrozenModel):
     profile_path: Path
     current_profile: str
     turns: list[ChatTurn] = Field(min_length=1)
-
