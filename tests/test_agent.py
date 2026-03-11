@@ -1884,6 +1884,31 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(turns[0].user_content, "后台任务：查看时间")
         self.assertEqual(turns[0].assistant_content, response)
 
+    def test_scheduled_source_exposes_recent_plan_step_trace_snapshot(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看时间", "总结"]),
+                _planner_done("已获取时间。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        self.assertIsNone(agent.get_recent_plan_step_trace(source="scheduled"))
+
+        response, completed = agent.handle_input_with_task_status("后台任务：查看时间", source="scheduled")
+
+        self.assertTrue(completed)
+        self.assertIn("全部完成", response)
+        trace = agent.get_recent_plan_step_trace(source="scheduled")
+        self.assertIsNotNone(trace)
+        assert trace is not None
+        self.assertGreaterEqual(int(trace["step_count"]), 1)
+        self.assertIsInstance(trace["latest_plan"], list)
+        self.assertIsInstance(trace["completed_subtasks"], list)
+        self.assertIsInstance(trace["observations"], list)
+        self.assertIsNone(agent.get_recent_plan_step_trace(source="interactive"))
+
     def test_thought_tool_calling_accepts_typed_tool_reply_payload(self) -> None:
         fake_llm = FakeTypedToolCallingLLMClient(
             responses=[

@@ -27,9 +27,13 @@ class _FakeAgent:
         *,
         response: tuple[str, bool] = ("任务已完成", True),
         raises: Exception | None = None,
+        user_profile: str | None = None,
+        plan_step_trace: dict[str, object] | None = None,
     ) -> None:
         self._response = response
         self._raises = raises
+        self._user_profile = user_profile
+        self._plan_step_trace = plan_step_trace
         self.calls: list[tuple[str, str]] = []
 
     def handle_input_with_task_status(self, user_input: str, *, source: str = "interactive"):  # type: ignore[no-untyped-def]
@@ -37,6 +41,14 @@ class _FakeAgent:
         if self._raises is not None:
             raise self._raises
         return self._response
+
+    def get_user_profile_snapshot(self) -> str | None:
+        return self._user_profile
+
+    def get_recent_plan_step_trace(self, *, source: str = "interactive") -> dict[str, object] | None:  # type: ignore[no-untyped-def]
+        if source != "scheduled":
+            return None
+        return self._plan_step_trace
 
 
 class _BlockingFakeAgent(_FakeAgent):
@@ -56,9 +68,10 @@ class _BlockingFakeAgent(_FakeAgent):
 class _FakeLLM:
     def __init__(self, payloads: list[dict[str, object]]) -> None:
         self._payloads = list(payloads)
+        self.calls: list[dict[str, object]] = []
 
     def reply_with_tools(self, messages, *, tools, tool_choice="auto"):  # type: ignore[no-untyped-def]
-        del messages, tools, tool_choice
+        self.calls.append({"messages": messages, "tools": tools, "tool_choice": tool_choice})
         if not self._payloads:
             raise RuntimeError("no payload")
         return self._payloads.pop(0)
@@ -85,7 +98,7 @@ class _CronFactory:
         return _SingleNextCronIterator(values.pop(0))
 
 
-def _done_payload(*, should_send: bool, message: str) -> dict[str, object]:
+def _done_payload(*, should_send: bool) -> dict[str, object]:
     return {
         "assistant_message": {
             "role": "assistant",
@@ -99,7 +112,6 @@ def _done_payload(*, should_send: bool, message: str) -> dict[str, object]:
                         "arguments": json.dumps(
                             {
                                 "should_send": should_send,
-                                "message": message,
                             },
                             ensure_ascii=False,
                         ),
@@ -170,7 +182,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         service = ScheduledPlannerTaskService(
             db=self.db,
             agent=agent,
-            llm_client=_FakeLLM([_done_payload(should_send=True, message="日报已完成，请查看。")]),
+            llm_client=_FakeLLM([_done_payload(should_send=True)]),
             logger=logging.getLogger("test.scheduled_task_service.send"),
             target_open_id="ou_target",
             send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
@@ -182,7 +194,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         self.assertTrue(self._wait_until(lambda: len(agent.calls) == 1 and len(self.sent) == 1))
 
         self.assertEqual(agent.calls, [("生成日报", "scheduled")])
-        self.assertEqual(self.sent, [("ou_target", "日报已完成，请查看。")])
+        self.assertEqual(self.sent, [("ou_target", "日报已生成")])
         stored = self.db.list_scheduled_planner_tasks()[0]
         self.assertEqual(stored.last_run_at, "2026-03-11 10:00:00")
         self.assertEqual(stored.next_run_at, "2026-03-12 09:00:00")
@@ -191,6 +203,58 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         service.poll_scheduled()
         time.sleep(0.05)
         self.assertEqual(len(agent.calls), 1)
+        service.stop()
+
+    def test_poll_scheduled_passes_profile_history_and_plan_trace_to_decision_context(self) -> None:
+        self.db.save_turn(user_content="昨天日报有遗漏", assistant_content="收到，我会补全。")
+        self.db.save_turn(user_content="今天生成日报", assistant_content="好的，正在处理。")
+        self.db.add_scheduled_planner_task(
+            task_name="daily-report-context",
+            cron_expr="0 9 * * *",
+            prompt="生成日报并判断是否发送",
+            run_limit=1,
+            next_run_at="2026-03-11 09:58:00",
+        )
+        llm = _FakeLLM([_done_payload(should_send=False)])
+        agent = _FakeAgent(
+            response=("日报已生成", True),
+            user_profile="偏好：先结论后细节",
+            plan_step_trace={
+                "goal": "生成日报并发送",
+                "step_count": 3,
+                "latest_plan": [
+                    {"task": "收集数据", "completed": True, "tools": ["history"]},
+                    {"task": "整理输出", "completed": False, "tools": ["system"]},
+                ],
+                "completed_subtasks": [{"item": "收集数据", "result": "已汇总完成"}],
+                "observations": [
+                    {"tool": "history", "input": "list", "ok": True, "result": "ok"},
+                ],
+            },
+        )
+        service = ScheduledPlannerTaskService(
+            db=self.db,
+            agent=agent,
+            llm_client=llm,
+            logger=logging.getLogger("test.scheduled_task_service.context"),
+            target_open_id="ou_target",
+            send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
+            clock=self.clock,
+            croniter_factory=_CronFactory({"0 9 * * *": [datetime(2026, 3, 12, 9, 0, 0)]}),
+        )
+
+        service.poll_scheduled()
+        self.assertTrue(self._wait_until(lambda: len(agent.calls) == 1 and len(llm.calls) == 1))
+
+        first_call = llm.calls[0]
+        messages = first_call["messages"]
+        prompt_payload = json.loads(str(messages[1]["content"]))
+        self.assertEqual(prompt_payload["user_profile"], "偏好：先结论后细节")
+        self.assertEqual(len(prompt_payload["chat_history"]), 2)
+        self.assertEqual(prompt_payload["chat_history"][-1]["assistant_content"], "好的，正在处理。")
+        self.assertEqual(prompt_payload["plan_step_trace"]["goal"], "生成日报并发送")
+        self.assertEqual(prompt_payload["plan_step_trace"]["step_count"], 3)
+        self.assertEqual(self.sent, [])
         service.stop()
 
     def test_poll_scheduled_skips_send_when_decision_declines(self) -> None:
@@ -205,7 +269,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         service = ScheduledPlannerTaskService(
             db=self.db,
             agent=agent,
-            llm_client=_FakeLLM([_done_payload(should_send=False, message="不发送")]),
+            llm_client=_FakeLLM([_done_payload(should_send=False)]),
             logger=logging.getLogger("test.scheduled_task_service.skip"),
             target_open_id="ou_target",
             send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
@@ -234,7 +298,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         service = ScheduledPlannerTaskService(
             db=self.db,
             agent=agent,
-            llm_client=_FakeLLM([_done_payload(should_send=True, message="不应发送")]),
+            llm_client=_FakeLLM([_done_payload(should_send=True)]),
             logger=logging.getLogger("test.scheduled_task_service.fail"),
             target_open_id="ou_target",
             send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
@@ -276,8 +340,8 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
             agent=agent,
             llm_client=_FakeLLM(
                 [
-                    _done_payload(should_send=False, message=""),
-                    _done_payload(should_send=False, message=""),
+                    _done_payload(should_send=False),
+                    _done_payload(should_send=False),
                 ]
             ),
             logger=logging.getLogger("test.scheduled_task_service.queue"),
@@ -355,7 +419,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         service = ScheduledPlannerTaskService(
             db=self.db,
             agent=agent,
-            llm_client=_FakeLLM([_done_payload(should_send=False, message="")]),
+            llm_client=_FakeLLM([_done_payload(should_send=False)]),
             logger=logging.getLogger("test.scheduled_task_service.infinite"),
             target_open_id="ou_target",
             send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),

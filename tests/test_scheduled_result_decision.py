@@ -36,12 +36,12 @@ def _tool_payload(name: str, arguments: dict[str, object], *, call_id: str) -> d
 
 
 class ScheduledResultDecisionRunnerTest(unittest.TestCase):
-    def test_run_once_returns_sendable_message_when_model_approves(self) -> None:
+    def test_run_once_returns_approved_decision(self) -> None:
         llm = _FakeLLM(
             [
                 _tool_payload(
                     "done",
-                    {"should_send": True, "message": "今天的日报已生成，请查看。"},
+                    {"should_send": True},
                     call_id="call_done",
                 )
             ]
@@ -61,21 +61,45 @@ class ScheduledResultDecisionRunnerTest(unittest.TestCase):
                     "started_at": "2026-03-11 09:00:00",
                     "finished_at": "2026-03-11 09:00:10",
                     "duration_seconds": 10,
-                }
+                },
+                "user_profile": "偏好：先给结论",
+                "chat_history": [
+                    {
+                        "user_content": "请生成日报",
+                        "assistant_content": "正在生成",
+                        "created_at": "2026-03-11 08:59:00",
+                    }
+                ],
+                "plan_step_trace": {
+                    "goal": "生成日报并发送",
+                    "step_count": 2,
+                    "latest_plan": [
+                        {"task": "生成日报", "completed": True, "tools": ["history"]},
+                        {"task": "发送摘要", "completed": False, "tools": ["system"]},
+                    ],
+                    "completed_subtasks": [{"item": "生成日报", "result": "日报已生成"}],
+                    "observations": [
+                        {"tool": "history", "input": "list", "ok": True, "result": "ok"},
+                    ],
+                },
             }
         )
 
         self.assertIsNotNone(decision)
         assert decision is not None
         self.assertTrue(decision.should_send)
-        self.assertEqual(decision.message, "今天的日报已生成，请查看。")
         self.assertEqual(llm.calls[0]["tool_choice"], "auto")
+        messages = llm.calls[0]["messages"]
+        prompt_payload = json.loads(str(messages[1]["content"]))
+        self.assertEqual(prompt_payload["user_profile"], "偏好：先给结论")
+        self.assertEqual(len(prompt_payload["chat_history"]), 1)
+        self.assertEqual(prompt_payload["plan_step_trace"]["step_count"], 2)
 
     def test_run_once_retries_invalid_payload_and_accepts_decline(self) -> None:
         llm = _FakeLLM(
             [
-                _tool_payload("done", {"should_send": True, "message": ""}, call_id="call_invalid"),
-                _tool_payload("done", {"should_send": False, "message": "ignored"}, call_id="call_decline"),
+                _tool_payload("done", {"should_send": 1}, call_id="call_invalid"),
+                _tool_payload("done", {"should_send": False}, call_id="call_decline"),
             ]
         )
         runner = ScheduledResultDecisionRunner(
@@ -100,7 +124,6 @@ class ScheduledResultDecisionRunnerTest(unittest.TestCase):
         self.assertIsNotNone(decision)
         assert decision is not None
         self.assertFalse(decision.should_send)
-        self.assertEqual(decision.message, "")
 
     def test_run_once_returns_none_when_model_never_calls_done(self) -> None:
         llm = _FakeLLM(

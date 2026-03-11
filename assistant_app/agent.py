@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 import threading
 from collections.abc import Callable
@@ -132,6 +133,11 @@ class AssistantAgent:
         normalized_observation_char_limit = max(plan_observation_char_limit, 1)
         normalized_observation_history_limit = max(plan_observation_history_limit, 1)
         normalized_user_profile_max_chars = max(user_profile_max_chars, 1)
+        self._plan_observation_history_limit = normalized_observation_history_limit
+        self._latest_plan_step_trace_by_source: dict[str, dict[str, Any] | None] = {
+            "interactive": None,
+            "scheduled": None,
+        }
 
         self._planner_session = PlannerSession(
             db=self.db,
@@ -264,6 +270,7 @@ class AssistantAgent:
             self._last_task_completed = False
             self._skip_history_once = False
             self._clear_interrupt_request()
+            self._latest_plan_step_trace_by_source[source] = None
             response = self._handle_input_text(text, source=source)
             if not text.startswith("/"):
                 if self._skip_history_once:
@@ -333,6 +340,19 @@ class AssistantAgent:
 
     def reload_user_profile(self) -> bool:
         return self._planner_session.reload_user_profile()
+
+    def get_user_profile_snapshot(self) -> str | None:
+        return self._serialize_user_profile()
+
+    def get_recent_plan_step_trace(
+        self,
+        *,
+        source: Literal["interactive", "scheduled"] = "interactive",
+    ) -> dict[str, Any] | None:
+        snapshot = self._latest_plan_step_trace_by_source.get(source)
+        if snapshot is None:
+            return None
+        return deepcopy(snapshot)
 
     def _serialize_user_profile(self) -> str | None:
         return self._planner_session.serialize_user_profile()
@@ -421,6 +441,7 @@ class AssistantAgent:
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
         if self._pending_plan_task is task:
             self._pending_plan_task = None
+        self._record_plan_step_trace(task)
         self._last_task_completed = True
         if task.plan_ack_only:
             self._skip_history_once = True
@@ -451,6 +472,41 @@ class AssistantAgent:
             return response
         normalized = rewritten.strip()
         return normalized or response
+
+    def _record_plan_step_trace(self, task: PendingPlanTask) -> None:
+        self._latest_plan_step_trace_by_source[task.source] = self._build_plan_step_trace(task)
+
+    def _build_plan_step_trace(self, task: PendingPlanTask) -> dict[str, Any]:
+        outer = self._planner_session.outer_context(task)
+        observations = task.observations[-self._plan_observation_history_limit :]
+        return {
+            "goal": outer.goal,
+            "step_count": task.step_count,
+            "latest_plan": [
+                {
+                    "task": step.item,
+                    "completed": step.completed,
+                    "tools": list(step.tools),
+                }
+                for step in outer.latest_plan
+            ],
+            "completed_subtasks": [
+                {
+                    "item": item.item,
+                    "result": item.result,
+                }
+                for item in outer.completed_subtasks
+            ],
+            "observations": [
+                {
+                    "tool": item.tool,
+                    "input": item.input_text,
+                    "ok": item.ok,
+                    "result": item.result,
+                }
+                for item in observations
+            ],
+        }
 
     def _raise_if_task_interrupted(self) -> None:
         if self._is_interrupt_requested():

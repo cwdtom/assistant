@@ -133,7 +133,58 @@ class ScheduledPlannerTaskUpdateInput(FrozenModel):
 
 class ScheduledTaskResultDecision(FrozenModel):
     should_send: bool
-    message: str = ""
+
+
+class ScheduledTaskResultDecisionChatTurn(FrozenModel):
+    user_content: str = ""
+    assistant_content: str = ""
+    created_at: str
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def normalize_created_at(cls, value: object) -> str:
+        return normalize_datetime_text(value, field_name="created_at", formats=(TIMESTAMP_FORMAT,))
+
+
+class ScheduledTaskResultDecisionPlanStep(FrozenModel):
+    task: str = Field(min_length=1)
+    completed: bool = False
+    tools: list[str] = Field(default_factory=list)
+
+    @field_validator("task", mode="before")
+    @classmethod
+    def normalize_task(cls, value: object) -> str:
+        return normalize_required_text(value, field_name="task")
+
+
+class ScheduledTaskResultDecisionCompletedSubtask(FrozenModel):
+    item: str = Field(min_length=1)
+    result: str = ""
+
+    @field_validator("item", mode="before")
+    @classmethod
+    def normalize_item(cls, value: object) -> str:
+        return normalize_required_text(value, field_name="item")
+
+
+class ScheduledTaskResultDecisionObservation(FrozenModel):
+    tool: str = Field(min_length=1)
+    input: str = ""
+    ok: bool
+    result: str = ""
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool(cls, value: object) -> str:
+        return normalize_required_text(value, field_name="tool")
+
+
+class ScheduledTaskResultDecisionPlanStepTrace(FrozenModel):
+    goal: str = ""
+    step_count: int = Field(default=0, ge=0)
+    latest_plan: list[ScheduledTaskResultDecisionPlanStep] = Field(default_factory=list)
+    completed_subtasks: list[ScheduledTaskResultDecisionCompletedSubtask] = Field(default_factory=list)
+    observations: list[ScheduledTaskResultDecisionObservation] = Field(default_factory=list)
 
 
 class ScheduledTaskResultDecisionContext(FrozenModel):
@@ -159,7 +210,6 @@ class ScheduledTaskResultDecisionContext(FrozenModel):
 
 class ScheduledTaskResultDoneSchemaContract(FrozenModel):
     should_send: str = "boolean"
-    message: str = "string"
 
 
 class ScheduledTaskResultOutputContract(FrozenModel):
@@ -171,6 +221,11 @@ class ScheduledTaskResultDecisionPromptPayload(FrozenModel):
     task: str = "scheduled_task_result_delivery_decision"
     timezone: str = Field(default="local", min_length=1)
     result: ScheduledTaskResultDecisionContext
+    user_profile: str | None = None
+    chat_history: list[ScheduledTaskResultDecisionChatTurn] = Field(default_factory=list)
+    plan_step_trace: ScheduledTaskResultDecisionPlanStepTrace = Field(
+        default_factory=ScheduledTaskResultDecisionPlanStepTrace
+    )
     output_contract: ScheduledTaskResultOutputContract = Field(default_factory=ScheduledTaskResultOutputContract)
 
 
@@ -179,7 +234,9 @@ __all__ = [
     "ScheduledPlannerTaskCreateInput",
     "ScheduledPlannerTaskUpdateInput",
     "ScheduledTaskResultDecision",
+    "ScheduledTaskResultDecisionChatTurn",
     "ScheduledTaskResultDecisionContext",
+    "ScheduledTaskResultDecisionPlanStepTrace",
     "ScheduledTaskResultDecisionPromptPayload",
     "normalize_scheduled_task_cron_expr",
     "normalize_scheduled_task_run_limit",

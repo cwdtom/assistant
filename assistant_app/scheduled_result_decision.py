@@ -19,19 +19,17 @@ SCHEDULED_RESULT_DECISION_SYSTEM_PROMPT = """
 
 目标：
 - 基于定时任务的执行结果，判断是否值得向用户发送一条 Feishu 最终消息。
-- 若应发送，输出一条简洁、直接、可执行的消息文案。
+- 输入会提供 result、user_profile、chat_history、plan_step_trace，请综合判断。
 
 约束：
-- 只允许通过 done 输出 should_send/message。
+- 只允许通过 done 输出 should_send。
 - should_send 必须是布尔值。
-- should_send=true 时，message 必须是非空字符串。
-- should_send=false 时，message 应为空字符串。
 - 不要输出任何额外解释。
 """.strip()
 
 _DONE_TOOL_SCHEMA = build_function_tool_schema(
     name="done",
-    description="Finish scheduled task result delivery decision with should_send/message.",
+    description="Finish scheduled task result delivery decision with should_send.",
     arguments_model=ScheduledTaskResultDecision,
 )
 
@@ -89,7 +87,16 @@ class ScheduledResultDecisionRunner:
             "scheduled result decision started",
             extra={
                 "event": "scheduled_result_decision_start",
-                "context": {"task_name": normalized_context.result.task_name},
+                "context": {
+                    "task_name": normalized_context.result.task_name,
+                    "has_user_profile": bool((normalized_context.user_profile or "").strip()),
+                    "chat_history_count": len(normalized_context.chat_history),
+                    "plan_trace_counts": {
+                        "latest_plan": len(normalized_context.plan_step_trace.latest_plan),
+                        "completed_subtasks": len(normalized_context.plan_step_trace.completed_subtasks),
+                        "observations": len(normalized_context.plan_step_trace.observations),
+                    },
+                },
             },
         )
 
@@ -108,7 +115,7 @@ class ScheduledResultDecisionRunner:
                     {
                         "role": "tool",
                         "tool_call_id": f"scheduled_result_decision_{step_index}",
-                        "content": "必须调用 done 输出 should_send/message。",
+                        "content": "必须调用 done 输出 should_send。",
                     }
                 )
                 self._logger.warning(
@@ -156,7 +163,7 @@ class ScheduledResultDecisionRunner:
                     {
                         "role": "tool",
                         "tool_call_id": tool_call_id,
-                        "content": "done 参数非法：需要 should_send/message。",
+                        "content": "done 参数非法：需要 should_send。",
                     }
                 )
                 self._logger.warning(
@@ -180,7 +187,6 @@ class ScheduledResultDecisionRunner:
                     "context": {
                         "task_name": normalized_context.result.task_name,
                         "should_send": decision.should_send,
-                        "message_length": len(decision.message),
                     },
                 },
             )
@@ -213,15 +219,9 @@ def _normalize_context_payload(
 
 def _normalize_done_arguments(arguments: dict[str, Any]) -> ScheduledTaskResultDecision | None:
     try:
-        decision = ScheduledTaskResultDecision.model_validate(arguments)
+        return ScheduledTaskResultDecision.model_validate(arguments)
     except ValidationError:
         return None
-    normalized_message = decision.message.strip()
-    if decision.should_send and not normalized_message:
-        return None
-    if not decision.should_send:
-        normalized_message = ""
-    return decision.model_copy(update={"message": normalized_message})
 
 
 def _normalize_tool_reply_payload(payload: Any) -> ToolReplyPayload:
@@ -241,4 +241,3 @@ def _assistant_message_to_chat_payload(message: AssistantToolMessage) -> dict[st
     content = normalized.get("content")
     normalized["content"] = "" if content is None else str(content)
     return normalized
-

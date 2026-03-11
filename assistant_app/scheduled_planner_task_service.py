@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from assistant_app.agent import AssistantAgent
+from assistant_app.agent_components.planner_session import PLAN_HISTORY_LOOKBACK_HOURS, PLAN_HISTORY_MAX_TURNS
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import split_semantic_messages
 from assistant_app.scheduled_result_decision import ScheduledResultDecisionRunner
@@ -286,19 +287,21 @@ class ScheduledPlannerTaskService:
     ) -> None:
         started_at_dt = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S")
         duration_seconds = max(int((finished_at_dt - started_at_dt).total_seconds()), 0)
+        decision_context_payload = ScheduledTaskResultDecisionPromptPayload(
+            result={
+                "task_name": task_name,
+                "prompt": prompt,
+                "final_response": final_response,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "duration_seconds": duration_seconds,
+            },
+            user_profile=self._read_user_profile_snapshot(),
+            chat_history=self._read_chat_history_snapshot(),
+            plan_step_trace=self._read_plan_step_trace_snapshot(),
+        )
         try:
-            decision = self._result_decision_runner.run_once(
-                context_payload=ScheduledTaskResultDecisionPromptPayload(
-                    result={
-                        "task_name": task_name,
-                        "prompt": prompt,
-                        "final_response": final_response,
-                        "started_at": started_at,
-                        "finished_at": finished_at,
-                        "duration_seconds": duration_seconds,
-                    }
-                )
-            )
+            decision = self._result_decision_runner.run_once(context_payload=decision_context_payload)
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(
                 "scheduled result decision failed",
@@ -358,7 +361,7 @@ class ScheduledPlannerTaskService:
             )
             return
 
-        segments = split_semantic_messages(decision.message)
+        segments = split_semantic_messages(final_response)
         try:
             for segment in segments:
                 self._send_text_to_open_id(self._target_open_id, segment)
@@ -386,6 +389,69 @@ class ScheduledPlannerTaskService:
                 },
             },
         )
+
+    def _read_user_profile_snapshot(self) -> str | None:
+        getter = getattr(self._agent, "get_user_profile_snapshot", None)
+        if not callable(getter):
+            return None
+        try:
+            snapshot = getter()
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "scheduled result context read failed: user profile",
+                extra={
+                    "event": "scheduled_result_context_read_failed",
+                    "context": {"field": "user_profile", "error": repr(exc)},
+                },
+            )
+            return None
+        if snapshot is None:
+            return None
+        normalized = str(snapshot).strip()
+        return normalized or None
+
+    def _read_chat_history_snapshot(self) -> list[dict[str, str]]:
+        try:
+            turns = self._db.recent_turns_for_planner(
+                lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
+                limit=PLAN_HISTORY_MAX_TURNS,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "scheduled result context read failed: chat history",
+                extra={
+                    "event": "scheduled_result_context_read_failed",
+                    "context": {"field": "chat_history", "error": repr(exc)},
+                },
+            )
+            return []
+        return [
+            {
+                "user_content": item.user_content,
+                "assistant_content": item.assistant_content,
+                "created_at": item.created_at,
+            }
+            for item in turns
+        ]
+
+    def _read_plan_step_trace_snapshot(self) -> dict[str, Any]:
+        getter = getattr(self._agent, "get_recent_plan_step_trace", None)
+        if not callable(getter):
+            return {}
+        try:
+            snapshot = getter(source="scheduled")
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "scheduled result context read failed: plan trace",
+                extra={
+                    "event": "scheduled_result_context_read_failed",
+                    "context": {"field": "plan_step_trace", "error": repr(exc)},
+                },
+            )
+            return {}
+        if not isinstance(snapshot, dict):
+            return {}
+        return snapshot
 
     def _compute_next_run_at(self, *, task: ScheduledPlannerTask, now: datetime) -> str | None:
         return self._compute_next_run_at_from_parts(
