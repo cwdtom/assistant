@@ -108,10 +108,7 @@ Optional runtime flags (all supported in `.env`):
 - `FEISHU_CALENDAR_ID`: target Feishu calendar id for sync; when non-empty and Feishu credentials are present, local schedule <-> Feishu calendar sync is enabled
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`: startup bootstrap sync lookback days (default `2`)
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`: startup bootstrap sync lookahead days (default `5`)
-- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages; scheduled planner task final-result delivery also reuses this open_id; when non-empty and Feishu credentials are present, proactive reminder evaluation is enabled
-- `PROACTIVE_REMINDER_INTERVAL_MINUTES`: proactive evaluation interval in minutes (default `60`, min `60`)
-- `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`: proactive context lookahead window in hours (default `24`)
-- `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`: soft quiet-time hint in proactive prompt (default `23:00-08:00`)
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for scheduled planner task final-result delivery; when non-empty and Feishu credentials are present, scheduled final message sending can be enabled
 
 ## Supplement: Detailed Behavior Notes (moved from README)
 - Every non-`/` input persists into `chat_history` with final assistant reply.
@@ -152,12 +149,6 @@ Optional runtime flags (all supported in `.env`):
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Feishu ack-only completion (task completed with empty response) sends ACK/DONE reactions only and skips text sending.
-- Proactive reminder uses an independent ReAct runtime (not coupled with the existing task ReAct loop).
-- Proactive ReAct reuses `PLAN_REPLAN_MAX_STEPS`, disables `ask_user`, and keeps mutating tools blocked by runtime allowlist/validator.
-- Proactive ReAct allows `internet_search` as optional evidence and injects `USER_PROFILE_PATH` content into prompt when available.
-- Proactive reminder default context window: schedule in next 24h + chat_history in last 24h.
-- Proactive reminder runs on timer periodic tasks; proactive `done` returns `should_send/message`, and the LLM directly decides whether Feishu proactive text is sent.
-- Proactive reminder sends do not persist synthetic turns into `chat_history`.
 - Scheduled planner task completion triggers a second LLM decision with `should_send/message`; only the final Feishu message may be sent, and intermediate planner progress/subtask updates are never sent for this source.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.

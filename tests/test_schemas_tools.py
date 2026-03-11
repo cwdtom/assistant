@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
-from datetime import datetime
-from pathlib import Path
 
-from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import build_thought_tool_schemas, normalize_thought_tool_call
-from assistant_app.proactive_tools import ProactiveToolExecutor, build_proactive_tool_schemas
 from assistant_app.schemas.tools import (
     InternetSearchArgs,
     InternetSearchFetchUrlArgs,
-    ProactiveHistoryListArgs,
     coerce_history_action_payload,
     coerce_internet_search_action_payload,
     coerce_schedule_action_payload,
@@ -23,12 +17,6 @@ from assistant_app.schemas.tools import (
     parse_json_object,
     validate_thought_tool_arguments,
 )
-from assistant_app.search import SearchResult
-
-
-class _FakeSearchProvider:
-    def search(self, query: str, top_k: int = 3):  # type: ignore[no-untyped-def]
-        return [SearchResult(title=f"{query}-1", snippet="snippet", url="https://example.com")][:top_k]
 
 
 class ToolSchemaTest(unittest.TestCase):
@@ -361,55 +349,6 @@ class ToolSchemaTest(unittest.TestCase):
             decision.next_action.payload,
             coerce_user_profile_action_payload({'action': 'overwrite', 'content': ''}),
         )
-
-
-class ProactiveToolSchemaTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.db = AssistantDB(str(Path(self.tmp.name) / 'assistant_test.db'))
-        self.executor = ProactiveToolExecutor(
-            db=self.db,
-            search_provider=_FakeSearchProvider(),
-            now=datetime(2026, 3, 6, 9, 0, 0),
-            lookahead_hours=24,
-            chat_lookback_hours=24,
-            internet_search_top_k=3,
-        )
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def test_execute_rejects_invalid_history_list_limit(self) -> None:
-        with self.assertRaises(ValueError):
-            self.executor.execute(tool_name='history_list', arguments={'limit': 0})
-
-    def test_execute_rejects_invalid_schedule_view(self) -> None:
-        with self.assertRaises(ValueError):
-            self.executor.execute(tool_name='schedule_view', arguments={'view': 'quarter'})
-
-    def test_build_proactive_tool_schemas_uses_pydantic_schema(self) -> None:
-        schemas = build_proactive_tool_schemas()
-        done_schema = next(item for item in schemas if item["function"]["name"] == "done")
-
-        properties = done_schema["function"]["parameters"]["properties"]
-        self.assertIn("should_send", properties)
-        self.assertNotIn("score", properties)
-        self.assertNotIn("reason", properties)
-        self.assertFalse(done_schema["function"]["parameters"]["additionalProperties"])
-
-    def test_build_proactive_tool_schemas_does_not_expose_timer_tools(self) -> None:
-        schemas = build_proactive_tool_schemas()
-        tool_names = {item["function"]["name"] for item in schemas}
-
-        self.assertFalse(any(name.startswith("timer_") for name in tool_names))
-
-    def test_execute_accepts_prevalidated_model_arguments(self) -> None:
-        result = self.executor.execute(
-            tool_name='history_list',
-            arguments=ProactiveHistoryListArgs(limit=5),
-        )
-
-        self.assertIn('"limit":5', result)
 
 
 if __name__ == '__main__':

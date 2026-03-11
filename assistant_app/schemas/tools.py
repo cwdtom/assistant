@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from assistant_app.schemas.tool_args import (
-    PROACTIVE_TOOL_ARGS_MODELS,
     THOUGHT_TOOL_ARGS_MODELS,
     AskUserArgs,
     DoneArgs,
@@ -9,13 +8,6 @@ from assistant_app.schemas.tool_args import (
     HistorySearchArgs,
     InternetSearchArgs,
     InternetSearchFetchUrlArgs,
-    ProactiveHistoryListArgs,
-    ProactiveHistorySearchArgs,
-    ProactiveInternetSearchArgs,
-    ProactiveScheduleGetArgs,
-    ProactiveScheduleListArgs,
-    ProactiveScheduleViewArgs,
-    ProactiveToolArgsBase,
     ScheduleAddArgs,
     ScheduleIdArgs,
     ScheduleListArgs,
@@ -34,7 +26,6 @@ from assistant_app.schemas.tool_args import (
     TimerUpdateArgs,
     UserProfileGetArgs,
     UserProfileOverwriteArgs,
-    validate_proactive_tool_arguments,
     validate_thought_tool_arguments,
 )
 from assistant_app.schemas.tool_compat import (
@@ -81,15 +72,7 @@ __all__ = [
     "InternetSearchArgs",
     "InternetSearchFetchUrlCompatPayload",
     "InternetSearchFetchUrlArgs",
-    "PROACTIVE_TOOL_ARGS_MODELS",
     "THOUGHT_TOOL_ARGS_MODELS",
-    "ProactiveHistoryListArgs",
-    "ProactiveHistorySearchArgs",
-    "ProactiveInternetSearchArgs",
-    "ProactiveScheduleGetArgs",
-    "ProactiveScheduleListArgs",
-    "ProactiveScheduleViewArgs",
-    "ProactiveToolArgsBase",
     "ScheduleAddArgs",
     "ScheduleAddCompatPayload",
     "ScheduleIdArgs",
@@ -134,6 +117,5 @@ __all__ = [
     "coerce_thoughts_action_payload",
     "coerce_user_profile_action_payload",
     "parse_json_object",
-    "validate_proactive_tool_arguments",
     "validate_thought_tool_arguments",
 ]

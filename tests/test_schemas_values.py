@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 from assistant_app.schemas.domain import ScheduleItem
-from assistant_app.schemas.proactive import ProactiveScheduleContextItem
 from assistant_app.schemas.storage import (
     ScheduleCreateInput,
     ScheduleRecurrenceInput,
@@ -137,21 +136,8 @@ class ValueNormalizationConsistencyTest(unittest.TestCase):
                 "repeat_enabled": True,
             }
         )
-        proactive_item = ProactiveScheduleContextItem.model_validate(
-            {
-                "id": 1,
-                "title": "项目同步",
-                "tag": "work",
-                "event_time": "2026-03-09 10:00",
-                "duration_minutes": 30,
-                "repeat_interval_minutes": 60,
-                "repeat_times": raw_repeat_times,
-                "repeat_enabled": True,
-            }
-        )
 
         self.assertEqual(schedule_item.repeat_times, 3)
-        self.assertEqual(proactive_item.repeat_times, 3)
 
     def test_duration_normalization_is_consistent_across_layers(self) -> None:
         raw_duration = " 45 "

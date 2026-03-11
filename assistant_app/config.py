@@ -15,6 +15,9 @@ DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 _PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$""")
 _REMOVED_CONFIG_FIELDS = {
     "proactive_reminder_score_threshold",
+    "proactive_reminder_interval_minutes",
+    "proactive_reminder_lookahead_hours",
+    "proactive_reminder_night_quiet_hint",
     "feishu_calendar_reconcile_interval_minutes",
     "user_profile_refresh_enabled",
     "user_profile_refresh_hour",
@@ -95,20 +98,6 @@ class AppConfig(BaseSettings):
     proactive_reminder_target_open_id: str = Field(
         default="",
         validation_alias="PROACTIVE_REMINDER_TARGET_OPEN_ID",
-    )
-    proactive_reminder_interval_minutes: int = Field(
-        default=60,
-        ge=60,
-        validation_alias="PROACTIVE_REMINDER_INTERVAL_MINUTES",
-    )
-    proactive_reminder_lookahead_hours: int = Field(
-        default=24,
-        ge=1,
-        validation_alias="PROACTIVE_REMINDER_LOOKAHEAD_HOURS",
-    )
-    proactive_reminder_night_quiet_hint: str = Field(
-        default="23:00-08:00",
-        validation_alias="PROACTIVE_REMINDER_NIGHT_QUIET_HINT",
     )
 
     @classmethod

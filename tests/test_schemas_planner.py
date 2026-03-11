@@ -10,7 +10,6 @@ from assistant_app.planner_plan_replan import (
     normalize_replan_decision,
 )
 from assistant_app.planner_thought import normalize_thought_decision
-from assistant_app.proactive_react import _normalize_done_arguments
 from assistant_app.schemas.planner import (
     ObservationPayload,
     PlannedDecision,
@@ -333,11 +332,6 @@ class PlannerSchemaTest(unittest.TestCase):
                 "response": "不应携带最终响应",
             }
         )
-
-        self.assertIsNone(decision)
-
-    def test_normalize_done_arguments_requires_message_when_should_send_true(self) -> None:
-        decision = _normalize_done_arguments({"should_send": True, "message": " "})
 
         self.assertIsNone(decision)
 

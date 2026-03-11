@@ -1227,9 +1227,9 @@ class FeishuAdapterTest(unittest.TestCase):
             ],
         )
 
-    def test_feishu_runner_send_proactive_text_uses_open_id_sender(self) -> None:
+    def test_feishu_runner_send_open_id_text_uses_open_id_sender(self) -> None:
         agent = _FakeAgent(response="ok")
-        logger = logging.getLogger("test.feishu_adapter.proactive_send")
+        logger = logging.getLogger("test.feishu_adapter.open_id_send")
         handler = _RecordListHandler()
         logger.setLevel(logging.INFO)
         logger.propagate = False
@@ -1251,78 +1251,78 @@ class FeishuAdapterTest(unittest.TestCase):
         sent: list[tuple[str, str]] = []
         runner._send_text_to_open_id = lambda open_id, text: sent.append((open_id, text))
 
-        runner.send_proactive_text(open_id="ou_target", text="主动提醒")
+        runner.send_open_id_text(open_id="ou_target", text="任务完成")
 
-        self.assertEqual(sent, [("ou_target", "主动提醒")])
+        self.assertEqual(sent, [("ou_target", "任务完成")])
         self.assertTrue(
             any(
-                "feishu proactive response sent: open_id=ou_target text=主动提醒" in message
+                "feishu open_id response sent: open_id=ou_target text=任务完成" in message
                 for message in handler.messages()
             )
         )
 
-    def test_feishu_runner_send_proactive_text_requires_open_id_and_text(self) -> None:
+    def test_feishu_runner_send_open_id_text_requires_open_id_and_text(self) -> None:
         agent = _FakeAgent(response="ok")
         processor = FeishuEventProcessor(
             agent=agent,
             send_text=lambda _chat_id, _text: None,
             send_reaction=lambda _message_id, _emoji_type: None,
-            logger=logging.getLogger("test.feishu_adapter.proactive_validation"),
+            logger=logging.getLogger("test.feishu_adapter.open_id_validation"),
         )
         runner = FeishuLongConnectionRunner(
             app_id="app_id",
             app_secret="app_secret",
             event_processor=processor,
-            logger=logging.getLogger("test.feishu_adapter.proactive_validation"),
+            logger=logging.getLogger("test.feishu_adapter.open_id_validation"),
             sdk_module=None,
         )
         runner._send_text_to_open_id = lambda _open_id, _text: None
 
         with self.assertRaisesRegex(ValueError, "open_id is required"):
-            runner.send_proactive_text(open_id=" ", text="主动提醒")
+            runner.send_open_id_text(open_id=" ", text="任务完成")
         with self.assertRaisesRegex(ValueError, "text is required"):
-            runner.send_proactive_text(open_id="ou_target", text="  ")
+            runner.send_open_id_text(open_id="ou_target", text="  ")
 
-    def test_feishu_runner_send_proactive_text_strips_whitespace(self) -> None:
+    def test_feishu_runner_send_open_id_text_strips_whitespace(self) -> None:
         agent = _FakeAgent(response="ok")
         processor = FeishuEventProcessor(
             agent=agent,
             send_text=lambda _chat_id, _text: None,
             send_reaction=lambda _message_id, _emoji_type: None,
-            logger=logging.getLogger("test.feishu_adapter.proactive_strip"),
+            logger=logging.getLogger("test.feishu_adapter.open_id_strip"),
         )
         runner = FeishuLongConnectionRunner(
             app_id="app_id",
             app_secret="app_secret",
             event_processor=processor,
-            logger=logging.getLogger("test.feishu_adapter.proactive_strip"),
+            logger=logging.getLogger("test.feishu_adapter.open_id_strip"),
             sdk_module=None,
         )
         sent: list[tuple[str, str]] = []
         runner._send_text_to_open_id = lambda open_id, text: sent.append((open_id, text))
 
-        runner.send_proactive_text(open_id=" ou_target ", text=" 主动提醒 ")
+        runner.send_open_id_text(open_id=" ou_target ", text=" 任务完成 ")
 
-        self.assertEqual(sent, [("ou_target", "主动提醒")])
+        self.assertEqual(sent, [("ou_target", "任务完成")])
 
-    def test_feishu_runner_send_proactive_text_requires_sender_ready(self) -> None:
+    def test_feishu_runner_send_open_id_text_requires_sender_ready(self) -> None:
         agent = _FakeAgent(response="ok")
         processor = FeishuEventProcessor(
             agent=agent,
             send_text=lambda _chat_id, _text: None,
             send_reaction=lambda _message_id, _emoji_type: None,
-            logger=logging.getLogger("test.feishu_adapter.proactive_not_ready"),
+            logger=logging.getLogger("test.feishu_adapter.open_id_not_ready"),
         )
         runner = FeishuLongConnectionRunner(
             app_id="app_id",
             app_secret="app_secret",
             event_processor=processor,
-            logger=logging.getLogger("test.feishu_adapter.proactive_not_ready"),
+            logger=logging.getLogger("test.feishu_adapter.open_id_not_ready"),
             sdk_module=None,
         )
 
         with self.assertRaises(RuntimeError):
-            runner.send_proactive_text(open_id="ou_target", text="主动提醒")
+            runner.send_open_id_text(open_id="ou_target", text="任务完成")
 
 
 if __name__ == "__main__":

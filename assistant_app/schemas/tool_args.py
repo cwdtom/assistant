@@ -313,70 +313,6 @@ class AskUserArgs(ThoughtToolArgsBase):
 class DoneArgs(ThoughtToolArgsBase):
     response: str = Field(min_length=1, description="当前子任务结论文本。")
 
-
-class ProactiveToolArgsBase(FrozenModel):
-    pass
-
-
-class ProactiveScheduleListArgs(ProactiveToolArgsBase):
-    tag: str | None = Field(default=None, description="标签过滤；不传/null 表示不过滤标签。")
-
-    @field_validator("tag", mode="before")
-    @classmethod
-    def normalize_tag(cls, value: Any) -> str | None:
-        return OptionalTagValue.model_validate({"tag": value}).tag
-
-
-class ProactiveScheduleViewArgs(ProactiveToolArgsBase):
-    view: Literal["day", "week", "month"] = Field(description="日历视图：day/week/month。")
-    anchor: str | None = Field(default=None, description="YYYY-MM-DD 或 YYYY-MM。")
-    tag: str | None = Field(default=None, description="标签过滤；不传/null 表示不过滤标签。")
-
-    @field_validator("view", mode="before")
-    @classmethod
-    def normalize_view(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            return value.strip().lower()
-        return value
-
-    @field_validator("tag", mode="before")
-    @classmethod
-    def normalize_tag(cls, value: Any) -> str | None:
-        return OptionalTagValue.model_validate({"tag": value}).tag
-
-    @model_validator(mode="after")
-    def validate_anchor(self) -> ProactiveScheduleViewArgs:
-        try:
-            normalized = ScheduleViewAnchorValue.model_validate({"view": self.view, "anchor": self.anchor}).anchor
-        except ValidationError as exc:
-            raise ValueError("anchor must match view") from exc
-        object.__setattr__(self, "anchor", normalized)
-        return self
-
-
-class ProactiveScheduleGetArgs(ProactiveToolArgsBase):
-    id: int = Field(ge=1, description="日程 ID，正整数。")
-
-
-class ProactiveHistoryListArgs(ProactiveToolArgsBase):
-    limit: int | None = Field(default=None, ge=1, le=200, description="返回结果上限；取值范围 1~200。")
-
-    @field_validator("limit", mode="before")
-    @classmethod
-    def normalize_limit(cls, value: Any) -> int | None:
-        if value is None:
-            return None
-        return HistoryListLimitValue.model_validate({"limit": value}).limit
-
-
-class ProactiveHistorySearchArgs(ProactiveHistoryListArgs):
-    keyword: str = Field(min_length=1, description="检索关键词文本。")
-
-
-class ProactiveInternetSearchArgs(ProactiveToolArgsBase):
-    query: str = Field(min_length=1, description="搜索关键词文本。")
-
-
 THOUGHT_TOOL_ARGS_MODELS: dict[str, type[ThoughtToolArgsBase]] = {
     "schedule_add": ScheduleAddArgs,
     "schedule_list": ScheduleListArgs,
@@ -406,28 +342,9 @@ THOUGHT_TOOL_ARGS_MODELS: dict[str, type[ThoughtToolArgsBase]] = {
     "done": DoneArgs,
 }
 
-PROACTIVE_TOOL_ARGS_MODELS: dict[str, type[ProactiveToolArgsBase]] = {
-    "schedule_list": ProactiveScheduleListArgs,
-    "schedule_view": ProactiveScheduleViewArgs,
-    "schedule_get": ProactiveScheduleGetArgs,
-    "history_list": ProactiveHistoryListArgs,
-    "history_search": ProactiveHistorySearchArgs,
-    "internet_search": ProactiveInternetSearchArgs,
-}
-
 
 def validate_thought_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> ThoughtToolArgsBase | None:
     model_cls = THOUGHT_TOOL_ARGS_MODELS.get(tool_name)
-    if model_cls is None:
-        return None
-    try:
-        return model_cls.model_validate(arguments)
-    except ValidationError:
-        return None
-
-
-def validate_proactive_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> ProactiveToolArgsBase | None:
-    model_cls = PROACTIVE_TOOL_ARGS_MODELS.get(tool_name)
     if model_cls is None:
         return None
     try:
@@ -443,14 +360,6 @@ __all__ = [
     "HistorySearchArgs",
     "InternetSearchArgs",
     "InternetSearchFetchUrlArgs",
-    "PROACTIVE_TOOL_ARGS_MODELS",
-    "ProactiveHistoryListArgs",
-    "ProactiveHistorySearchArgs",
-    "ProactiveInternetSearchArgs",
-    "ProactiveScheduleGetArgs",
-    "ProactiveScheduleListArgs",
-    "ProactiveScheduleViewArgs",
-    "ProactiveToolArgsBase",
     "ScheduleAddArgs",
     "ScheduleIdArgs",
     "ScheduleListArgs",
@@ -470,6 +379,5 @@ __all__ = [
     "ThoughtsUpdateArgs",
     "UserProfileGetArgs",
     "UserProfileOverwriteArgs",
-    "validate_proactive_tool_arguments",
     "validate_thought_tool_arguments",
 ]

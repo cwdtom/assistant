@@ -17,7 +17,6 @@ from assistant_app.cli import (
     _handle_input_with_feedback,
     _is_feishu_calendar_sync_configured,
     _is_feishu_configured,
-    _is_proactive_reminder_configured,
     _log_feishu_calendar_periodic_pull_disabled,
     _log_schedule_reminder_polling_disabled,
     _print_assistant_response,
@@ -75,11 +74,6 @@ class CLIFeedbackTest(unittest.TestCase):
         self.assertTrue(_is_feishu_calendar_sync_configured("calendar-id"))
         self.assertFalse(_is_feishu_calendar_sync_configured(""))
         self.assertFalse(_is_feishu_calendar_sync_configured("   "))
-
-    def test_is_proactive_reminder_configured_requires_target_open_id(self) -> None:
-        self.assertTrue(_is_proactive_reminder_configured("ou_target"))
-        self.assertFalse(_is_proactive_reminder_configured(""))
-        self.assertFalse(_is_proactive_reminder_configured("   "))
 
     def test_log_schedule_reminder_polling_disabled_writes_expected_payload(self) -> None:
         stream = io.StringIO()

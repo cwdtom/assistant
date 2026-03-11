@@ -505,7 +505,7 @@ class FeishuLongConnectionRunner:
         self._sdk_module = sdk_module
         self._ws_client: Any | None = None
         self._thread: threading.Thread | None = None
-        self._proactive_sender_lock = threading.Lock()
+        self._open_id_sender_lock = threading.Lock()
         self._send_text_to_open_id: Callable[[str, str], None] | None = None
 
     def start_background(self) -> None:
@@ -525,7 +525,7 @@ class FeishuLongConnectionRunner:
             except Exception:  # noqa: BLE001
                 self._logger.warning("failed to stop feishu ws client", exc_info=True)
 
-    def send_proactive_text(self, *, open_id: str, text: str) -> None:
+    def send_open_id_text(self, *, open_id: str, text: str) -> None:
         try:
             request = FeishuProactiveTextRequest.model_validate(
                 {
@@ -539,21 +539,21 @@ class FeishuLongConnectionRunner:
                 raise ValueError("open_id is required") from exc
             if field_name == "text":
                 raise ValueError("text is required") from exc
-            raise ValueError("invalid proactive text request") from exc
-        with self._proactive_sender_lock:
+            raise ValueError("invalid open_id text request") from exc
+        with self._open_id_sender_lock:
             send_text_to_open_id = self._send_text_to_open_id
         if send_text_to_open_id is None:
-            raise RuntimeError("feishu proactive sender not ready")
+            raise RuntimeError("feishu open_id sender not ready")
         try:
             send_text_to_open_id(request.open_id, request.text)
             self._logger.info(
-                "feishu proactive response sent: open_id=%s text=%s",
+                "feishu open_id response sent: open_id=%s text=%s",
                 request.open_id,
                 request.text,
             )
         except Exception:  # noqa: BLE001
             self._logger.warning(
-                "feishu proactive response failed: open_id=%s text=%s",
+                "feishu open_id response failed: open_id=%s text=%s",
                 request.open_id,
                 request.text,
                 exc_info=True,
@@ -581,7 +581,7 @@ class FeishuLongConnectionRunner:
 
             self._event_processor.set_send_text(send_text)
             self._event_processor.set_send_reaction(send_reaction)
-            with self._proactive_sender_lock:
+            with self._open_id_sender_lock:
                 self._send_text_to_open_id = send_text_to_open_id
 
             event_handler = (
@@ -603,7 +603,7 @@ class FeishuLongConnectionRunner:
         except Exception:  # noqa: BLE001
             self._logger.exception("飞书长连接运行失败")
         finally:
-            with self._proactive_sender_lock:
+            with self._open_id_sender_lock:
                 self._send_text_to_open_id = None
 
     @staticmethod

@@ -19,7 +19,6 @@ from assistant_app.logging_setup import (
     configure_llm_trace_logger,
 )
 from assistant_app.persona import PersonaRewriter
-from assistant_app.proactive_reminder_service import ProactiveReminderService
 from assistant_app.scheduled_planner_task_service import ScheduledPlannerTaskService
 from assistant_app.search import create_search_provider
 from assistant_app.timer import TimerEngine
@@ -36,7 +35,7 @@ class _AgentLike(Protocol):
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None: ...
 
 
-class _ProactiveTextSender(Protocol):
+class _OpenIdTextSender(Protocol):
     def __call__(self, *, open_id: str, text: str) -> None: ...
 
 
@@ -47,10 +46,6 @@ def _should_show_waiting(agent: _AgentLike, user_input: str) -> bool:
 
 def _is_feishu_configured(app_id: str, app_secret: str) -> bool:
     return bool(app_id.strip() and app_secret.strip())
-
-
-def _is_proactive_reminder_configured(target_open_id: str) -> bool:
-    return bool(target_open_id.strip())
 
 
 def _is_feishu_calendar_sync_configured(calendar_id: str) -> bool:
@@ -228,7 +223,7 @@ def main() -> None:
         final_response_rewriter=persona_rewriter.rewrite_final_response,
         app_version=app_version,
     )
-    proactive_sender_holder: dict[str, _ProactiveTextSender | None] = {"send": None}
+    open_id_sender_holder: dict[str, _OpenIdTextSender | None] = {"send": None}
     feishu_configured = _is_feishu_configured(config.feishu_app_id, config.feishu_app_secret)
     calendar_sync_configured = _is_feishu_calendar_sync_configured(config.feishu_calendar_id)
     calendar_sync_service: FeishuCalendarSyncService | None = None
@@ -276,51 +271,24 @@ def main() -> None:
                 },
             )
 
-    def _send_proactive_text(open_id: str, text: str) -> None:
-        sender = proactive_sender_holder["send"]
+    def _send_text_to_open_id(open_id: str, text: str) -> None:
+        sender = open_id_sender_holder["send"]
         if sender is None:
-            raise RuntimeError("feishu proactive sender not ready")
+            raise RuntimeError("feishu open_id sender not ready")
         sender(open_id=open_id, text=text)
 
-    proactive_reminder_configured = _is_proactive_reminder_configured(config.proactive_reminder_target_open_id)
-
-    proactive_reminder_service: ProactiveReminderService | None = None
-    if proactive_reminder_configured and not feishu_configured:
-        app_logger.warning(
-            "proactive reminder requires feishu mode",
-            extra={"event": "proactive_config_requires_feishu"},
-        )
-    elif proactive_reminder_configured:
-        proactive_reminder_service = ProactiveReminderService(
-            db=db,
-            llm_client=llm_client,
-            search_provider=search_provider,
-            logger=app_logger,
-            target_open_id=config.proactive_reminder_target_open_id,
-            send_text_to_open_id=_send_proactive_text,
-            lookahead_hours=config.proactive_reminder_lookahead_hours,
-            interval_minutes=config.proactive_reminder_interval_minutes,
-            night_quiet_hint=config.proactive_reminder_night_quiet_hint,
-            max_steps=config.plan_replan_max_steps,
-            user_profile_path=config.user_profile_path,
-            internet_search_top_k=config.internet_search_top_k,
-            final_content_rewriter=persona_rewriter.rewrite_final_response,
-        )
     scheduled_planner_task_service = ScheduledPlannerTaskService(
         db=db,
         agent=agent,
         llm_client=llm_client,
         logger=app_logger,
         target_open_id=config.proactive_reminder_target_open_id,
-        send_text_to_open_id=_send_proactive_text,
+        send_text_to_open_id=_send_text_to_open_id,
     )
     timer_engine: TimerEngine | None = None
     feishu_runner = None
     if config.timer_enabled:
-        periodic_tasks: list[Callable[[], None]] = []
-        if proactive_reminder_service is not None:
-            periodic_tasks.append(proactive_reminder_service.poll_scheduled)
-        periodic_tasks.append(scheduled_planner_task_service.poll_scheduled)
+        periodic_tasks: list[Callable[[], None]] = [scheduled_planner_task_service.poll_scheduled]
         _log_schedule_reminder_polling_disabled(
             app_logger,
             periodic_task_count=len(periodic_tasks),
@@ -354,7 +322,7 @@ def main() -> None:
             done_emoji_type=config.feishu_done_emoji_type,
         )
         feishu_runner.start_background()
-        proactive_sender_holder["send"] = feishu_runner.send_proactive_text
+        open_id_sender_holder["send"] = feishu_runner.send_open_id_text
         print("助手> Feishu 长连接已在后台启动（单聊模式）。")
     if timer_engine is not None:
         timer_engine.start()
@@ -385,7 +353,7 @@ def main() -> None:
                 continue
             _print_assistant_response(response)
     finally:
-        proactive_sender_holder["send"] = None
+        open_id_sender_holder["send"] = None
         if feishu_runner is not None:
             feishu_runner.stop()
         if timer_engine is not None:

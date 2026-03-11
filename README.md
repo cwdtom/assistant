@@ -6,7 +6,7 @@
 - 日程管理（CRUD、时长、重复规则、提醒字段、日历视图）
 - 碎片想法管理（CRUD，最小字段：content + status）
 - 历史会话持久化与检索
-- 本地定时后台任务线程（timer_tasks 定时 planner 任务、主动提醒）
+- 本地定时后台任务线程（timer_tasks 定时 planner 任务）
 - 可选 Feishu 长连接接入
 - Feishu 任务执行中可异步回传进度：plan 完成后的扩展目标（`任务目标：...`）与子任务完成状态（默认直出，不走 persona 重写）
 
@@ -128,10 +128,7 @@ python main.py
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
   - 启动重建窗口按自然日对齐：`start=(today-past_days) 00:00:00`，`end=(today+future_days) 23:59:59`
-- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：配置后自动启用主动提醒目标；定时 planner 任务的最终结果发送也复用该 open_id；需同时配置 Feishu 凭据
-- `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
-- `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`：主动提醒上下文前瞻窗口小时数（默认 `24`）
-- `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`：夜间静默软约束提示（默认 `23:00-08:00`）
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：定时 planner 任务最终结果发送目标 open_id；配置后且 Feishu 可用时，任务完成消息可发送到该用户
 
 完整变量与行为开关以 `AGENTS.md` 为准；`.env.example` 提供最小可运行模板，额外调优项可按需从 `AGENTS.md` 拾取。
 
@@ -165,9 +162,6 @@ python main.py
 - 若启用 Feishu，非空 plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 若启用 Feishu，ack-only 空计划分支仅发送 ACK/DONE reaction，不发送正文文本
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
-- 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估；LLM 在 `done` 中返回 `should_send/message`，并由模型直接决定是否向固定 `open_id` 发送主动提醒文本
-- 主动提醒发送不会把系统生成的提醒内容写入 `chat_history`
-- Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
 - 新建数据库时会自动初始化两条默认 `timer_tasks`：`每日用户侧写更新`（`0 4 * * *`）和 `每小时提醒`（`0 * * * *`）；两者初始 `run_limit=-1`，`next_run_at=NULL`（由 timer 启动后补齐）
 - 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期，且任务完成后会额外调用一次 LLM 决定是否向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送最终 Feishu 消息，中间进度不会外发
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；运行期仅保留本地日程变更到飞书的异步写同步，不再执行飞书->本地周期拉取
@@ -180,7 +174,7 @@ python main.py
 - `assistant_app/planner_thought.py`：thought prompt、工具 schema 组装与 tool-call 决策归一化
 - `assistant_app/db.py`：SQLite 数据访问
 - `assistant_app/llm.py`：模型网关
-- `assistant_app/schemas/`：Pydantic schema 基类，以及 domain / planner / tools / feishu / proactive / user_profile 等结构化 payload 模型
+- `assistant_app/schemas/`：Pydantic schema 基类，以及 domain / planner / tools / feishu / user_profile 等结构化 payload 模型
   - `assistant_app.schemas` 仅重导出基类与稳定的核心 domain 类型；planner/tool/compat payload 需从对应子模块直接导入
 - `tests/`：单元测试
 - `main.py`：本地启动入口
@@ -201,7 +195,7 @@ python main.py
   - `context`：事件上下文（message_id、call_id、路径、统计值等）
 - Feishu 通道日志会记录消息内容文本：
   - 入站：`feishu inbound message received`（含 `message_id/chat_id/open_id/text`）
-  - 出站：`feishu response sent`、`feishu subtask progress sent`、`feishu proactive response sent`（含 `text`）
+  - 出站：`feishu response sent`、`feishu subtask progress sent`、`feishu open_id response sent`（含 `text`）
   - 若需避免记录消息正文，可将 `FEISHU_LOG_PATH` 置空禁用该 logger 输出
 - 快速排查示例：
 ```bash
