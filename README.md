@@ -172,7 +172,7 @@ python main.py
 - 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估；LLM 在 `done` 中返回 `should_send/message`，并由模型直接决定是否向固定 `open_id` 发送主动提醒文本
 - 主动提醒发送不会把系统生成的提醒内容写入 `chat_history`
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
-- 若数据库存在 `scheduled_planner_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期，且任务完成后会额外调用一次 LLM 决定是否向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送最终 Feishu 消息，中间进度不会外发
+- 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期，且任务完成后会额外调用一次 LLM 决定是否向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送最终 Feishu 消息，中间进度不会外发
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；首次飞书->本地对账会延后到一个 `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES` 周期后
 - Feishu 日历周期对账由 timer 驱动；当 `TIMER_ENABLED=false` 时不会执行周期对账
 
@@ -192,7 +192,7 @@ python main.py
 ## Storage
 - 默认数据库：`assistant.db`
 - 数据库表结构会在启动时由 `assistant_app.db.AssistantDB` 自动初始化
-- 其中 `scheduled_planner_tasks` 用于存储后台定时 planner 任务定义，以及 `run_limit/next_run_at/last_run_at` 状态
+- 其中 `timer_tasks` 用于存储后台定时 planner 任务定义，以及 `run_limit/next_run_at/last_run_at` 状态
 - 默认日志（均为 JSON Lines）：
   - `logs/app.log`：统一日志文件（app/llm_trace/feishu 都写入该文件）
   - 以上路径可通过环境变量覆盖；`LLM_TRACE_LOG_PATH` / `FEISHU_LOG_PATH` 默认跟随 `APP_LOG_PATH`

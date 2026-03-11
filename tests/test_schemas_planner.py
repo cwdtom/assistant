@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from assistant_app.planner_plan_replan import normalize_plan_decision, normalize_replan_decision
+from assistant_app.planner_plan_replan import (
+    PLAN_ONCE_PROMPT,
+    PLANNER_CAPABILITIES_TEXT,
+    REPLAN_PROMPT,
+    normalize_plan_decision,
+    normalize_replan_decision,
+)
 from assistant_app.planner_thought import normalize_thought_decision
 from assistant_app.proactive_react import _normalize_done_arguments
 from assistant_app.schemas.planner import (
@@ -26,6 +32,11 @@ from pydantic import ValidationError
 
 
 class PlannerSchemaTest(unittest.TestCase):
+    def test_plan_and_replan_prompts_describe_timer_capability(self) -> None:
+        self.assertIn("- timer：通用定时 planner 任务管理", PLANNER_CAPABILITIES_TEXT)
+        self.assertIn("schedule|timer|internet_search|history|thoughts|system", PLAN_ONCE_PROMPT)
+        self.assertIn("schedule|timer|internet_search|history|thoughts|system", REPLAN_PROMPT)
+
     def test_planned_decision_normalizes_tools(self) -> None:
         decision = PlannedDecision.model_validate(
             {

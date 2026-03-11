@@ -977,7 +977,7 @@ class AssistantDBTest(unittest.TestCase):
         try:
             conn.execute(
                 """
-                INSERT INTO scheduled_planner_tasks (
+                INSERT INTO timer_tasks (
                     task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1001,6 +1001,19 @@ class AssistantDBTest(unittest.TestCase):
 
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0].cron_expr, "bad cron")
+
+    def test_db_initializes_timer_tasks_table(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+        finally:
+            conn.close()
+
+        self.assertIn("timer_tasks", tables)
+        self.assertNotIn("scheduled_planner_tasks", tables)
 
     def test_legacy_scheduled_planner_task_enabled_column_is_migrated_to_run_limit(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_scheduled_task.db"
@@ -1066,6 +1079,16 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(tasks), 2)
         self.assertEqual(tasks[0].run_limit, -1)
         self.assertEqual(tasks[1].run_limit, 0)
+        conn = sqlite3.connect(str(legacy_path))
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+        finally:
+            conn.close()
+        self.assertIn("timer_tasks", tables)
+        self.assertNotIn("scheduled_planner_tasks", tables)
 
     def test_chat_history_legacy_schema_is_migrated_to_turn_schema(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_chat_history.db"

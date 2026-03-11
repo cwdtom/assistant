@@ -42,6 +42,8 @@ _UNSET = object()
 THOUGHT_STATUS_TODO = "未完成"
 THOUGHT_STATUS_DONE = "完成"
 THOUGHT_STATUS_DELETED = "删除"
+TIMER_TASKS_TABLE = "timer_tasks"
+LEGACY_TIMER_TASKS_TABLE = "scheduled_planner_tasks"
 THOUGHT_STATUS_VALUES = (
     THOUGHT_STATUS_TODO,
     THOUGHT_STATUS_DONE,
@@ -147,21 +149,6 @@ class AssistantDB:
                 )
                 """
             )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS scheduled_planner_tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_name TEXT NOT NULL UNIQUE,
-                    run_limit INTEGER NOT NULL CHECK (run_limit = -1 OR run_limit >= 0),
-                    cron_expr TEXT NOT NULL,
-                    prompt TEXT NOT NULL,
-                    next_run_at TEXT,
-                    last_run_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
             self._ensure_scheduled_planner_tasks_schema(conn)
             self._drop_legacy_schedule_feishu_sync_table(conn)
 
@@ -169,14 +156,22 @@ class AssistantDB:
         conn.execute("DROP TABLE IF EXISTS schedule_feishu_sync")
 
     def _ensure_scheduled_planner_tasks_schema(self, conn: sqlite3.Connection) -> None:
-        columns = conn.execute("PRAGMA table_info(scheduled_planner_tasks)").fetchall()
+        columns = conn.execute(f"PRAGMA table_info({TIMER_TASKS_TABLE})").fetchall()
         if not columns:
+            legacy_columns = conn.execute(f"PRAGMA table_info({LEGACY_TIMER_TASKS_TABLE})").fetchall()
+            if not legacy_columns:
+                self._create_timer_tasks_table(conn)
+                return
+            names = {row["name"] for row in legacy_columns}
+            conn.execute(f"ALTER TABLE {LEGACY_TIMER_TASKS_TABLE} RENAME TO {TIMER_TASKS_TABLE}_old")
+            self._recreate_timer_tasks_table(conn=conn, source_table=f"{TIMER_TASKS_TABLE}_old", column_names=names)
+            conn.execute(f"DROP TABLE {TIMER_TASKS_TABLE}_old")
             return
         names = {row["name"] for row in columns}
         if "run_limit" in names and "enabled" not in names:
             conn.execute(
-                """
-                UPDATE scheduled_planner_tasks
+                f"""
+                UPDATE {TIMER_TASKS_TABLE}
                 SET run_limit = CASE
                     WHEN run_limit IS NULL THEN -1
                     WHEN run_limit = -1 THEN -1
@@ -187,10 +182,14 @@ class AssistantDB:
             )
             return
 
-        conn.execute("ALTER TABLE scheduled_planner_tasks RENAME TO scheduled_planner_tasks_old")
+        conn.execute(f"ALTER TABLE {TIMER_TASKS_TABLE} RENAME TO {TIMER_TASKS_TABLE}_old")
+        self._recreate_timer_tasks_table(conn=conn, source_table=f"{TIMER_TASKS_TABLE}_old", column_names=names)
+        conn.execute(f"DROP TABLE {TIMER_TASKS_TABLE}_old")
+
+    def _create_timer_tasks_table(self, conn: sqlite3.Connection) -> None:
         conn.execute(
-            """
-            CREATE TABLE scheduled_planner_tasks (
+            f"""
+            CREATE TABLE IF NOT EXISTS {TIMER_TASKS_TABLE} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_name TEXT NOT NULL UNIQUE,
                 run_limit INTEGER NOT NULL CHECK (run_limit = -1 OR run_limit >= 0),
@@ -203,13 +202,22 @@ class AssistantDB:
             )
             """
         )
+
+    def _recreate_timer_tasks_table(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        source_table: str,
+        column_names: set[str],
+    ) -> None:
+        self._create_timer_tasks_table(conn)
         run_limit_expr = (
             "CASE "
             "WHEN enabled = 0 THEN 0 "
             "WHEN enabled = 1 THEN -1 "
             "ELSE -1 END"
         )
-        if "run_limit" in names:
+        if "run_limit" in column_names:
             run_limit_expr = (
                 "CASE "
                 "WHEN run_limit IS NULL THEN -1 "
@@ -219,7 +227,7 @@ class AssistantDB:
             )
         conn.execute(
             f"""
-            INSERT INTO scheduled_planner_tasks (
+            INSERT INTO {TIMER_TASKS_TABLE} (
                 id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
             )
             SELECT
@@ -232,10 +240,9 @@ class AssistantDB:
                 last_run_at,
                 created_at,
                 updated_at
-            FROM scheduled_planner_tasks_old
+            FROM {source_table}
             """
         )
-        conn.execute("DROP TABLE scheduled_planner_tasks_old")
 
     def _ensure_schedule_duration_column(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
@@ -950,8 +957,8 @@ class AssistantDB:
         timestamp = _now_iso()
         with self._connect() as conn:
             cur = conn.execute(
-                """
-                INSERT INTO scheduled_planner_tasks (
+                f"""
+                INSERT INTO {TIMER_TASKS_TABLE} (
                     task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -974,9 +981,9 @@ class AssistantDB:
     def list_scheduled_planner_tasks(self) -> list[ScheduledPlannerTask]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
-                FROM scheduled_planner_tasks
+                FROM {TIMER_TASKS_TABLE}
                 ORDER BY id ASC
                 """
             ).fetchall()
@@ -985,9 +992,9 @@ class AssistantDB:
     def get_scheduled_planner_task(self, task_id: int) -> ScheduledPlannerTask | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
-                FROM scheduled_planner_tasks
+                FROM {TIMER_TASKS_TABLE}
                 WHERE id = ?
                 """,
                 (task_id,),
@@ -999,9 +1006,9 @@ class AssistantDB:
     def list_uninitialized_scheduled_planner_tasks(self) -> list[ScheduledPlannerTask]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
-                FROM scheduled_planner_tasks
+                FROM {TIMER_TASKS_TABLE}
                 WHERE run_limit != 0 AND next_run_at IS NULL
                 ORDER BY id ASC
                 """
@@ -1016,9 +1023,9 @@ class AssistantDB:
     ) -> list[ScheduledPlannerTask]:
         normalized_now = now.replace(microsecond=0).isoformat(sep=" ")
         sql = (
-            """
+            f"""
             SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
-            FROM scheduled_planner_tasks
+            FROM {TIMER_TASKS_TABLE}
             WHERE run_limit != 0
               AND next_run_at IS NOT NULL
               AND next_run_at <= ?
@@ -1045,8 +1052,8 @@ class AssistantDB:
         normalized_updated_at = updated_at or _now_iso()
         with self._connect() as conn:
             cur = conn.execute(
-                """
-                UPDATE scheduled_planner_tasks
+                f"""
+                UPDATE {TIMER_TASKS_TABLE}
                 SET next_run_at = ?, updated_at = ?
                 WHERE id = ? AND run_limit != 0 AND next_run_at IS NULL
                 """,
@@ -1080,8 +1087,8 @@ class AssistantDB:
 
         with self._connect() as conn:
             cur = conn.execute(
-                """
-                UPDATE scheduled_planner_tasks
+                f"""
+                UPDATE {TIMER_TASKS_TABLE}
                 SET
                     task_name = ?,
                     run_limit = ?,
@@ -1106,7 +1113,7 @@ class AssistantDB:
     def delete_scheduled_planner_task(self, task_id: int) -> bool:
         with self._connect() as conn:
             cur = conn.execute(
-                "DELETE FROM scheduled_planner_tasks WHERE id = ?",
+                f"DELETE FROM {TIMER_TASKS_TABLE} WHERE id = ?",
                 (task_id,),
             )
             return cur.rowcount > 0
@@ -1123,8 +1130,8 @@ class AssistantDB:
         normalized_updated_at = updated_at or started_at
         with self._connect() as conn:
             cur = conn.execute(
-                """
-                UPDATE scheduled_planner_tasks
+                f"""
+                UPDATE {TIMER_TASKS_TABLE}
                 SET
                     last_run_at = ?,
                     next_run_at = ?,

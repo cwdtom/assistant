@@ -127,7 +127,7 @@ Optional runtime flags (all supported in `.env`):
 - Schedule includes `duration_minutes` (default `60` on create).
 - `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
 - Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
-- Timer also scans `scheduled_planner_tasks` every `TIMER_POLL_INTERVAL_SECONDS`; rows with `run_limit != 0` and due `next_run_at` are queued serially, pushed into the existing planner flow via `prompt`, and do not catch up missed runs. Starting execution decrements `run_limit` once, except `-1` which remains unlimited.
+- Timer also scans `timer_tasks` every `TIMER_POLL_INTERVAL_SECONDS`; rows with `run_limit != 0` and due `next_run_at` are queued serially, pushed into the existing planner flow via `prompt`, and do not catch up missed runs. Starting execution decrements `run_limit` once, except `-1` which remains unlimited.
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
@@ -185,7 +185,7 @@ Optional runtime flags (all supported in `.env`):
 - `schedules`: title, tag, start datetime, duration, reminder datetime, created time.
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.
-- `scheduled_planner_tasks`: stores `task_name`, `run_limit`, `cron_expr`, `prompt`, `next_run_at`, `last_run_at`, `created_at`, and `updated_at`.
+- `timer_tasks`: stores `task_name`, `run_limit`, `cron_expr`, `prompt`, `next_run_at`, `last_run_at`, `created_at`, and `updated_at`.
 - `thoughts`: stores `content`, `status`, `created_at`, and `updated_at`.
 
 ## Supplement: Dev Commands (moved from README)
