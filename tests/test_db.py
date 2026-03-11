@@ -20,9 +20,14 @@ class AssistantDBTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self.tmp.name) / "assistant_test.db")
         self.db = AssistantDB(self.db_path)
+        self._clear_seeded_timer_tasks()
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def _clear_seeded_timer_tasks(self) -> None:
+        for task in self.db.list_scheduled_planner_tasks():
+            self.db.delete_scheduled_planner_task(task.id)
 
     def test_schedule_order(self) -> None:
         self.db.add_schedule("晚上的会", "2026-02-20 20:00")
@@ -1014,6 +1019,21 @@ class AssistantDBTest(unittest.TestCase):
 
         self.assertIn("timer_tasks", tables)
         self.assertNotIn("scheduled_planner_tasks", tables)
+
+    def test_db_seeds_default_timer_tasks_for_new_database(self) -> None:
+        seeded_path = Path(self.tmp.name) / "seeded_timer_tasks.db"
+        seeded_db = AssistantDB(str(seeded_path))
+        tasks = seeded_db.list_scheduled_planner_tasks()
+
+        self.assertEqual(len(tasks), 2)
+        by_name = {task.task_name: task for task in tasks}
+        self.assertEqual(set(by_name), {"每日用户侧写更新", "每小时提醒"})
+        self.assertEqual(by_name["每日用户侧写更新"].cron_expr, "0 4 * * *")
+        self.assertEqual(by_name["每小时提醒"].cron_expr, "0 * * * *")
+        self.assertEqual(by_name["每日用户侧写更新"].run_limit, -1)
+        self.assertEqual(by_name["每小时提醒"].run_limit, -1)
+        self.assertIsNone(by_name["每日用户侧写更新"].next_run_at)
+        self.assertIsNone(by_name["每小时提醒"].next_run_at)
 
     def test_legacy_scheduled_planner_task_enabled_column_is_migrated_to_run_limit(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_scheduled_task.db"

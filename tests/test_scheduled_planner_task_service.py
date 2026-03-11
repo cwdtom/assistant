@@ -114,6 +114,8 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.db = AssistantDB(str(Path(self.tmp.name) / "assistant_test.db"))
+        for task in self.db.list_scheduled_planner_tasks():
+            self.db.delete_scheduled_planner_task(task.id)
         self.clock = _MutableClock(datetime(2026, 3, 11, 10, 0, 0))
         self.sent: list[tuple[str, str]] = []
 

@@ -18,6 +18,8 @@ class TimerToolTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.db = AssistantDB(str(Path(self.tmp.name) / "assistant_test.db"))
+        for task in self.db.list_scheduled_planner_tasks():
+            self.db.delete_scheduled_planner_task(task.id)
         self.agent = AssistantAgent(db=self.db)
 
     def tearDown(self) -> None:
@@ -47,9 +49,13 @@ class TimerToolTest(unittest.TestCase):
         )
 
         self.assertTrue(add_observation.ok)
-        self.assertIn("已创建定时任务 #1", add_observation.result)
-        stored = self.db.get_scheduled_planner_task(1)
+        stored = next(
+            (task for task in self.db.list_scheduled_planner_tasks() if task.task_name == "daily-report"),
+            None,
+        )
         assert stored is not None
+        task_id = stored.id
+        self.assertIn(f"已创建定时任务 #{task_id}", add_observation.result)
         self.assertEqual(stored.next_run_at, "2026-03-11 09:00:00")
 
         list_observation = self.agent._execute_planner_tool(
@@ -62,7 +68,7 @@ class TimerToolTest(unittest.TestCase):
 
         get_observation = self.agent._execute_planner_tool(
             action_tool="timer",
-            action_input='{"action":"get","id":1}',
+            action_input=json.dumps({"action": "get", "id": task_id}, ensure_ascii=False),
         )
         self.assertTrue(get_observation.ok)
         self.assertIn("定时任务详情", get_observation.result)
@@ -73,23 +79,23 @@ class TimerToolTest(unittest.TestCase):
             action_input="not-json",
             action_payload=RuntimePlannerActionPayload(
                 tool_name="timer_update",
-                arguments=TimerUpdateArgs(id=1, prompt="生成新版日报"),
+                arguments=TimerUpdateArgs(id=task_id, prompt="生成新版日报"),
             ),
         )
         self.assertTrue(update_observation.ok)
-        self.assertIn("已更新定时任务 #1", update_observation.result)
-        updated = self.db.get_scheduled_planner_task(1)
+        self.assertIn(f"已更新定时任务 #{task_id}", update_observation.result)
+        updated = self.db.get_scheduled_planner_task(task_id)
         assert updated is not None
         self.assertEqual(updated.prompt, "生成新版日报")
         self.assertEqual(updated.next_run_at, "2026-03-11 09:00:00")
 
         delete_observation = self.agent._execute_planner_tool(
             action_tool="timer",
-            action_input='{"action":"delete","id":1}',
+            action_input=json.dumps({"action": "delete", "id": task_id}, ensure_ascii=False),
         )
         self.assertTrue(delete_observation.ok)
-        self.assertEqual(delete_observation.result, "定时任务 #1 已删除。")
-        self.assertIsNone(self.db.get_scheduled_planner_task(1))
+        self.assertEqual(delete_observation.result, f"定时任务 #{task_id} 已删除。")
+        self.assertIsNone(self.db.get_scheduled_planner_task(task_id))
 
     def test_timer_update_recomputes_next_run_at_when_reenabled(self) -> None:
         task_id = self.db.add_scheduled_planner_task(

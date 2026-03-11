@@ -127,6 +127,7 @@ Optional runtime flags (all supported in `.env`):
 - `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
 - Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
 - Timer also scans `timer_tasks` every `TIMER_POLL_INTERVAL_SECONDS`; rows with `run_limit != 0` and due `next_run_at` are queued serially, pushed into the existing planner flow via `prompt`, and do not catch up missed runs. Starting execution decrements `run_limit` once, except `-1` which remains unlimited.
+- New database initialization seeds two default `timer_tasks`: `每日用户侧写更新` (`0 4 * * *`) and `每小时提醒` (`0 * * * *`), both with `run_limit=-1` and `next_run_at=NULL` before timer initialization.
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).

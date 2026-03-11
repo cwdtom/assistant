@@ -161,6 +161,7 @@ class AssistantDB:
             legacy_columns = conn.execute(f"PRAGMA table_info({LEGACY_TIMER_TASKS_TABLE})").fetchall()
             if not legacy_columns:
                 self._create_timer_tasks_table(conn)
+                self._seed_timer_tasks(conn)
                 return
             names = {row["name"] for row in legacy_columns}
             conn.execute(f"ALTER TABLE {LEGACY_TIMER_TASKS_TABLE} RENAME TO {TIMER_TASKS_TABLE}_old")
@@ -201,6 +202,40 @@ class AssistantDB:
                 updated_at TEXT NOT NULL
             )
             """
+        )
+
+    def _seed_timer_tasks(self, conn: sqlite3.Connection) -> None:
+        timestamp = _now_iso()
+        seed_rows = [
+            (
+                "每日用户侧写更新",
+                -1,
+                "0 4 * * *",
+                "结合可用工具能获取的数据（聊天记录、日程、想法等）和现有用户侧写数据总结一份新的用户侧写并覆写入侧写文件",
+                None,
+                None,
+                timestamp,
+                timestamp,
+            ),
+            (
+                "每小时提醒",
+                -1,
+                "0 * * * *",
+                "结合可用工具能获取的数据（聊天记录、日程、想法、用户侧写等）总结一个需要提醒的内容",
+                None,
+                None,
+                timestamp,
+                timestamp,
+            ),
+        ]
+        conn.executemany(
+            f"""
+            INSERT OR IGNORE INTO {TIMER_TASKS_TABLE} (
+                task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            seed_rows,
         )
 
     def _recreate_timer_tasks_table(

@@ -171,6 +171,7 @@ python main.py
 - 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估；LLM 在 `done` 中返回 `should_send/message`，并由模型直接决定是否向固定 `open_id` 发送主动提醒文本
 - 主动提醒发送不会把系统生成的提醒内容写入 `chat_history`
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
+- 新建数据库时会自动初始化两条默认 `timer_tasks`：`每日用户侧写更新`（`0 4 * * *`）和 `每小时提醒`（`0 * * * *`）；两者初始 `run_limit=-1`，`next_run_at=NULL`（由 timer 启动后补齐）
 - 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期，且任务完成后会额外调用一次 LLM 决定是否向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送最终 Feishu 消息，中间进度不会外发
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；运行期仅保留本地日程变更到飞书的异步写同步，不再执行飞书->本地周期拉取
 
