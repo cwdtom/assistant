@@ -1853,6 +1853,47 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(set(first_tool_names), {"system_date", "ask_user", "done"})
         self.assertNotIn("system", first_tool_names)
 
+    def test_scheduled_source_thought_tool_calling_omits_ask_user(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["查看时间", "总结"],
+                    tools_by_task={"查看时间": ["system"], "总结": []},
+                ),
+                _planner_done("已获取时间。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, completed = agent.handle_input_with_task_status("后台执行查看时间", source="scheduled")
+
+        self.assertTrue(completed)
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        self.assertEqual(set(first_tool_names), {"system_date", "done"})
+        self.assertNotIn("ask_user", first_tool_names)
+
+    def test_scheduled_source_persists_chat_history(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看时间", "总结"]),
+                _planner_done("已获取时间。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, completed = agent.handle_input_with_task_status("后台任务：查看时间", source="scheduled")
+
+        self.assertTrue(completed)
+        self.assertIn("全部完成", response)
+        turns = self.db.recent_turns(limit=1)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0].user_content, "后台任务：查看时间")
+        self.assertEqual(turns[0].assistant_content, response)
+
     def test_thought_tool_calling_accepts_typed_tool_reply_payload(self) -> None:
         fake_llm = FakeTypedToolCallingLLMClient(
             responses=[

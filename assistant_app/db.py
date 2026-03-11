@@ -17,6 +17,7 @@ from assistant_app.schemas.domain import (
     ScheduleItem,
     ThoughtItem,
 )
+from assistant_app.schemas.scheduled_tasks import ScheduledPlannerTask, ScheduledPlannerTaskCreateInput
 from assistant_app.schemas.storage import (
     ScheduleBatchCreateInput,
     ScheduleCreateInput,
@@ -142,10 +143,95 @@ class AssistantDB:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_planner_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_name TEXT NOT NULL UNIQUE,
+                    run_limit INTEGER NOT NULL CHECK (run_limit = -1 OR run_limit >= 0),
+                    cron_expr TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    next_run_at TEXT,
+                    last_run_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self._ensure_scheduled_planner_tasks_schema(conn)
             self._drop_legacy_schedule_feishu_sync_table(conn)
 
     def _drop_legacy_schedule_feishu_sync_table(self, conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE IF EXISTS schedule_feishu_sync")
+
+    def _ensure_scheduled_planner_tasks_schema(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(scheduled_planner_tasks)").fetchall()
+        if not columns:
+            return
+        names = {row["name"] for row in columns}
+        if "run_limit" in names and "enabled" not in names:
+            conn.execute(
+                """
+                UPDATE scheduled_planner_tasks
+                SET run_limit = CASE
+                    WHEN run_limit IS NULL THEN -1
+                    WHEN run_limit = -1 THEN -1
+                    WHEN run_limit < 0 THEN 0
+                    ELSE run_limit
+                END
+                """
+            )
+            return
+
+        conn.execute("ALTER TABLE scheduled_planner_tasks RENAME TO scheduled_planner_tasks_old")
+        conn.execute(
+            """
+            CREATE TABLE scheduled_planner_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_name TEXT NOT NULL UNIQUE,
+                run_limit INTEGER NOT NULL CHECK (run_limit = -1 OR run_limit >= 0),
+                cron_expr TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                next_run_at TEXT,
+                last_run_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        run_limit_expr = (
+            "CASE "
+            "WHEN enabled = 0 THEN 0 "
+            "WHEN enabled = 1 THEN -1 "
+            "ELSE -1 END"
+        )
+        if "run_limit" in names:
+            run_limit_expr = (
+                "CASE "
+                "WHEN run_limit IS NULL THEN -1 "
+                "WHEN run_limit = -1 THEN -1 "
+                "WHEN run_limit < 0 THEN 0 "
+                "ELSE run_limit END"
+            )
+        conn.execute(
+            f"""
+            INSERT INTO scheduled_planner_tasks (
+                id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+            )
+            SELECT
+                id,
+                task_name,
+                {run_limit_expr},
+                cron_expr,
+                prompt,
+                next_run_at,
+                last_run_at,
+                created_at,
+                updated_at
+            FROM scheduled_planner_tasks_old
+            """
+        )
+        conn.execute("DROP TABLE scheduled_planner_tasks_old")
 
     def _ensure_schedule_duration_column(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(schedules)").fetchall()
@@ -834,6 +920,156 @@ class AssistantDB:
         with self._connect() as conn:
             return self._list_recurring_rules(conn)
 
+    def add_scheduled_planner_task(
+        self,
+        *,
+        task_name: str,
+        cron_expr: str,
+        prompt: str,
+        run_limit: int = -1,
+        next_run_at: str | None = None,
+    ) -> int:
+        try:
+            payload = ScheduledPlannerTaskCreateInput.model_validate(
+                {
+                    "task_name": task_name,
+                    "run_limit": run_limit,
+                    "cron_expr": cron_expr,
+                    "prompt": prompt,
+                    "next_run_at": next_run_at,
+                }
+            )
+        except ValidationError as exc:
+            self._log_input_validation_failed(method="add_scheduled_planner_task", exc=exc)
+            raise ValueError(str(exc)) from exc
+
+        timestamp = _now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO scheduled_planner_tasks (
+                    task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload.task_name,
+                    payload.run_limit,
+                    payload.cron_expr,
+                    payload.prompt,
+                    payload.next_run_at,
+                    None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            if cur.lastrowid is None:
+                raise RuntimeError("failed to insert scheduled planner task")
+            return int(cur.lastrowid)
+
+    def list_scheduled_planner_tasks(self) -> list[ScheduledPlannerTask]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                FROM scheduled_planner_tasks
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        return [_scheduled_planner_task_from_row(row) for row in rows]
+
+    def list_uninitialized_scheduled_planner_tasks(self) -> list[ScheduledPlannerTask]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                FROM scheduled_planner_tasks
+                WHERE run_limit != 0 AND next_run_at IS NULL
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        return [_scheduled_planner_task_from_row(row) for row in rows]
+
+    def list_due_scheduled_planner_tasks(
+        self,
+        *,
+        now: datetime,
+        limit: int | None = None,
+    ) -> list[ScheduledPlannerTask]:
+        normalized_now = now.replace(microsecond=0).isoformat(sep=" ")
+        sql = (
+            """
+            SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+            FROM scheduled_planner_tasks
+            WHERE run_limit != 0
+              AND next_run_at IS NOT NULL
+              AND next_run_at <= ?
+            ORDER BY next_run_at ASC, id ASC
+            """
+        )
+        params: tuple[object, ...]
+        if limit is None:
+            params = (normalized_now,)
+        else:
+            sql += "\nLIMIT ?"
+            params = (normalized_now, max(limit, 1))
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_scheduled_planner_task_from_row(row) for row in rows]
+
+    def initialize_scheduled_planner_task_next_run(
+        self,
+        task_id: int,
+        *,
+        next_run_at: str,
+        updated_at: str | None = None,
+    ) -> bool:
+        normalized_updated_at = updated_at or _now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE scheduled_planner_tasks
+                SET next_run_at = ?, updated_at = ?
+                WHERE id = ? AND run_limit != 0 AND next_run_at IS NULL
+                """,
+                (next_run_at, normalized_updated_at, task_id),
+            )
+            return cur.rowcount > 0
+
+    def mark_scheduled_planner_task_started(
+        self,
+        task_id: int,
+        *,
+        expected_next_run_at: str,
+        started_at: str,
+        next_run_at: str,
+        updated_at: str | None = None,
+    ) -> bool:
+        normalized_updated_at = updated_at or started_at
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE scheduled_planner_tasks
+                SET
+                    last_run_at = ?,
+                    next_run_at = ?,
+                    run_limit = CASE
+                        WHEN run_limit = -1 THEN -1
+                        ELSE run_limit - 1
+                    END,
+                    updated_at = ?
+                WHERE id = ? AND run_limit != 0 AND next_run_at = ?
+                """,
+                (
+                    started_at,
+                    next_run_at,
+                    normalized_updated_at,
+                    task_id,
+                    expected_next_run_at,
+                ),
+            )
+            return cur.rowcount > 0
+
     def has_reminder_delivery(self, reminder_key: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
@@ -1074,6 +1310,19 @@ def _chat_turn_from_row(row: sqlite3.Row) -> ChatTurn:
     payload["assistant_content"] = str(payload.get("assistant_content") or "")
     payload["created_at"] = str(payload.get("created_at") or "")
     return ChatTurn.model_validate(payload)
+
+
+def _scheduled_planner_task_from_row(row: sqlite3.Row) -> ScheduledPlannerTask:
+    payload = dict(row)
+    payload["task_name"] = str(payload.get("task_name") or "")
+    payload["run_limit"] = int(payload.get("run_limit") if payload.get("run_limit") is not None else -1)
+    payload["cron_expr"] = str(payload.get("cron_expr") or "")
+    payload["prompt"] = str(payload.get("prompt") or "")
+    payload["next_run_at"] = str(payload["next_run_at"]) if payload.get("next_run_at") else None
+    payload["last_run_at"] = str(payload["last_run_at"]) if payload.get("last_run_at") else None
+    payload["created_at"] = str(payload.get("created_at") or "")
+    payload["updated_at"] = str(payload.get("updated_at") or "")
+    return ScheduledPlannerTask.model_validate(payload)
 
 
 def _normalize_schedule_window(

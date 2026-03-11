@@ -114,7 +114,7 @@ Optional runtime flags (all supported in `.env`):
 - `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`: Feishu-authoritative reconcile interval (default `10`)
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`: startup bootstrap sync lookback days (default `2`)
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`: startup bootstrap sync lookahead days (default `5`)
-- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages; when non-empty and Feishu credentials are present, proactive reminder evaluation is enabled
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages; scheduled planner task final-result delivery also reuses this open_id; when non-empty and Feishu credentials are present, proactive reminder evaluation is enabled
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`: proactive evaluation interval in minutes (default `60`, min `60`)
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`: proactive context lookahead window in hours (default `24`)
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`: soft quiet-time hint in proactive prompt (default `23:00-08:00`)
@@ -127,6 +127,7 @@ Optional runtime flags (all supported in `.env`):
 - Schedule includes `duration_minutes` (default `60` on create).
 - `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
 - Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
+- Timer also scans `scheduled_planner_tasks` every `TIMER_POLL_INTERVAL_SECONDS`; rows with `run_limit != 0` and due `next_run_at` are queued serially, pushed into the existing planner flow via `prompt`, and do not catch up missed runs. Starting execution decrements `run_limit` once, except `-1` which remains unlimited.
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
@@ -150,6 +151,7 @@ Optional runtime flags (all supported in `.env`):
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
 - Plan phase allows empty `plan` as ack-only completion (for short confirmation/thanks messages like `谢谢/好的/明白了`); this path skips thought/replan, skips `chat_history` persistence, and does not emit `任务目标：...` progress message.
 - Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）+ `thoughts` group（展开为 `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`，用于记录碎片想法）+ `system` group（展开为 `system_date`，用于读取当前本地时间）.
+- Scheduled planner task source reuses the same plan/replan runtime but omits `ask_user` from thought tools; the final planner response still persists into `chat_history`.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
@@ -164,6 +166,7 @@ Optional runtime flags (all supported in `.env`):
 - Proactive reminder default context window: schedule in next 24h + chat_history in last 24h.
 - Proactive reminder runs on timer periodic tasks; proactive `done` returns `should_send/message`, and the LLM directly decides whether Feishu proactive text is sent.
 - Proactive reminder sends do not persist synthetic turns into `chat_history`.
+- Scheduled planner task completion triggers a second LLM decision with `should_send/message`; only the final Feishu message may be sent, and intermediate planner progress/subtask updates are never sent for this source.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).
@@ -182,6 +185,7 @@ Optional runtime flags (all supported in `.env`):
 - `schedules`: title, tag, start datetime, duration, reminder datetime, created time.
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.
+- `scheduled_planner_tasks`: stores `task_name`, `run_limit`, `cron_expr`, `prompt`, `next_run_at`, `last_run_at`, `created_at`, and `updated_at`.
 - `thoughts`: stores `content`, `status`, `created_at`, and `updated_at`.
 
 ## Supplement: Dev Commands (moved from README)

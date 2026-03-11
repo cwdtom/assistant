@@ -122,6 +122,7 @@ python main.py
 - `BOCHA_SEARCH_SUMMARY`：是否请求 Bocha 返回 summary（默认 `true`）
 - `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
 - `TIMER_ENABLED`：是否启用本地定时后台任务线程（默认 `true`）
+- `TIMER_POLL_INTERVAL_SECONDS`：后台 timer 扫描周期秒数（默认 `15`）
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：配置后自动启用 Feishu 长连接
 - `FEISHU_ALLOWED_OPEN_IDS`：open_id 白名单；支持逗号分隔字符串，也支持 JSON 数组
 - `FEISHU_CALENDAR_ID`：配置后自动启用本地日程与 Feishu 日历同步；需同时配置 Feishu 凭据
@@ -129,7 +130,7 @@ python main.py
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
   - 启动重建窗口按自然日对齐：`start=(today-past_days) 00:00:00`，`end=(today+future_days) 23:59:59`
-- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：配置后自动启用主动提醒目标；需同时配置 Feishu 凭据
+- `PROACTIVE_REMINDER_TARGET_OPEN_ID`：配置后自动启用主动提醒目标；定时 planner 任务的最终结果发送也复用该 open_id；需同时配置 Feishu 凭据
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`：主动提醒评估间隔分钟（默认 `60`，最小 `60`）
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`：主动提醒上下文前瞻窗口小时数（默认 `24`）
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`：夜间静默软约束提示（默认 `23:00-08:00`）
@@ -158,7 +159,7 @@ python main.py
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
-- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法），`system` -> `system_date`（读取当前本地时间）
+- thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法），`system` -> `system_date`（读取当前本地时间）；后台定时 planner 任务链路不会向 thought 暴露 `ask_user`
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
 - 当 rerank 请求失败时，会自动降级重试为非 rerank Bocha 搜索
 - `internet_search` 在收到裸 `http/https` URL 输入时会自动按 `fetch_url` 路径执行（不再按关键词搜索）
@@ -171,6 +172,7 @@ python main.py
 - 若启用主动提醒：timer 会按配置周期触发独立 Proactive ReAct 评估；LLM 在 `done` 中返回 `should_send/message`，并由模型直接决定是否向固定 `open_id` 发送主动提醒文本
 - 主动提醒发送不会把系统生成的提醒内容写入 `chat_history`
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
+- 若数据库存在 `scheduled_planner_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期，且任务完成后会额外调用一次 LLM 决定是否向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送最终 Feishu 消息，中间进度不会外发
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；首次飞书->本地对账会延后到一个 `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES` 周期后
 - Feishu 日历周期对账由 timer 驱动；当 `TIMER_ENABLED=false` 时不会执行周期对账
 
@@ -190,6 +192,7 @@ python main.py
 ## Storage
 - 默认数据库：`assistant.db`
 - 数据库表结构会在启动时由 `assistant_app.db.AssistantDB` 自动初始化
+- 其中 `scheduled_planner_tasks` 用于存储后台定时 planner 任务定义，以及 `run_limit/next_run_at/last_run_at` 状态
 - 默认日志（均为 JSON Lines）：
   - `logs/app.log`：统一日志文件（app/llm_trace/feishu 都写入该文件）
   - 以上路径可通过环境变量覆盖；`LLM_TRACE_LOG_PATH` / `FEISHU_LOG_PATH` 默认跟随 `APP_LOG_PATH`

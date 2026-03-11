@@ -20,6 +20,7 @@ from assistant_app.logging_setup import (
 )
 from assistant_app.persona import PersonaRewriter
 from assistant_app.proactive_reminder_service import ProactiveReminderService
+from assistant_app.scheduled_planner_task_service import ScheduledPlannerTaskService
 from assistant_app.search import create_search_provider
 from assistant_app.timer import TimerEngine
 from assistant_app.user_profile_refresh import UserProfileRefreshService
@@ -295,6 +296,14 @@ def main() -> None:
             internet_search_top_k=config.internet_search_top_k,
             final_content_rewriter=persona_rewriter.rewrite_final_response,
         )
+    scheduled_planner_task_service = ScheduledPlannerTaskService(
+        db=db,
+        agent=agent,
+        llm_client=llm_client,
+        logger=app_logger,
+        target_open_id=config.proactive_reminder_target_open_id,
+        send_text_to_open_id=_send_proactive_text,
+    )
     timer_engine: TimerEngine | None = None
     feishu_runner = None
     if config.timer_enabled:
@@ -305,6 +314,7 @@ def main() -> None:
             periodic_tasks.append(user_profile_refresh_service.poll_scheduled)
         if proactive_reminder_service is not None:
             periodic_tasks.append(proactive_reminder_service.poll_scheduled)
+        periodic_tasks.append(scheduled_planner_task_service.poll_scheduled)
         _log_schedule_reminder_polling_disabled(
             app_logger,
             periodic_task_count=len(periodic_tasks),
@@ -314,7 +324,6 @@ def main() -> None:
             poll_interval_seconds=config.timer_poll_interval_seconds,
             logger=app_logger,
         )
-        timer_engine.start()
 
     if feishu_configured:
         feishu_retention_days = config.feishu_log_retention_days
@@ -341,6 +350,8 @@ def main() -> None:
         feishu_runner.start_background()
         proactive_sender_holder["send"] = feishu_runner.send_proactive_text
         print("助手> Feishu 长连接已在后台启动（单聊模式）。")
+    if timer_engine is not None:
+        timer_engine.start()
 
     try:
         _clear_terminal_history()
@@ -373,6 +384,7 @@ def main() -> None:
             feishu_runner.stop()
         if timer_engine is not None:
             timer_engine.stop()
+        scheduled_planner_task_service.stop()
         if calendar_sync_service is not None:
             calendar_sync_service.stop()
 

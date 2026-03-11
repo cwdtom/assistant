@@ -385,7 +385,7 @@ class PlannerSession:
     def current_thought_tool_names(self, task: PendingPlanTask) -> list[str]:
         current_step = self.current_plan_step(task)
         raw_tools: list[str] = current_step.tools if current_step is not None else []
-        return resolve_current_subtask_tool_names(raw_tools)
+        return resolve_current_subtask_tool_names(raw_tools, allow_ask_user=task.source == "interactive")
 
     @staticmethod
     def sync_current_plan_index(outer: OuterPlanContext) -> None:
@@ -459,6 +459,8 @@ class PlannerSession:
         )
 
     def notify_replan_continue_subtask_result(self, task: PendingPlanTask) -> None:
+        if task.source != "interactive":
+            return
         callback = self._subtask_result_callback
         if callback is None:
             return
@@ -482,6 +484,8 @@ class PlannerSession:
             )
 
     def notify_plan_goal_result(self, task: PendingPlanTask, expanded_goal: str) -> None:
+        if task.source != "interactive":
+            return
         callback = self._subtask_result_callback
         if callback is None or task.plan_goal_notified:
             return

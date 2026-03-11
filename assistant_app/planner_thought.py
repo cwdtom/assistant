@@ -35,11 +35,12 @@ THOUGHT_PROMPT = """
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
 - internet_search_tool、internet_search_fetch_url、history_list、history_search
 - thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete、system_date
-- ask_user、done
+- done
+- ask_user 仅在本轮 tools schema 明确提供时可用
 
 规则：
 - 每轮最多调用 1 个工具
-- 如果信息不足，调用 ask_user
+- 如果信息不足且本轮 tools schema 提供了 ask_user，调用 ask_user
 - 当前子任务完成时，调用 done（由 replan 决定外层继续或收口）
 - 输入上下文里的 current_subtask 是当前唯一可执行子任务；不得基于未来步骤提前执行动作
 - completed_subtasks / current_subtask_observations 仅用于参考已完成结果与当前子任务进度
@@ -88,18 +89,19 @@ _THOUGHT_SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
 }
 
 
-def resolve_current_subtask_tool_names(raw_tools: Any) -> list[str]:
+def resolve_current_subtask_tool_names(raw_tools: Any, *, allow_ask_user: bool = True) -> list[str]:
     base_tools = normalize_tool_names(raw_tools)
     if base_tools is None:
         base_tools = []
-    for name in THOUGHT_RUNTIME_TOOL_NAMES:
+    runtime_tool_names = [name for name in THOUGHT_RUNTIME_TOOL_NAMES if allow_ask_user or name != "ask_user"]
+    for name in runtime_tool_names:
         if name not in base_tools:
             base_tools.append(name)
     return base_tools
 
 
-def build_thought_tool_schemas(raw_tools: Any) -> list[dict[str, Any]]:
-    tool_names = resolve_current_subtask_tool_names(raw_tools)
+def build_thought_tool_schemas(raw_tools: Any, *, allow_ask_user: bool = True) -> list[dict[str, Any]]:
+    tool_names = resolve_current_subtask_tool_names(raw_tools, allow_ask_user=allow_ask_user)
     schema_tool_names = expand_tool_groups(tool_names)
     schemas: list[dict[str, Any]] = []
     for name in schema_tool_names:

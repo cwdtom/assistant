@@ -4,7 +4,7 @@ import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from assistant_app.agent_components.command_handlers import (
     handle_command as _handle_command_impl,
@@ -116,6 +116,7 @@ class AssistantAgent:
         self._skip_history_once = False
         self._interrupt_lock = threading.Lock()
         self._interrupt_requested = False
+        self._handle_input_lock = threading.Lock()
 
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
@@ -239,28 +240,42 @@ class AssistantAgent:
             )
 
     def handle_input(self, user_input: str) -> str:
-        text = user_input.strip()
-        if not text:
-            return "请输入内容。输入 /help 查看可用命令。"
-        self._last_task_completed = False
-        self._skip_history_once = False
-        self._clear_interrupt_request()
-        response = self._handle_input_text(text)
-        if not text.startswith("/"):
-            if self._skip_history_once:
-                self._app_logger.info(
-                    "chat history skipped",
-                    extra={
-                        "event": "chat_history_skipped",
-                        "context": {"reason": "plan_ack_only"},
-                    },
-                )
-            else:
-                self._save_turn_history(user_text=text, assistant_text=response)
-        return response
+        return self.handle_input_for_source(user_input, source="interactive")
 
-    def handle_input_with_task_status(self, user_input: str) -> tuple[str, bool]:
-        response = self.handle_input(user_input)
+    def handle_input_for_source(
+        self,
+        user_input: str,
+        *,
+        source: Literal["interactive", "scheduled"] = "interactive",
+    ) -> str:
+        with self._handle_input_lock:
+            text = user_input.strip()
+            if not text:
+                return "请输入内容。输入 /help 查看可用命令。"
+            self._last_task_completed = False
+            self._skip_history_once = False
+            self._clear_interrupt_request()
+            response = self._handle_input_text(text, source=source)
+            if not text.startswith("/"):
+                if self._skip_history_once:
+                    self._app_logger.info(
+                        "chat history skipped",
+                        extra={
+                            "event": "chat_history_skipped",
+                            "context": {"reason": "plan_ack_only"},
+                        },
+                    )
+                else:
+                    self._save_turn_history(user_text=text, assistant_text=response)
+            return response
+
+    def handle_input_with_task_status(
+        self,
+        user_input: str,
+        *,
+        source: Literal["interactive", "scheduled"] = "interactive",
+    ) -> tuple[str, bool]:
+        response = self.handle_input_for_source(user_input, source=source)
         return response, self._last_task_completed
 
     def interrupt_current_task(self) -> None:
@@ -268,7 +283,12 @@ class AssistantAgent:
             self._interrupt_requested = True
         self._pending_plan_task = None
 
-    def _handle_input_text(self, text: str) -> str:
+    def _handle_input_text(
+        self,
+        text: str,
+        *,
+        source: Literal["interactive", "scheduled"] = "interactive",
+    ) -> str:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
         if text == self._task_cancel_command:
@@ -282,7 +302,7 @@ class AssistantAgent:
             return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
 
         pending_task = self._pending_plan_task
-        if pending_task is not None:
+        if pending_task is not None and pending_task.source == source:
             self._pending_plan_task = None
             outer = self._planner_session.outer_context(pending_task)
             outer.clarification_history.append(ClarificationTurn(role="user_answer", content=text))
@@ -290,7 +310,7 @@ class AssistantAgent:
             pending_task.needs_replan = True
             return _run_outer_plan_loop_impl(self, task=pending_task)
 
-        return _run_outer_plan_loop_impl(self, task=PendingPlanTask(goal=text))
+        return _run_outer_plan_loop_impl(self, task=PendingPlanTask(goal=text, source=source))
 
     def _save_turn_history(self, *, user_text: str, assistant_text: str) -> None:
         try:

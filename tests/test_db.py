@@ -822,6 +822,166 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0].user_content, "窗口内2")
 
+    def test_scheduled_planner_tasks_can_be_initialized_and_marked_started(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="morning-brief",
+            cron_expr="0 9 * * *",
+            prompt="生成晨报",
+            run_limit=1,
+        )
+
+        uninitialized = self.db.list_uninitialized_scheduled_planner_tasks()
+        self.assertEqual([item.id for item in uninitialized], [task_id])
+
+        initialized = self.db.initialize_scheduled_planner_task_next_run(
+            task_id,
+            next_run_at="2026-03-11 09:00:00",
+            updated_at="2026-03-11 08:00:00",
+        )
+        self.assertTrue(initialized)
+
+        due_items = self.db.list_due_scheduled_planner_tasks(now=datetime(2026, 3, 11, 9, 0, 0))
+        self.assertEqual([item.id for item in due_items], [task_id])
+        self.assertEqual(due_items[0].next_run_at, "2026-03-11 09:00:00")
+
+        marked = self.db.mark_scheduled_planner_task_started(
+            task_id,
+            expected_next_run_at="2026-03-11 09:00:00",
+            started_at="2026-03-11 09:00:05",
+            next_run_at="2026-03-12 09:00:00",
+        )
+        self.assertTrue(marked)
+
+        stored = self.db.list_scheduled_planner_tasks()[0]
+        self.assertEqual(stored.last_run_at, "2026-03-11 09:00:05")
+        self.assertEqual(stored.next_run_at, "2026-03-12 09:00:00")
+        self.assertEqual(stored.run_limit, 0)
+
+    def test_scheduled_planner_task_mark_started_rejects_stale_expected_next_run(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="daily-summary",
+            cron_expr="0 18 * * *",
+            prompt="总结今日任务",
+            run_limit=2,
+            next_run_at="2026-03-11 18:00:00",
+        )
+
+        marked = self.db.mark_scheduled_planner_task_started(
+            task_id,
+            expected_next_run_at="2026-03-11 17:59:00",
+            started_at="2026-03-11 18:00:01",
+            next_run_at="2026-03-12 18:00:00",
+        )
+
+        self.assertFalse(marked)
+        stored = self.db.list_scheduled_planner_tasks()[0]
+        self.assertIsNone(stored.last_run_at)
+        self.assertEqual(stored.next_run_at, "2026-03-11 18:00:00")
+        self.assertEqual(stored.run_limit, 2)
+
+    def test_scheduled_planner_task_run_limit_negative_one_does_not_decrement(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="infinite-summary",
+            cron_expr="0 18 * * *",
+            prompt="总结今日任务",
+            run_limit=-1,
+            next_run_at="2026-03-11 18:00:00",
+        )
+
+        marked = self.db.mark_scheduled_planner_task_started(
+            task_id,
+            expected_next_run_at="2026-03-11 18:00:00",
+            started_at="2026-03-11 18:00:01",
+            next_run_at="2026-03-12 18:00:00",
+        )
+
+        self.assertTrue(marked)
+        stored = self.db.list_scheduled_planner_tasks()[0]
+        self.assertEqual(stored.run_limit, -1)
+        self.assertEqual(stored.last_run_at, "2026-03-11 18:00:01")
+
+    def test_scheduled_planner_task_run_limit_zero_is_not_initialized_or_due(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="disabled-summary",
+            cron_expr="0 18 * * *",
+            prompt="总结今日任务",
+            run_limit=0,
+        )
+
+        self.assertEqual(self.db.list_uninitialized_scheduled_planner_tasks(), [])
+        self.assertEqual(self.db.list_due_scheduled_planner_tasks(now=datetime(2026, 3, 11, 18, 0, 0)), [])
+
+        initialized = self.db.initialize_scheduled_planner_task_next_run(
+            task_id,
+            next_run_at="2026-03-12 18:00:00",
+        )
+        self.assertFalse(initialized)
+
+    def test_legacy_scheduled_planner_task_enabled_column_is_migrated_to_run_limit(self) -> None:
+        legacy_path = Path(self.tmp.name) / "legacy_scheduled_task.db"
+        conn = sqlite3.connect(str(legacy_path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE scheduled_planner_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_name TEXT NOT NULL UNIQUE,
+                    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+                    cron_expr TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    next_run_at TEXT,
+                    last_run_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO scheduled_planner_tasks (
+                    task_name, enabled, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-enabled",
+                    1,
+                    "0 9 * * *",
+                    "生成晨报",
+                    "2026-03-11 09:00:00",
+                    None,
+                    "2026-03-10 09:00:00",
+                    "2026-03-10 09:00:00",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO scheduled_planner_tasks (
+                    task_name, enabled, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-disabled",
+                    0,
+                    "0 10 * * *",
+                    "生成晚报",
+                    None,
+                    None,
+                    "2026-03-10 10:00:00",
+                    "2026-03-10 10:00:00",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        migrated_db = AssistantDB(str(legacy_path))
+        tasks = migrated_db.list_scheduled_planner_tasks()
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0].run_limit, -1)
+        self.assertEqual(tasks[1].run_limit, 0)
+
     def test_chat_history_legacy_schema_is_migrated_to_turn_schema(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_chat_history.db"
         conn = sqlite3.connect(str(legacy_path))

@@ -188,7 +188,10 @@ class PlannerPayloadRequester:
         max_attempts = 1 + self._plan_replan_retry_count
         phase = self._llm_trace_phase(messages)
         thought_tool_names = self._session.current_thought_tool_names(task)
-        thought_tool_schemas = build_thought_tool_schemas(thought_tool_names)
+        thought_tool_schemas = build_thought_tool_schemas(
+            thought_tool_names,
+            allow_ask_user="ask_user" in thought_tool_names,
+        )
         allowed_tool_names = set(thought_tool_names)
         for attempt in range(1, max_attempts + 1):
             call_id = self._next_llm_trace_call_id()
