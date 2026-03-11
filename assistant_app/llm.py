@@ -39,7 +39,7 @@ class OpenAICompatibleClient:
     base_url: str
     model: str
     temperature: float = 1.3
-    timeout: float = 30.0
+    timeout: float = 60.0
 
     def reply(self, messages: list[dict[str, Any]]) -> str:
         return self._create_reply(messages=messages, temperature=self.temperature)
