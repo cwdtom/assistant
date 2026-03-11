@@ -4,7 +4,7 @@ import logging
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from assistant_app.db import AssistantDB
@@ -67,7 +67,6 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
             client=self.client,
             logger=logging.getLogger("test.feishu_calendar_sync"),
             calendar_id="cal_1",
-            reconcile_interval_minutes=10,
             bootstrap_past_days=2,
             bootstrap_future_days=5,
             clock=self.clock,
@@ -218,78 +217,6 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
 
         self.assertEqual(start, datetime(2026, 3, 3, 0, 0, 0))
         self.assertEqual(end, datetime(2026, 3, 10, 23, 59, 59))
-
-    def test_startup_bootstrap_delays_first_reconcile_pull(self) -> None:
-        self.service.run_startup_bootstrap_sync()
-        list_calls_after_bootstrap = len(self.client.list_calls)
-
-        self.service.poll_scheduled_reconcile()
-        self.assertEqual(len(self.client.list_calls), list_calls_after_bootstrap)
-
-        self.clock.now = self.clock.now + timedelta(minutes=10)
-        self.service.poll_scheduled_reconcile()
-        self.assertEqual(len(self.client.list_calls), list_calls_after_bootstrap + 1)
-
-    def test_poll_scheduled_reconcile_converges_local_to_feishu_by_identity(self) -> None:
-        keep_id = self.db.add_schedule(
-            "新标题",
-            "2026-03-05 13:30",
-            duration_minutes=75,
-            remind_at="2026-03-05 13:00",
-            tag="new_tag",
-        )
-        delete_id = self.db.add_schedule("待删除未映射", "2026-03-05 16:00", duration_minutes=30, tag="tmp")
-        duplicate_keep = self.db.add_schedule("重复日程", "2026-03-06 09:00", duration_minutes=60, tag="dup")
-        duplicate_delete = self.db.add_schedule("重复日程", "2026-03-06 09:00", duration_minutes=60, tag="dup")
-
-        self.client.list_events_result = [
-            FeishuCalendarEvent(
-                event_id="evt_keep",
-                summary="新标题",
-                description="new_tag",
-                start_timestamp=int(datetime(2026, 3, 5, 13, 30).timestamp()),
-                end_timestamp=int(datetime(2026, 3, 5, 14, 45).timestamp()),
-                timezone="Asia/Shanghai",
-                create_timestamp=int(datetime(2026, 3, 1, 9, 0).timestamp()),
-            ),
-            FeishuCalendarEvent(
-                event_id="evt_new",
-                summary="飞书新增",
-                description="from_feishu",
-                start_timestamp=int(datetime(2026, 3, 6, 10, 0).timestamp()),
-                end_timestamp=int(datetime(2026, 3, 6, 11, 0).timestamp()),
-                timezone="Asia/Shanghai",
-                create_timestamp=int(datetime(2026, 3, 1, 10, 0).timestamp()),
-            ),
-            FeishuCalendarEvent(
-                event_id="evt_dup",
-                summary="重复日程",
-                description="dup",
-                start_timestamp=int(datetime(2026, 3, 6, 9, 0).timestamp()),
-                end_timestamp=int(datetime(2026, 3, 6, 10, 0).timestamp()),
-                timezone="Asia/Shanghai",
-                create_timestamp=int(datetime(2026, 3, 1, 11, 0).timestamp()),
-            ),
-        ]
-
-        self.service.poll_scheduled_reconcile()
-
-        kept = self.db.get_schedule(keep_id)
-        self.assertIsNotNone(kept)
-        assert kept is not None
-        self.assertIsNone(kept.remind_at)
-
-        self.assertIsNone(self.db.get_schedule(delete_id))
-        self.assertIsNotNone(self.db.get_schedule(duplicate_keep))
-        self.assertIsNone(self.db.get_schedule(duplicate_delete))
-
-        all_items = self.db.list_base_schedules_in_window(
-            window_start=datetime(2026, 3, 3, 0, 0),
-            window_end=datetime(2026, 3, 10, 23, 59),
-            max_window_days=31,
-        )
-        new_items = [item for item in all_items if item.title == "飞书新增" and item.tag == "from_feishu"]
-        self.assertEqual(len(new_items), 1)
 
 
 if __name__ == "__main__":

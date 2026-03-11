@@ -153,6 +153,26 @@ def _log_schedule_reminder_polling_disabled(logger: logging.Logger, *, periodic_
     )
 
 
+def _log_feishu_calendar_periodic_pull_disabled(
+    logger: logging.Logger,
+    *,
+    calendar_sync_configured: bool,
+    timer_enabled: bool,
+) -> None:
+    logger.info(
+        "feishu calendar periodic pull disabled",
+        extra={
+            "event": "feishu_calendar_periodic_pull_disabled",
+            "context": {
+                "calendar_sync_configured": calendar_sync_configured,
+                "registered_periodic_task": False,
+                "timer_enabled": timer_enabled,
+                "reason": "feature_removed",
+            },
+        },
+    )
+
+
 def _is_same_log_path(path_a: str, path_b: str) -> bool:
     normalized_a = path_a.strip()
     normalized_b = path_b.strip()
@@ -250,13 +270,17 @@ def main() -> None:
                 client=calendar_client,
                 logger=app_logger,
                 calendar_id=config.feishu_calendar_id,
-                reconcile_interval_minutes=config.feishu_calendar_reconcile_interval_minutes,
                 bootstrap_past_days=config.feishu_calendar_bootstrap_past_days,
                 bootstrap_future_days=config.feishu_calendar_bootstrap_future_days,
             )
             calendar_sync_service.start()
             calendar_sync_service.run_startup_bootstrap_sync()
             agent.set_schedule_sync_service(calendar_sync_service)
+            _log_feishu_calendar_periodic_pull_disabled(
+                app_logger,
+                calendar_sync_configured=True,
+                timer_enabled=config.timer_enabled,
+            )
         except Exception as exc:  # noqa: BLE001
             app_logger.warning(
                 "feishu calendar sync initialization failed",
@@ -308,8 +332,6 @@ def main() -> None:
     feishu_runner = None
     if config.timer_enabled:
         periodic_tasks: list[Callable[[], None]] = []
-        if calendar_sync_service is not None:
-            periodic_tasks.append(calendar_sync_service.poll_scheduled_reconcile)
         if user_profile_refresh_service is not None:
             periodic_tasks.append(user_profile_refresh_service.poll_scheduled)
         if proactive_reminder_service is not None:

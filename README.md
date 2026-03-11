@@ -126,7 +126,6 @@ python main.py
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：配置后自动启用 Feishu 长连接
 - `FEISHU_ALLOWED_OPEN_IDS`：open_id 白名单；支持逗号分隔字符串，也支持 JSON 数组
 - `FEISHU_CALENDAR_ID`：配置后自动启用本地日程与 Feishu 日历同步；需同时配置 Feishu 凭据
-- `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`：Feishu 为准对账间隔分钟（默认 `10`）
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`：启动重建窗口回看天数（默认 `2`）
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`：启动重建窗口前瞻天数（默认 `5`）
   - 启动重建窗口按自然日对齐：`start=(today-past_days) 00:00:00`，`end=(today+future_days) 23:59:59`
@@ -173,8 +172,7 @@ python main.py
 - 主动提醒发送不会把系统生成的提醒内容写入 `chat_history`
 - Proactive ReAct 提示词会注入 `USER_PROFILE_PATH` 内容（可用时），并基于未来 24 小时 schedule + 过去 24 小时 chat_history 进行决策
 - 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期，且任务完成后会额外调用一次 LLM 决定是否向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送最终 Feishu 消息，中间进度不会外发
-- 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；首次飞书->本地对账会延后到一个 `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES` 周期后
-- Feishu 日历周期对账由 timer 驱动；当 `TIMER_ENABLED=false` 时不会执行周期对账
+- 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；运行期仅保留本地日程变更到飞书的异步写同步，不再执行飞书->本地周期拉取
 
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环

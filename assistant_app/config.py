@@ -13,7 +13,10 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 UNKNOWN_APP_VERSION = "unknown"
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 _PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$""")
-_REMOVED_CONFIG_FIELDS = {"proactive_reminder_score_threshold"}
+_REMOVED_CONFIG_FIELDS = {
+    "proactive_reminder_score_threshold",
+    "feishu_calendar_reconcile_interval_minutes",
+}
 
 
 class AppConfig(BaseSettings):
@@ -83,11 +86,6 @@ class AppConfig(BaseSettings):
     feishu_ack_emoji_type: str = Field(default="Get", validation_alias="FEISHU_ACK_EMOJI_TYPE")
     feishu_done_emoji_type: str = Field(default="DONE", validation_alias="FEISHU_DONE_EMOJI_TYPE")
     feishu_calendar_id: str = Field(default="", validation_alias="FEISHU_CALENDAR_ID")
-    feishu_calendar_reconcile_interval_minutes: int = Field(
-        default=10,
-        ge=1,
-        validation_alias="FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES",
-    )
     feishu_calendar_bootstrap_past_days: int = Field(
         default=2,
         ge=0,

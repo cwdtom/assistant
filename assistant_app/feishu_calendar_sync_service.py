@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -22,14 +21,6 @@ class _WriteSyncTask:
     action: str
     schedule_id: int
     schedule_snapshot: ScheduleItem | None = None
-
-
-@dataclass(frozen=True)
-class _LocalSchedulePayload:
-    title: str
-    tag: str
-    event_time: str
-    duration_minutes: int
 
 
 @dataclass(frozen=True)
@@ -54,7 +45,6 @@ class FeishuCalendarSyncService:
         client: FeishuCalendarClient,
         logger: logging.Logger,
         calendar_id: str,
-        reconcile_interval_minutes: int,
         bootstrap_past_days: int,
         bootstrap_future_days: int,
         timezone: str = _DEFAULT_TIMEZONE,
@@ -64,7 +54,6 @@ class FeishuCalendarSyncService:
         self._client = client
         self._logger = logger
         self._calendar_id = calendar_id.strip()
-        self._reconcile_interval_minutes = max(reconcile_interval_minutes, 1)
         self._bootstrap_past_days = max(bootstrap_past_days, 0)
         self._bootstrap_future_days = max(bootstrap_future_days, 0)
         self._timezone = timezone.strip() or _DEFAULT_TIMEZONE
@@ -73,7 +62,6 @@ class FeishuCalendarSyncService:
         self._stop_event = threading.Event()
         self._state_lock = threading.Lock()
         self._worker_thread: threading.Thread | None = None
-        self._next_reconcile_at: datetime | None = None
 
     def start(self) -> None:
         with self._state_lock:
@@ -185,18 +173,6 @@ class FeishuCalendarSyncService:
                     },
                 },
             )
-        finally:
-            # Startup should not immediately trigger Feishu->local reconcile pull.
-            with self._state_lock:
-                self._next_reconcile_at = now + timedelta(minutes=self._reconcile_interval_minutes)
-
-    def poll_scheduled_reconcile(self) -> None:
-        now = self._clock()
-        with self._state_lock:
-            if self._next_reconcile_at is not None and now < self._next_reconcile_at:
-                return
-            self._next_reconcile_at = now + timedelta(minutes=self._reconcile_interval_minutes)
-        self._run_reconcile(now=now)
 
     @property
     def _window_max_days(self) -> int:
@@ -409,123 +385,6 @@ class FeishuCalendarSyncService:
             )
         return None
 
-    def _run_reconcile(self, *, now: datetime) -> None:
-        window_start, window_end = self._window_bounds(now)
-        self._logger.info(
-            "feishu calendar reconcile start",
-            extra={
-                "event": "feishu_calendar_reconcile_start",
-                "context": {
-                    "calendar_id": self._calendar_id,
-                    "window_start": window_start.strftime("%Y-%m-%d %H:%M:%S"),
-                    "window_end": window_end.strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            },
-        )
-        local_created = 0
-        local_updated = 0
-        local_deleted = 0
-        try:
-            feishu_items = self._list_feishu_events(window_start=window_start, window_end=window_end)
-            local_items = self._db.list_base_schedules_in_window(
-                window_start=window_start,
-                window_end=window_end,
-                max_window_days=self._window_max_days,
-            )
-
-            feishu_groups = self._group_feishu_by_identity(feishu_items)
-            local_groups = self._group_local_by_identity(local_items)
-
-            for identity in set(feishu_groups) | set(local_groups):
-                feishu_bucket = feishu_groups.get(identity, [])
-                local_bucket = local_groups.get(identity, [])
-
-                if len(feishu_bucket) > 1:
-                    self._log_identity_ambiguous(
-                        action="reconcile",
-                        schedule_id=None,
-                        identity=identity,
-                        source="feishu",
-                        candidate_count=len(feishu_bucket),
-                    )
-                if len(local_bucket) > 1:
-                    self._log_identity_ambiguous(
-                        action="reconcile",
-                        schedule_id=None,
-                        identity=identity,
-                        source="local",
-                        candidate_count=len(local_bucket),
-                    )
-
-                pair_count = min(len(feishu_bucket), len(local_bucket))
-                for idx in range(pair_count):
-                    event = feishu_bucket[idx]
-                    current = local_bucket[idx]
-                    self._log_identity_match(
-                        action="reconcile",
-                        schedule_id=current.id,
-                        identity=identity,
-                        event_id=event.event_id,
-                        candidate_count=len(feishu_bucket),
-                    )
-                    desired = self._build_local_payload(event)
-                    if self._needs_local_update(current=current, desired=desired):
-                        updated = self._db.update_schedule(
-                            current.id,
-                            title=desired.title,
-                            event_time=desired.event_time,
-                            duration_minutes=desired.duration_minutes,
-                            tag=desired.tag,
-                            remind_at=None,
-                        )
-                        if updated:
-                            local_updated += 1
-
-                for event in feishu_bucket[pair_count:]:
-                    desired = self._build_local_payload(event)
-                    self._db.add_schedule(
-                        title=desired.title,
-                        event_time=desired.event_time,
-                        duration_minutes=desired.duration_minutes,
-                        remind_at=None,
-                        tag=desired.tag,
-                    )
-                    local_created += 1
-
-                for current in local_bucket[pair_count:]:
-                    if self._db.delete_schedule(current.id):
-                        local_deleted += 1
-
-            self._logger.info(
-                "feishu calendar reconcile done",
-                extra={
-                    "event": "feishu_calendar_reconcile_done",
-                    "context": {
-                        "calendar_id": self._calendar_id,
-                        "feishu_count": len(feishu_items),
-                        "local_created": local_created,
-                        "local_updated": local_updated,
-                        "local_deleted": local_deleted,
-                        "ok": True,
-                    },
-                },
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "feishu calendar reconcile failed",
-                extra={
-                    "event": "feishu_calendar_reconcile_failed",
-                    "context": {
-                        "calendar_id": self._calendar_id,
-                        "error": repr(exc),
-                        "local_created": local_created,
-                        "local_updated": local_updated,
-                        "local_deleted": local_deleted,
-                        "ok": False,
-                    },
-                },
-            )
-
     def _list_feishu_events(self, *, window_start: datetime, window_end: datetime) -> list[FeishuCalendarEvent]:
         start_ts = int(window_start.timestamp())
         end_ts = int(window_end.timestamp())
@@ -561,28 +420,6 @@ class FeishuCalendarSyncService:
             end_ts = start_ts + 60
         return start_ts, end_ts
 
-    def _build_local_payload(self, event: FeishuCalendarEvent) -> _LocalSchedulePayload:
-        timezone_name = event.timezone.strip() or self._timezone
-        try:
-            event_zone = ZoneInfo(timezone_name)
-        except ZoneInfoNotFoundError:
-            event_zone = ZoneInfo(_DEFAULT_TIMEZONE)
-        try:
-            local_zone = ZoneInfo(self._timezone)
-        except ZoneInfoNotFoundError:
-            local_zone = ZoneInfo(_DEFAULT_TIMEZONE)
-
-        start_minute = event.start_timestamp // 60
-        end_minute = event.end_timestamp // 60
-        duration_minutes = max(1, end_minute - start_minute)
-        start_dt = datetime.fromtimestamp(start_minute * 60, tz=event_zone).astimezone(local_zone)
-        return _LocalSchedulePayload(
-            title=self._normalize_title(event.summary),
-            tag=self._normalize_description(event.description),
-            event_time=start_dt.strftime("%Y-%m-%d %H:%M"),
-            duration_minutes=duration_minutes,
-        )
-
     def _match_feishu_event_by_identity(
         self,
         *,
@@ -615,25 +452,6 @@ class FeishuCalendarSyncService:
             )
         return _IdentityMatch(event=matched, candidate_count=len(candidates))
 
-    def _group_local_by_identity(self, items: list[ScheduleItem]) -> dict[_IdentityKey, list[ScheduleItem]]:
-        grouped: dict[_IdentityKey, list[ScheduleItem]] = defaultdict(list)
-        for item in items:
-            grouped[self._identity_from_schedule(item)].append(item)
-        for bucket in grouped.values():
-            bucket.sort(key=self._local_schedule_order_key)
-        return dict(grouped)
-
-    def _group_feishu_by_identity(
-        self,
-        items: list[FeishuCalendarEvent],
-    ) -> dict[_IdentityKey, list[FeishuCalendarEvent]]:
-        grouped: dict[_IdentityKey, list[FeishuCalendarEvent]] = defaultdict(list)
-        for item in items:
-            grouped[self._identity_from_event(item)].append(item)
-        for bucket in grouped.values():
-            bucket.sort(key=self._feishu_event_order_key)
-        return dict(grouped)
-
     def _identity_from_schedule(self, item: ScheduleItem) -> _IdentityKey:
         start_ts, end_ts = self._schedule_time_range(item)
         return _IdentityKey(
@@ -660,10 +478,6 @@ class FeishuCalendarSyncService:
     def _normalize_description(value: str) -> str:
         normalized = str(value or "").strip().lower()
         return normalized or _DEFAULT_EMPTY_DESCRIPTION
-
-    @staticmethod
-    def _local_schedule_order_key(item: ScheduleItem) -> tuple[str, int]:
-        return (str(item.created_at or ""), int(item.id))
 
     @staticmethod
     def _feishu_event_order_key(item: FeishuCalendarEvent) -> tuple[int, int, str]:
@@ -722,17 +536,3 @@ class FeishuCalendarSyncService:
             "feishu calendar identity ambiguous",
             extra={"event": "feishu_calendar_identity_ambiguous", "context": context},
         )
-
-    @staticmethod
-    def _needs_local_update(*, current: ScheduleItem, desired: _LocalSchedulePayload) -> bool:
-        if current.title != desired.title:
-            return True
-        if current.tag != desired.tag:
-            return True
-        if current.event_time != desired.event_time:
-            return True
-        if current.duration_minutes != desired.duration_minutes:
-            return True
-        if current.remind_at is not None:
-            return True
-        return False

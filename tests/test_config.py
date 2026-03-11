@@ -67,7 +67,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_ack_emoji_type, "Get")
         self.assertEqual(config.feishu_done_emoji_type, "DONE")
         self.assertEqual(config.feishu_calendar_id, "")
-        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 10)
         self.assertEqual(config.feishu_calendar_bootstrap_past_days, 2)
         self.assertEqual(config.feishu_calendar_bootstrap_future_days, 5)
         self.assertEqual(config.proactive_reminder_target_open_id, "")
@@ -111,7 +110,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_ack_emoji_type, "Get")
         self.assertEqual(config.feishu_done_emoji_type, "DONE")
         self.assertEqual(config.feishu_calendar_id, "")
-        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 10)
         self.assertEqual(config.feishu_calendar_bootstrap_past_days, 2)
         self.assertEqual(config.feishu_calendar_bootstrap_future_days, 5)
 
@@ -169,7 +167,6 @@ class ConfigTest(unittest.TestCase):
             "FEISHU_ACK_EMOJI_TYPE": "THUMBSUP",
             "FEISHU_DONE_EMOJI_TYPE": "DONE_CUSTOM",
             "FEISHU_CALENDAR_ID": "feishu.cn_demo@group.calendar.feishu.cn",
-            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES": "15",
             "FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS": "3",
             "FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS": "8",
             "PROACTIVE_REMINDER_TARGET_OPEN_ID": "ou_target_1",
@@ -219,7 +216,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.feishu_ack_emoji_type, "THUMBSUP")
         self.assertEqual(config.feishu_done_emoji_type, "DONE_CUSTOM")
         self.assertEqual(config.feishu_calendar_id, "feishu.cn_demo@group.calendar.feishu.cn")
-        self.assertEqual(config.feishu_calendar_reconcile_interval_minutes, 15)
         self.assertEqual(config.feishu_calendar_bootstrap_past_days, 3)
         self.assertEqual(config.feishu_calendar_bootstrap_future_days, 8)
         self.assertEqual(config.proactive_reminder_target_open_id, "ou_target_1")
@@ -330,6 +326,34 @@ class ConfigTest(unittest.TestCase):
                 os.chdir(original_cwd)
 
         self.assertEqual(config.api_key, "file-key")
+
+    def test_load_config_ignores_removed_feishu_calendar_reconcile_interval_in_env(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "deep-key",
+            "FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES": "15",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = load_config(load_dotenv=False)
+
+        self.assertEqual(config.api_key, "deep-key")
+        self.assertFalse(hasattr(config, "feishu_calendar_reconcile_interval_minutes"))
+
+    def test_load_config_ignores_removed_feishu_calendar_reconcile_interval_in_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "DEEPSEEK_API_KEY=file-key\nFEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES=15\n",
+                encoding="utf-8",
+            )
+            original_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                config = load_config(load_dotenv=True)
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(config.api_key, "file-key")
+        self.assertFalse(hasattr(config, "feishu_calendar_reconcile_interval_minutes"))
 
     def test_load_startup_app_version_reads_project_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

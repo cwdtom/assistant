@@ -111,7 +111,6 @@ Optional runtime flags (all supported in `.env`):
 - `FEISHU_ACK_EMOJI_TYPE`: ack emoji type (default `Get`)
 - `FEISHU_DONE_EMOJI_TYPE`: done emoji type (default `DONE`)
 - `FEISHU_CALENDAR_ID`: target Feishu calendar id for sync; when non-empty and Feishu credentials are present, local schedule <-> Feishu calendar sync is enabled
-- `FEISHU_CALENDAR_RECONCILE_INTERVAL_MINUTES`: Feishu-authoritative reconcile interval (default `10`)
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`: startup bootstrap sync lookback days (default `2`)
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`: startup bootstrap sync lookahead days (default `5`)
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages; scheduled planner task final-result delivery also reuses this open_id; when non-empty and Feishu credentials are present, proactive reminder evaluation is enabled
@@ -133,10 +132,9 @@ Optional runtime flags (all supported in `.env`):
 - Schedule supports reminder timestamps (`--remind`).
 - Schedule reminder fields remain persisted, but runtime no longer auto-polls or auto-delivers local schedule reminders.
 - Optional Feishu calendar sync uses identity matching by `title + description(tag) + start + end` (minute-level); local writes still sync asynchronously, and updates perform old-identity cleanup + new-identity upsert.
-- Optional Feishu calendar startup bootstrap + periodic reconcile window is day-aligned by default:
+- Optional Feishu calendar startup bootstrap window is day-aligned by default:
   start=`(today-2d) 00:00:00`, end=`(today+5d) 23:59:59`.
-- Feishu calendar sync startup does not run immediate Feishu->local reconcile pull; first reconcile is delayed by one reconcile interval.
-- Feishu calendar periodic reconcile is driven by timer periodic tasks, so it does not run when `TIMER_ENABLED=false`.
+- Feishu calendar runtime no longer performs periodic Feishu->local reconcile; after startup bootstrap, only local schedule writes are synced to Feishu asynchronously.
 - Recurring schedule supports reminder start (`--remind-start`).
 - CLI starts a timer thread for periodic background tasks by default (`TIMER_ENABLED=off` to disable).
 - If `--interval` is provided without `--times`, default `times=-1` (infinite repeat).
