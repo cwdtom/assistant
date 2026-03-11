@@ -4,7 +4,6 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
-from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import split_semantic_messages
 from assistant_app.llm import LLMClient
@@ -28,7 +27,6 @@ class ProactiveReminderService:
         lookahead_hours: int,
         interval_minutes: int,
         night_quiet_hint: str,
-        score_threshold: int,
         max_steps: int,
         user_profile_path: str,
         internet_search_top_k: int,
@@ -44,11 +42,6 @@ class ProactiveReminderService:
         self._lookahead_hours = max(lookahead_hours, 1)
         self._interval_minutes = max(interval_minutes, 60)
         self._night_quiet_hint = night_quiet_hint.strip() or "23:00-08:00"
-        self._score_threshold = (
-            score_threshold
-            if 0 <= score_threshold <= 100
-            else DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
-        )
         self._max_steps = max(max_steps, 1)
         self._user_profile_path = user_profile_path
         self._internet_search_top_k = max(internet_search_top_k, 1)
@@ -108,27 +101,21 @@ class ProactiveReminderService:
         if decision is None:
             return None
         result = ProactiveExecutionResult(
-            score=decision.score,
-            threshold=self._score_threshold,
-            notify=decision.score >= self._score_threshold,
-            reason=decision.reason,
+            should_send=decision.should_send,
             message=decision.message.strip(),
         )
         self._logger.info(
-            "proactive gate decided: score=%s threshold=%s notify=%s",
-            result.score,
-            result.threshold,
-            result.notify,
+            "proactive decision decided: should_send=%s",
+            result.should_send,
             extra={
-                "event": "proactive_gate_decision",
+                "event": "proactive_decision_result",
                 "context": {
-                    "score": result.score,
-                    "threshold": result.threshold,
-                    "notify": result.notify,
+                    "should_send": result.should_send,
+                    "message_length": len(result.message),
                 },
             },
         )
-        if not result.notify:
+        if not result.should_send:
             return result
         if not result.message:
             self._logger.warning(
@@ -208,7 +195,6 @@ class ProactiveReminderService:
         )
         prompt_payload = snapshot.to_prompt_payload(
             night_quiet_hint=self._night_quiet_hint,
-            score_threshold=self._score_threshold,
             max_steps=self._max_steps,
             internet_search_allowed=True,
         )

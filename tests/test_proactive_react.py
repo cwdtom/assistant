@@ -59,9 +59,8 @@ class ProactiveReactRunnerTest(unittest.TestCase):
                 _tool_payload(
                     "done",
                     {
-                        "score": 81,
+                        "should_send": True,
                         "message": "你明早有会议，建议现在准备三点要点。",
-                        "reason": "存在未来24小时关键日程。",
                     },
                     call_id="call_2",
                 ),
@@ -77,7 +76,6 @@ class ProactiveReactRunnerTest(unittest.TestCase):
 
         decision = runner.run_once(
             context_payload={
-                "policy": {"score_threshold": 80},
                 "user_profile": {"content": "用户偏好：晨会前提醒"},
                 "internal_context": {"schedules": [], "recent_chat_turns": []},
             }
@@ -85,8 +83,8 @@ class ProactiveReactRunnerTest(unittest.TestCase):
 
         self.assertIsNotNone(decision)
         assert decision is not None
-        self.assertEqual(decision.score, 81)
-        self.assertEqual(decision.reason, "存在未来24小时关键日程。")
+        self.assertTrue(decision.should_send)
+        self.assertEqual(decision.message, "你明早有会议，建议现在准备三点要点。")
         self.assertEqual(tools.calls, [("schedule_list", {})])
         self.assertGreaterEqual(len(llm.calls), 1)
         first_messages = llm.calls[0]["messages"]
@@ -99,9 +97,8 @@ class ProactiveReactRunnerTest(unittest.TestCase):
                 _tool_payload(
                     "done",
                     {
-                        "score": 85,
+                        "should_send": True,
                         "message": "你明早有重要事项，建议今晚提前准备。",
-                        "reason": "用户画像显示偏好提前提醒。",
                     },
                     call_id="call_model",
                 ),
@@ -116,15 +113,14 @@ class ProactiveReactRunnerTest(unittest.TestCase):
 
         decision = runner.run_once(
             context_payload=ProactivePromptPayload(
-                policy={"score_threshold": 80},
                 user_profile={"loaded": True, "content": "用户偏好：重要事项提前提醒"},
             )
         )
 
         self.assertIsNotNone(decision)
         assert decision is not None
-        self.assertEqual(decision.score, 85)
-        self.assertEqual(decision.reason, "用户画像显示偏好提前提醒。")
+        self.assertTrue(decision.should_send)
+        self.assertEqual(decision.message, "你明早有重要事项，建议今晚提前准备。")
 
     def test_run_once_accepts_typed_tool_reply_payload(self) -> None:
         llm = _FakeLLM(
@@ -133,9 +129,8 @@ class ProactiveReactRunnerTest(unittest.TestCase):
                     _tool_payload(
                         "done",
                         {
-                            "score": 85,
+                            "should_send": True,
                             "message": "你明早有重要事项，建议今晚提前准备。",
-                            "reason": "用户画像显示偏好提前提醒。",
                         },
                         call_id="call_model_payload",
                     )
@@ -149,17 +144,17 @@ class ProactiveReactRunnerTest(unittest.TestCase):
             logger=logging.getLogger("test.proactive_react.model_tool_reply"),
         )
 
-        decision = runner.run_once(context_payload={"policy": {"score_threshold": 80}, "user_profile": {"content": ""}})
+        decision = runner.run_once(context_payload={"user_profile": {"content": ""}})
 
         self.assertIsNotNone(decision)
         assert decision is not None
-        self.assertEqual(decision.score, 85)
+        self.assertTrue(decision.should_send)
 
     def test_run_once_ignores_invalid_done_and_retries(self) -> None:
         llm = _FakeLLM(
             [
-                _tool_payload("done", {"score": 80, "message": "", "reason": ""}, call_id="call_1"),
-                _tool_payload("done", {"score": 20, "message": "", "reason": "当前无需提醒"}, call_id="call_2"),
+                _tool_payload("done", {"should_send": True, "message": ""}, call_id="call_1"),
+                _tool_payload("done", {"should_send": False, "message": ""}, call_id="call_2"),
             ]
         )
         runner = ProactiveReactRunner(
@@ -169,12 +164,12 @@ class ProactiveReactRunnerTest(unittest.TestCase):
             logger=logging.getLogger("test.proactive_react.retry"),
         )
 
-        decision = runner.run_once(context_payload={"policy": {"score_threshold": 80}, "user_profile": {"content": ""}})
+        decision = runner.run_once(context_payload={"user_profile": {"content": ""}})
 
         self.assertIsNotNone(decision)
         assert decision is not None
-        self.assertEqual(decision.score, 20)
-        self.assertEqual(decision.reason, "当前无需提醒")
+        self.assertFalse(decision.should_send)
+        self.assertEqual(decision.message, "")
 
     def test_run_once_returns_none_when_max_steps_reached(self) -> None:
         llm = _FakeLLM([_tool_payload("schedule_list", {}, call_id="call_1")])
@@ -193,7 +188,7 @@ class ProactiveReactRunnerTest(unittest.TestCase):
         llm = _FakeLLM(
             [
                 _tool_payload("internet_search", {"query": "OpenAI Responses API"}, call_id="call_1"),
-                _tool_payload("done", {"score": 30, "message": "", "reason": "无需提醒"}, call_id="call_2"),
+                _tool_payload("done", {"should_send": False, "message": ""}, call_id="call_2"),
             ]
         )
         tools = _FakeToolExecutor()
@@ -204,7 +199,7 @@ class ProactiveReactRunnerTest(unittest.TestCase):
             logger=logging.getLogger("test.proactive_react.internet_search"),
         )
 
-        decision = runner.run_once(context_payload={"policy": {"score_threshold": 80}, "user_profile": {"content": ""}})
+        decision = runner.run_once(context_payload={"user_profile": {"content": ""}})
 
         self.assertIsNotNone(decision)
         self.assertEqual(tools.calls[0], ("internet_search", {"query": "OpenAI Responses API"}))
@@ -213,7 +208,7 @@ class ProactiveReactRunnerTest(unittest.TestCase):
         llm = _FakeLLM(
             [
                 _tool_payload("ask_user", {"question": "请确认"}, call_id="call_1"),
-                _tool_payload("done", {"score": 10, "message": "", "reason": "等待后续"}, call_id="call_2"),
+                _tool_payload("done", {"should_send": False, "message": ""}, call_id="call_2"),
             ]
         )
         tools = _FakeToolExecutor()
@@ -224,15 +219,15 @@ class ProactiveReactRunnerTest(unittest.TestCase):
             logger=logging.getLogger("test.proactive_react.disallowed"),
         )
 
-        decision = runner.run_once(context_payload={"policy": {"score_threshold": 80}, "user_profile": {"content": ""}})
+        decision = runner.run_once(context_payload={"user_profile": {"content": ""}})
 
         self.assertIsNotNone(decision)
 
-    def test_run_once_rejects_out_of_range_score(self) -> None:
+    def test_run_once_rejects_non_boolean_should_send(self) -> None:
         llm = _FakeLLM(
             [
-                _tool_payload("done", {"score": 101, "message": "提醒", "reason": "过高"}, call_id="call_1"),
-                _tool_payload("done", {"score": 0, "message": "", "reason": "无需提醒"}, call_id="call_2"),
+                _tool_payload("done", {"should_send": 1, "message": "提醒"}, call_id="call_1"),
+                _tool_payload("done", {"should_send": False, "message": ""}, call_id="call_2"),
             ]
         )
         tools = _FakeToolExecutor()
@@ -240,14 +235,14 @@ class ProactiveReactRunnerTest(unittest.TestCase):
             llm_client=llm,
             tool_executor=tools,
             max_steps=3,
-            logger=logging.getLogger("test.proactive_react.invalid_score"),
+            logger=logging.getLogger("test.proactive_react.invalid_should_send"),
         )
 
-        decision = runner.run_once(context_payload={"policy": {"score_threshold": 80}, "user_profile": {"content": ""}})
+        decision = runner.run_once(context_payload={"user_profile": {"content": ""}})
 
         self.assertIsNotNone(decision)
         assert decision is not None
-        self.assertEqual(decision.score, 0)
+        self.assertFalse(decision.should_send)
         self.assertEqual(tools.calls, [])
 
 

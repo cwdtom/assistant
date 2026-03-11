@@ -242,10 +242,10 @@ class PlannerSchemaTest(unittest.TestCase):
                 }
             )
 
-    def test_proactive_done_arguments_reject_bool_score(self) -> None:
+    def test_proactive_done_arguments_reject_non_bool_should_send(self) -> None:
         with self.assertRaises(ValidationError):
             ProactiveDoneArguments.model_validate(
-                {"score": True, "message": "提醒", "reason": "重要"}
+                {"should_send": 1, "message": "提醒"}
             )
 
     def test_normalize_plan_decision_ignores_extra_fields_for_compatibility(self) -> None:
@@ -324,11 +324,8 @@ class PlannerSchemaTest(unittest.TestCase):
 
         self.assertIsNone(decision)
 
-    def test_normalize_done_arguments_requires_message_above_threshold(self) -> None:
-        decision = _normalize_done_arguments(
-            {"score": 80, "message": " ", "reason": "存在风险"},
-            score_threshold=80,
-        )
+    def test_normalize_done_arguments_requires_message_when_should_send_true(self) -> None:
+        decision = _normalize_done_arguments({"should_send": True, "message": " "})
 
         self.assertIsNone(decision)
 

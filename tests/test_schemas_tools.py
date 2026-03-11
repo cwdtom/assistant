@@ -279,8 +279,9 @@ class ProactiveToolSchemaTest(unittest.TestCase):
         done_schema = next(item for item in schemas if item["function"]["name"] == "done")
 
         properties = done_schema["function"]["parameters"]["properties"]
-        self.assertIn("score", properties)
-        self.assertIn("reason", properties)
+        self.assertIn("should_send", properties)
+        self.assertNotIn("score", properties)
+        self.assertNotIn("reason", properties)
         self.assertFalse(done_schema["function"]["parameters"]["additionalProperties"])
 
     def test_execute_accepts_prevalidated_model_arguments(self) -> None:

@@ -25,9 +25,9 @@ PROACTIVE_REACT_SYSTEM_PROMPT = """
 - 夜间时段优先保持克制，除非事项紧急。
 
 输出要求：
-- 终态必须通过 done 输出：score/message/reason。
-- score 必须是 0~100 的整数，表示当前事项的提醒价值。
-- 当 score 大于等于当前阈值时，message 必须是非空提醒文案。
+- 终态必须通过 done 输出：should_send/message。
+- should_send 必须是布尔值，表示当前是否应该主动提醒用户。
+- 当 should_send=true 时，message 必须是非空提醒文案。
 - 不要输出额外解释性前后缀。
 """.strip()
 
@@ -81,7 +81,6 @@ class ProactiveReactRunner:
                 "event": "proactive_react_start",
                 "context": {
                     "max_steps": self._max_steps,
-                    "score_threshold": normalized_context.score_threshold,
                     "has_user_profile": bool(normalized_context.user_profile.content),
                 },
             },
@@ -116,16 +115,13 @@ class ProactiveReactRunner:
             )
 
             if tool_name == "done":
-                decision = _normalize_done_arguments(
-                    arguments,
-                    score_threshold=normalized_context.score_threshold,
-                )
+                decision = _normalize_done_arguments(arguments)
                 if decision is None:
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_id,
-                            "content": "done 参数非法：需要 score/message/reason。",
+                            "content": "done 参数非法：需要 should_send/message。",
                         }
                     )
                     self._logger.warning(
@@ -141,11 +137,11 @@ class ProactiveReactRunner:
                     )
                     continue
                 self._logger.info(
-                    "proactive react done: score=%s",
-                    decision.score,
+                    "proactive react done: should_send=%s",
+                    decision.should_send,
                     extra={
                         "event": "proactive_react_done",
-                        "context": {"score": decision.score},
+                        "context": {"should_send": decision.should_send},
                     },
                 )
                 return decision
@@ -243,14 +239,12 @@ def _normalize_context_payload(
 
 def _normalize_done_arguments(
     arguments: dict[str, Any],
-    *,
-    score_threshold: int,
 ) -> ProactiveDecision | None:
     try:
         parsed = ProactiveDecision.model_validate(arguments)
     except ValidationError:
         return None
-    if parsed.score >= score_threshold and not parsed.message:
+    if parsed.should_send and not parsed.message:
         return None
     return parsed
 

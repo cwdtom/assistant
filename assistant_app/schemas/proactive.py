@@ -4,7 +4,6 @@ from datetime import datetime
 
 from pydantic import Field, field_validator, model_validator
 
-from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.domain import ChatTurn, ScheduleItem, SearchResult
 from assistant_app.schemas.normalization import (
@@ -93,16 +92,8 @@ class ProactivePromptPolicy(FrozenModel):
     channel: str = "feishu"
     target_type: str = "fixed_open_id"
     night_quiet_hint: str = Field(default="23:00-08:00", min_length=1)
-    score_threshold: int = DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
     max_steps: int = Field(default=1, ge=1)
     internet_search_allowed: bool = False
-
-    @field_validator("score_threshold", mode="before")
-    @classmethod
-    def normalize_score_threshold(cls, value: object) -> int:
-        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100:
-            return value
-        return DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 
 
 class ProactiveContextWindow(FrozenModel):
@@ -122,9 +113,8 @@ class ProactiveInternalContext(FrozenModel):
 
 
 class ProactiveDoneSchemaContract(FrozenModel):
-    score: str = "integer (0~100)"
+    should_send: str = "boolean"
     message: str = "string"
-    reason: str = "string"
 
 
 class ProactiveOutputContract(FrozenModel):
@@ -133,10 +123,7 @@ class ProactiveOutputContract(FrozenModel):
 
 
 class ProactiveExecutionResult(FrozenModel):
-    score: int = Field(ge=0, le=100)
-    threshold: int = Field(ge=0, le=100)
-    notify: bool
-    reason: str = Field(min_length=1)
+    should_send: bool
     message: str = ""
 
 
@@ -149,10 +136,6 @@ class ProactivePromptPayload(FrozenModel):
     user_profile: ProactiveUserProfilePayload = Field(default_factory=ProactiveUserProfilePayload)
     internal_context: ProactiveInternalContext = Field(default_factory=ProactiveInternalContext)
     output_contract: ProactiveOutputContract = Field(default_factory=ProactiveOutputContract)
-
-    @property
-    def score_threshold(self) -> int:
-        return self.policy.score_threshold
 
     @field_validator("now")
     @classmethod
@@ -179,7 +162,6 @@ class ProactiveContextSnapshot(FrozenModel):
         self,
         *,
         night_quiet_hint: str,
-        score_threshold: int,
         max_steps: int,
         internet_search_allowed: bool,
     ) -> ProactivePromptPayload:
@@ -188,7 +170,6 @@ class ProactiveContextSnapshot(FrozenModel):
             timezone=_local_timezone_name(self.now),
             policy=ProactivePromptPolicy(
                 night_quiet_hint=night_quiet_hint,
-                score_threshold=score_threshold,
                 max_steps=max_steps,
                 internet_search_allowed=internet_search_allowed,
             ),

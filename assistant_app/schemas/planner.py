@@ -307,9 +307,8 @@ class ThoughtObservationMessagePayload(FrozenModel):
 
 
 class ProactiveDoneArguments(FrozenModel):
-    score: int = Field(ge=0, le=100, description="提醒价值分数，范围 0~100。")
-    message: str = Field(description="当分数达到阈值时发送给用户的提醒文案。")
-    reason: str = Field(min_length=1, description="做出该主动提醒判断的简要原因。")
+    should_send: bool = Field(description="是否应立即向用户发送主动提醒。")
+    message: str = Field(description="当 should_send=true 时发送给用户的提醒文案。")
 
 
 class _CompatPayloadModel:

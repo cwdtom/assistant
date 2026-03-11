@@ -29,7 +29,7 @@ class _FakeLLM:
         return self._payloads.pop(0)
 
 
-def _done_payload(*, score: int, message: str, reason: str) -> dict[str, object]:
+def _done_payload(*, should_send: bool, message: str) -> dict[str, object]:
     return {
         "assistant_message": {
             "role": "assistant",
@@ -42,9 +42,8 @@ def _done_payload(*, score: int, message: str, reason: str) -> dict[str, object]
                         "name": "done",
                         "arguments": json.dumps(
                             {
-                                "score": score,
+                                "should_send": should_send,
                                 "message": message,
-                                "reason": reason,
                             },
                             ensure_ascii=False,
                         ),
@@ -66,15 +65,14 @@ class ProactiveReminderServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_poll_scheduled_sends_segments_without_persisting_chat_history_when_score_meets_threshold(self) -> None:
+    def test_poll_scheduled_sends_segments_without_persisting_chat_history_when_llm_requests_send(self) -> None:
         profile_path = Path(self.tmp.name) / "profile.md"
         profile_path.write_text("用户偏好：晨会前提醒", encoding="utf-8")
         llm = _FakeLLM(
             [
                 _done_payload(
-                    score=80,
+                    should_send=True,
                     message="第一条提醒\n\n第二条提醒",
-                    reason="未来24小时有重要事项",
                 )
             ]
         )
@@ -89,7 +87,6 @@ class ProactiveReminderServiceTest(unittest.TestCase):
             lookahead_hours=24,
             interval_minutes=60,
             night_quiet_hint="23:00-08:00",
-            score_threshold=80,
             max_steps=20,
             user_profile_path=str(profile_path),
             internet_search_top_k=3,
@@ -104,8 +101,8 @@ class ProactiveReminderServiceTest(unittest.TestCase):
         first_call_messages = llm.calls[0]["messages"]
         self.assertIn("用户偏好：晨会前提醒", first_call_messages[1]["content"])
 
-    def test_poll_scheduled_skips_send_when_score_below_threshold(self) -> None:
-        llm = _FakeLLM([_done_payload(score=79, message="提醒", reason="价值不足")])
+    def test_poll_scheduled_skips_send_when_llm_decides_not_to_send(self) -> None:
+        llm = _FakeLLM([_done_payload(should_send=False, message="提醒")])
         service = ProactiveReminderService(
             db=self.db,
             llm_client=llm,
@@ -116,8 +113,7 @@ class ProactiveReminderServiceTest(unittest.TestCase):
             lookahead_hours=24,
             interval_minutes=60,
             night_quiet_hint="23:00-08:00",
-            score_threshold=80,
-            max_steps=20,
+            max_steps=1,
             user_profile_path="",
             internet_search_top_k=3,
             clock=lambda: self.now,
@@ -130,13 +126,13 @@ class ProactiveReminderServiceTest(unittest.TestCase):
         self.assertEqual(self.db.recent_turns(limit=5), [])
         self.assertTrue(
             any(
-                "proactive gate decided: score=79 threshold=80 notify=False" in item
+                "proactive decision decided: should_send=False" in item
                 for item in captured.output
             )
         )
 
     def test_poll_scheduled_skips_when_not_due(self) -> None:
-        llm = _FakeLLM([_done_payload(score=90, message="提醒", reason="到点")])
+        llm = _FakeLLM([_done_payload(should_send=True, message="提醒")])
         clock_now = {"value": self.now}
         service = ProactiveReminderService(
             db=self.db,
@@ -148,7 +144,6 @@ class ProactiveReminderServiceTest(unittest.TestCase):
             lookahead_hours=24,
             interval_minutes=60,
             night_quiet_hint="23:00-08:00",
-            score_threshold=80,
             max_steps=20,
             user_profile_path="",
             internet_search_top_k=3,
@@ -164,7 +159,7 @@ class ProactiveReminderServiceTest(unittest.TestCase):
 
     def test_poll_scheduled_profile_read_failure_falls_back(self) -> None:
         missing_profile = Path(self.tmp.name) / "missing_profile.md"
-        llm = _FakeLLM([_done_payload(score=20, message="", reason="无需提醒")])
+        llm = _FakeLLM([_done_payload(should_send=False, message="")])
         service = ProactiveReminderService(
             db=self.db,
             llm_client=llm,
@@ -175,7 +170,6 @@ class ProactiveReminderServiceTest(unittest.TestCase):
             lookahead_hours=24,
             interval_minutes=60,
             night_quiet_hint="23:00-08:00",
-            score_threshold=80,
             max_steps=20,
             user_profile_path=str(missing_profile),
             internet_search_top_k=3,
@@ -189,6 +183,30 @@ class ProactiveReminderServiceTest(unittest.TestCase):
         self.assertTrue(any("failed to read proactive user profile" in item for item in captured.output))
         first_call_messages = llm.calls[0]["messages"]
         self.assertIn('"loaded": false', first_call_messages[1]["content"])
+
+    def test_poll_scheduled_rejects_blank_message_when_llm_requests_send(self) -> None:
+        llm = _FakeLLM([_done_payload(should_send=True, message=" ")])
+        service = ProactiveReminderService(
+            db=self.db,
+            llm_client=llm,
+            search_provider=_FakeSearchProvider(),
+            logger=logging.getLogger("test.proactive_service.invalid_send"),
+            target_open_id="ou_target",
+            send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
+            lookahead_hours=24,
+            interval_minutes=60,
+            night_quiet_hint="23:00-08:00",
+            max_steps=1,
+            user_profile_path="",
+            internet_search_top_k=3,
+            clock=lambda: self.now,
+        )
+
+        with self.assertLogs("test.proactive_service.invalid_send", level="WARNING") as captured:
+            service.poll_scheduled()
+
+        self.assertEqual(self.sent, [])
+        self.assertTrue(any("proactive react invalid done payload" in item for item in captured.output))
 
 if __name__ == "__main__":
     unittest.main()

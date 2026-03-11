@@ -115,7 +115,6 @@ Optional runtime flags (all supported in `.env`):
 - `FEISHU_CALENDAR_BOOTSTRAP_PAST_DAYS`: startup bootstrap sync lookback days (default `2`)
 - `FEISHU_CALENDAR_BOOTSTRAP_FUTURE_DAYS`: startup bootstrap sync lookahead days (default `5`)
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for proactive messages; when non-empty and Feishu credentials are present, proactive reminder evaluation is enabled
-- `PROACTIVE_REMINDER_SCORE_THRESHOLD`: proactive reminder score threshold (default `80`, range `0~100`; notify when `score >= threshold`)
 - `PROACTIVE_REMINDER_INTERVAL_MINUTES`: proactive evaluation interval in minutes (default `60`, min `60`)
 - `PROACTIVE_REMINDER_LOOKAHEAD_HOURS`: proactive context lookahead window in hours (default `24`)
 - `PROACTIVE_REMINDER_NIGHT_QUIET_HINT`: soft quiet-time hint in proactive prompt (default `23:00-08:00`)
@@ -164,7 +163,7 @@ Optional runtime flags (all supported in `.env`):
 - Proactive ReAct reuses `PLAN_REPLAN_MAX_STEPS`, disables `ask_user`, and keeps mutating tools blocked by runtime allowlist/validator.
 - Proactive ReAct allows `internet_search` as optional evidence and injects `USER_PROFILE_PATH` content into prompt when available.
 - Proactive reminder default context window: schedule in next 24h + chat_history in last 24h.
-- Proactive reminder runs on timer periodic tasks; proactive `done` returns `score/message/reason`, and Feishu send happens only when `score >= PROACTIVE_REMINDER_SCORE_THRESHOLD`.
+- Proactive reminder runs on timer periodic tasks; proactive `done` returns `should_send/message`, and the LLM directly decides whether Feishu proactive text is sent.
 - Proactive reminder sends do not persist synthetic turns into `chat_history`.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.

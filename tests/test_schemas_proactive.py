@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from assistant_app.config import DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD
 from assistant_app.schemas.domain import ChatTurn, ScheduleItem
 from assistant_app.schemas.proactive import (
     ProactiveContextSnapshot,
@@ -15,16 +14,13 @@ from pydantic import ValidationError
 
 
 class ProactiveSchemaTest(unittest.TestCase):
-    def test_prompt_payload_falls_back_to_default_score_threshold(self) -> None:
-        payload = ProactivePromptPayload.model_validate(
-            {
-                "policy": {
-                    "score_threshold": True,
-                }
-            }
-        )
+    def test_prompt_payload_exposes_should_send_done_contract(self) -> None:
+        payload = ProactivePromptPayload.model_validate({})
 
-        self.assertEqual(payload.score_threshold, DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD)
+        dumped = payload.model_dump(mode="json")
+        self.assertEqual(dumped["output_contract"]["terminal_action"], "done")
+        self.assertEqual(dumped["output_contract"]["done_schema"]["should_send"], "boolean")
+        self.assertEqual(dumped["output_contract"]["done_schema"]["message"], "string")
 
     def test_context_snapshot_builds_explicit_prompt_payload(self) -> None:
         snapshot = ProactiveContextSnapshot(
@@ -54,18 +50,18 @@ class ProactiveSchemaTest(unittest.TestCase):
 
         payload = snapshot.to_prompt_payload(
             night_quiet_hint="23:00-08:00",
-            score_threshold=88,
             max_steps=5,
             internet_search_allowed=True,
         )
 
-        self.assertEqual(payload.policy.score_threshold, 88)
+        self.assertEqual(payload.policy.max_steps, 5)
         self.assertEqual(payload.context_window.schedule_forward_hours, 24)
         self.assertEqual(payload.user_profile.content, "用户偏好：晨会前提醒")
         self.assertEqual(payload.internal_context.schedules[0].title, "晨会")
         self.assertEqual(payload.internal_context.recent_chat_turns[0].assistant_content, "好的，我会留意这个安排。")
         dumped = payload.model_dump(mode="json")
         self.assertEqual(dumped["output_contract"]["terminal_action"], "done")
+        self.assertNotIn("score_threshold", dumped["policy"])
         self.assertEqual(dumped["internal_context"]["schedules"][0]["event_time"], "2026-03-05 10:00")
 
     def test_schedule_view_tool_result_normalizes_anchor(self) -> None:

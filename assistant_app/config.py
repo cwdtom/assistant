@@ -11,9 +11,9 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 UNKNOWN_APP_VERSION = "unknown"
-DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD = 80
 DEFAULT_TASK_CANCEL_COMMAND = "取消当前任务"
 _PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$""")
+_REMOVED_CONFIG_FIELDS = {"proactive_reminder_score_threshold"}
 
 
 class AppConfig(BaseSettings):
@@ -116,12 +116,6 @@ class AppConfig(BaseSettings):
         default="23:00-08:00",
         validation_alias="PROACTIVE_REMINDER_NIGHT_QUIET_HINT",
     )
-    proactive_reminder_score_threshold: int = Field(
-        default=DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
-        ge=0,
-        le=100,
-        validation_alias="PROACTIVE_REMINDER_SCORE_THRESHOLD",
-    )
 
     @classmethod
     def settings_customise_sources(
@@ -132,7 +126,12 @@ class AppConfig(BaseSettings):
         dotenv_settings: Any,
         file_secret_settings: Any,
     ) -> tuple[Any, ...]:
-        return init_settings, dotenv_settings, env_settings, file_secret_settings
+        return (
+            init_settings,
+            _filter_removed_settings_source(dotenv_settings),
+            _filter_removed_settings_source(env_settings),
+            file_secret_settings,
+        )
 
     @field_validator("api_key", "base_url", "model", mode="before")
     @classmethod
@@ -242,6 +241,19 @@ def load_env_file(env_path: str = ".env") -> None:
 def load_config(load_dotenv: bool = True) -> AppConfig:
     settings_factory = cast(Any, AppConfig)
     return settings_factory(_env_file=None if not load_dotenv else ".env")
+
+
+def _filter_removed_settings_source(source: Any) -> Any:
+    def _wrapped() -> Any:
+        values = source()
+        if not isinstance(values, dict):
+            return values
+        filtered = dict(values)
+        for key in _REMOVED_CONFIG_FIELDS:
+            filtered.pop(key, None)
+        return filtered
+
+    return _wrapped
 
 
 def load_startup_app_version(

@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from assistant_app.config import (
-    DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD,
     UNKNOWN_APP_VERSION,
     load_config,
     load_env_file,
@@ -75,7 +74,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.proactive_reminder_interval_minutes, 60)
         self.assertEqual(config.proactive_reminder_lookahead_hours, 24)
         self.assertEqual(config.proactive_reminder_night_quiet_hint, "23:00-08:00")
-        self.assertEqual(config.proactive_reminder_score_threshold, DEFAULT_PROACTIVE_REMINDER_SCORE_THRESHOLD)
 
     def test_load_config_ignores_openai_compatibility_env(self) -> None:
         env = {
@@ -178,7 +176,6 @@ class ConfigTest(unittest.TestCase):
             "PROACTIVE_REMINDER_INTERVAL_MINUTES": "120",
             "PROACTIVE_REMINDER_LOOKAHEAD_HOURS": "48",
             "PROACTIVE_REMINDER_NIGHT_QUIET_HINT": "22:00-07:00",
-            "PROACTIVE_REMINDER_SCORE_THRESHOLD": "95",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_config(load_dotenv=False)
@@ -229,7 +226,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.proactive_reminder_interval_minutes, 120)
         self.assertEqual(config.proactive_reminder_lookahead_hours, 48)
         self.assertEqual(config.proactive_reminder_night_quiet_hint, "22:00-07:00")
-        self.assertEqual(config.proactive_reminder_score_threshold, 95)
 
     def test_load_config_rejects_invalid_bool_value(self) -> None:
         env = {
@@ -252,7 +248,7 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_rejects_out_of_range_value(self) -> None:
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
-            "PROACTIVE_REMINDER_SCORE_THRESHOLD": "101",
+            "PROACTIVE_REMINDER_INTERVAL_MINUTES": "59",
         }
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaises(ValidationError):
@@ -291,16 +287,6 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(config.feishu_allowed_open_ids, ("ou_1", "ou_2", "ou_3"))
 
-    def test_load_config_accepts_zero_proactive_score_threshold(self) -> None:
-        env = {
-            "DEEPSEEK_API_KEY": "deep-key",
-            "PROACTIVE_REMINDER_SCORE_THRESHOLD": "0",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            config = load_config(load_dotenv=False)
-
-        self.assertEqual(config.proactive_reminder_score_threshold, 0)
-
     def test_load_env_file_prefers_dotenv_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
@@ -328,6 +314,22 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(config.feishu_app_id, "file-id")
         self.assertEqual(config.feishu_app_secret, "file-secret")
+
+    def test_load_config_ignores_removed_proactive_threshold_in_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "DEEPSEEK_API_KEY=file-key\nPROACTIVE_REMINDER_SCORE_THRESHOLD=95\n",
+                encoding="utf-8",
+            )
+            original_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                config = load_config(load_dotenv=True)
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(config.api_key, "file-key")
 
     def test_load_startup_app_version_reads_project_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
