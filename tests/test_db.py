@@ -917,6 +917,91 @@ class AssistantDBTest(unittest.TestCase):
         )
         self.assertFalse(initialized)
 
+    def test_get_update_and_delete_scheduled_planner_task(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="weekly-report",
+            cron_expr="0 9 * * 1",
+            prompt="生成周报",
+            run_limit=2,
+            next_run_at="2026-03-16 09:00:00",
+        )
+
+        item = self.db.get_scheduled_planner_task(task_id)
+        assert item is not None
+        self.assertEqual(item.task_name, "weekly-report")
+        self.assertEqual(item.run_limit, 2)
+
+        updated = self.db.update_scheduled_planner_task(
+            task_id,
+            task_name="weekly-report-v2",
+            cron_expr="0 10 * * 1",
+            prompt="生成新版周报",
+            run_limit=0,
+            next_run_at=None,
+        )
+
+        self.assertTrue(updated)
+        stored = self.db.get_scheduled_planner_task(task_id)
+        assert stored is not None
+        self.assertEqual(stored.task_name, "weekly-report-v2")
+        self.assertEqual(stored.cron_expr, "0 10 * * 1")
+        self.assertEqual(stored.prompt, "生成新版周报")
+        self.assertEqual(stored.run_limit, 0)
+        self.assertIsNone(stored.next_run_at)
+
+        deleted = self.db.delete_scheduled_planner_task(task_id)
+        self.assertTrue(deleted)
+        self.assertIsNone(self.db.get_scheduled_planner_task(task_id))
+
+    def test_update_scheduled_planner_task_rejects_invalid_cron_expr(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="daily-report",
+            cron_expr="0 9 * * *",
+            prompt="生成日报",
+            run_limit=1,
+            next_run_at="2026-03-11 09:00:00",
+        )
+
+        with self.assertRaises(ValueError):
+            self.db.update_scheduled_planner_task(
+                task_id,
+                task_name="daily-report",
+                cron_expr="bad cron",
+                prompt="生成日报",
+                run_limit=1,
+                next_run_at="2026-03-12 09:00:00",
+            )
+
+    def test_list_scheduled_planner_tasks_tolerates_invalid_existing_cron_expr(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO scheduled_planner_tasks (
+                    task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-invalid-cron",
+                    -1,
+                    "bad cron",
+                    "旧任务",
+                    None,
+                    None,
+                    "2026-03-10 09:00:00",
+                    "2026-03-10 09:00:00",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        tasks = self.db.list_scheduled_planner_tasks()
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].cron_expr, "bad cron")
+
     def test_legacy_scheduled_planner_task_enabled_column_is_migrated_to_run_limit(self) -> None:
         legacy_path = Path(self.tmp.name) / "legacy_scheduled_task.db"
         conn = sqlite3.connect(str(legacy_path))

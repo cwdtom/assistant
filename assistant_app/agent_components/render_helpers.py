@@ -187,6 +187,14 @@ def _is_planner_command_success(result: str, *, tool: str) -> bool:
     if tool == "thoughts":
         if text.startswith("thoughts.") or text.startswith("未找到想法 #") or text.startswith("暂无想法"):
             return False
+    if tool == "timer":
+        if (
+            text.startswith("timer.")
+            or text.startswith("未找到定时任务 #")
+            or text.startswith("暂无定时任务")
+            or text.startswith("定时任务名称已存在:")
+        ):
+            return False
     if tool == "system":
         if text.startswith("system."):
             return False

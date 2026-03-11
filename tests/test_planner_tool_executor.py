@@ -16,6 +16,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
         executor = PlannerToolExecutor(
             command_executor=lambda command: command,
             schedule_executor=lambda payload, raw_input: _ok_observation("schedule", raw_input),
+            timer_executor=lambda payload, raw_input: _ok_observation("timer", raw_input),
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
@@ -45,6 +46,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
         executor = PlannerToolExecutor(
             command_executor=lambda command: command,
             schedule_executor=lambda payload, raw_input: _ok_observation("schedule", raw_input),
+            timer_executor=lambda payload, raw_input: _ok_observation("timer", raw_input),
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=history_search_executor,
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
@@ -73,6 +75,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
         executor = PlannerToolExecutor(
             command_executor=lambda command: captured_commands.append(command) or "2026-03-10 15:16:17",
             schedule_executor=lambda payload, raw_input: _ok_observation("schedule", raw_input),
+            timer_executor=lambda payload, raw_input: _ok_observation("timer", raw_input),
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
@@ -88,6 +91,38 @@ class PlannerToolExecutorTest(unittest.TestCase):
         self.assertTrue(observation.ok)
         self.assertEqual(["/date"], captured_commands)
         self.assertEqual("2026-03-10 15:16:17", observation.result)
+
+    def test_timer_route_uses_json_payload_without_legacy_command(self) -> None:
+        captured_payloads: list[tuple[dict[str, Any], str]] = []
+
+        def timer_executor(payload: dict[str, Any], raw_input: str) -> PlannerObservation:
+            captured_payloads.append((payload, raw_input))
+            return _ok_observation("timer", raw_input)
+
+        executor = PlannerToolExecutor(
+            command_executor=lambda command: command,
+            schedule_executor=lambda payload, raw_input: _ok_observation("schedule", raw_input),
+            timer_executor=timer_executor,
+            history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
+            history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
+            thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
+            system_executor=lambda payload, raw_input: _ok_observation("system", raw_input),
+            internet_search_executor=lambda action_input, action_payload=None: _ok_observation(
+                "internet_search",
+                action_input,
+            ),
+        )
+
+        observation = executor.execute(
+            action_tool="timer",
+            action_input='{"action":"list"}',
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(1, len(captured_payloads))
+        payload, raw_input = captured_payloads[0]
+        self.assertEqual({"action": "list"}, payload)
+        self.assertEqual('{"action":"list"}', raw_input)
 
 
 if __name__ == "__main__":

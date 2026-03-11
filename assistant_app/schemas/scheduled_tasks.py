@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import Field, field_validator
 
+from assistant_app.scheduled_task_cron import validate_cron_expr
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.normalization import (
     TIMESTAMP_FORMAT,
@@ -11,7 +14,7 @@ from assistant_app.schemas.normalization import (
 )
 
 
-def _normalize_run_limit(value: object, *, field_name: str) -> int:
+def normalize_scheduled_task_run_limit(value: object, *, field_name: str) -> int:
     error_message = f"{field_name} must be -1 or >= 0"
     if isinstance(value, bool):
         raise ValueError(error_message)
@@ -31,6 +34,14 @@ def _normalize_run_limit(value: object, *, field_name: str) -> int:
     if parsed == -1 or parsed >= 0:
         return parsed
     raise ValueError(error_message)
+
+
+def normalize_scheduled_task_cron_expr(value: object, *, field_name: str) -> str:
+    normalized = normalize_required_text(value, field_name=field_name)
+    try:
+        return validate_cron_expr(normalized, now=datetime.now())
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid cron expression") from exc
 
 
 class ScheduledPlannerTask(FrozenModel):
@@ -53,7 +64,7 @@ class ScheduledPlannerTask(FrozenModel):
     @field_validator("run_limit", mode="before")
     @classmethod
     def normalize_run_limit(cls, value: object) -> int:
-        return _normalize_run_limit(value, field_name="run_limit")
+        return normalize_scheduled_task_run_limit(value, field_name="run_limit")
 
     @field_validator("created_at", "updated_at", mode="before")
     @classmethod
@@ -79,12 +90,40 @@ class ScheduledPlannerTaskCreateInput(FrozenModel):
     @classmethod
     def normalize_required_text_fields(cls, value: object, info: object) -> str:
         field_name = getattr(info, "field_name", "text")
+        if field_name == "cron_expr":
+            return normalize_scheduled_task_cron_expr(value, field_name=field_name)
         return normalize_required_text(value, field_name=field_name)
 
     @field_validator("run_limit", mode="before")
     @classmethod
     def normalize_run_limit(cls, value: object) -> int:
-        return _normalize_run_limit(value, field_name="run_limit")
+        return normalize_scheduled_task_run_limit(value, field_name="run_limit")
+
+    @field_validator("next_run_at", mode="before")
+    @classmethod
+    def normalize_next_run_at(cls, value: object) -> str | None:
+        return normalize_optional_datetime_text(value, field_name="next_run_at", formats=(TIMESTAMP_FORMAT,))
+
+
+class ScheduledPlannerTaskUpdateInput(FrozenModel):
+    task_name: str = Field(min_length=1)
+    run_limit: int
+    cron_expr: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    next_run_at: str | None = None
+
+    @field_validator("task_name", "cron_expr", "prompt", mode="before")
+    @classmethod
+    def normalize_required_text_fields(cls, value: object, info: object) -> str:
+        field_name = getattr(info, "field_name", "text")
+        if field_name == "cron_expr":
+            return normalize_scheduled_task_cron_expr(value, field_name=field_name)
+        return normalize_required_text(value, field_name=field_name)
+
+    @field_validator("run_limit", mode="before")
+    @classmethod
+    def normalize_run_limit(cls, value: object) -> int:
+        return normalize_scheduled_task_run_limit(value, field_name="run_limit")
 
     @field_validator("next_run_at", mode="before")
     @classmethod
@@ -133,3 +172,15 @@ class ScheduledTaskResultDecisionPromptPayload(FrozenModel):
     timezone: str = Field(default="local", min_length=1)
     result: ScheduledTaskResultDecisionContext
     output_contract: ScheduledTaskResultOutputContract = Field(default_factory=ScheduledTaskResultOutputContract)
+
+
+__all__ = [
+    "ScheduledPlannerTask",
+    "ScheduledPlannerTaskCreateInput",
+    "ScheduledPlannerTaskUpdateInput",
+    "ScheduledTaskResultDecision",
+    "ScheduledTaskResultDecisionContext",
+    "ScheduledTaskResultDecisionPromptPayload",
+    "normalize_scheduled_task_cron_expr",
+    "normalize_scheduled_task_run_limit",
+]

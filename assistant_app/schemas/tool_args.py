@@ -6,6 +6,10 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.domain import HttpUrlValue
+from assistant_app.schemas.scheduled_tasks import (
+    normalize_scheduled_task_cron_expr,
+    normalize_scheduled_task_run_limit,
+)
 from assistant_app.schemas.values import (
     HistoryListLimitValue,
     OptionalScheduleDateTimeValue,
@@ -129,6 +133,84 @@ class ScheduleUpdateArgs(ScheduleAddArgs):
 class ScheduleRepeatArgs(ThoughtToolArgsBase):
     id: int = Field(ge=1, description="日程 ID，正整数。")
     enabled: bool = Field(description="重复规则开关：true=开启，false=关闭。")
+
+
+class TimerListArgs(ThoughtToolArgsBase):
+    pass
+
+
+class TimerIdArgs(ThoughtToolArgsBase):
+    id: int = Field(ge=1, description="定时任务 ID，正整数。")
+
+
+class TimerAddArgs(ThoughtToolArgsBase):
+    task_name: str = Field(min_length=1, description="通用定时任务名称，不能为空且应唯一。")
+    cron_expr: str = Field(min_length=1, description="cron 表达式，需可被 croniter 解析。")
+    prompt: str = Field(min_length=1, description="到点后送入 planner 的任务提示词。")
+    run_limit: int = Field(default=-1, description="剩余执行次数；-1 表示无限，0 表示禁用，>0 表示有限次。")
+
+    @field_validator("task_name", "prompt", mode="before")
+    @classmethod
+    def normalize_required_text_fields(cls, value: Any, info: object) -> str:
+        field_name = getattr(info, "field_name", "text")
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{field_name} is required")
+        return text
+
+    @field_validator("cron_expr", mode="before")
+    @classmethod
+    def normalize_cron_expr(cls, value: Any) -> str:
+        return normalize_scheduled_task_cron_expr(value, field_name="cron_expr")
+
+    @field_validator("run_limit", mode="before")
+    @classmethod
+    def normalize_run_limit(cls, value: Any) -> int:
+        if value is None:
+            raise ValueError("run_limit must be -1 or >= 0")
+        return normalize_scheduled_task_run_limit(value, field_name="run_limit")
+
+
+class TimerUpdateArgs(ThoughtToolArgsBase):
+    id: int = Field(ge=1, description="定时任务 ID，正整数。")
+    task_name: str | None = Field(default=None, description="更新后的通用定时任务名称。")
+    cron_expr: str | None = Field(default=None, description="更新后的 cron 表达式。")
+    prompt: str | None = Field(default=None, description="更新后的 planner 提示词。")
+    run_limit: int | None = Field(
+        default=None,
+        description="更新后的剩余执行次数；-1 表示无限，0 表示禁用，>0 表示有限次。",
+    )
+
+    @field_validator("task_name", "prompt", mode="before")
+    @classmethod
+    def normalize_optional_text_fields(cls, value: Any, info: object) -> str | None:
+        if value is None:
+            raise ValueError(f"{getattr(info, 'field_name', 'text')} cannot be null")
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"{getattr(info, 'field_name', 'text')} is required")
+        return text
+
+    @field_validator("cron_expr", mode="before")
+    @classmethod
+    def normalize_optional_cron_expr(cls, value: Any) -> str | None:
+        if value is None:
+            raise ValueError("cron_expr cannot be null")
+        return normalize_scheduled_task_cron_expr(value, field_name="cron_expr")
+
+    @field_validator("run_limit", mode="before")
+    @classmethod
+    def normalize_optional_run_limit(cls, value: Any) -> int | None:
+        if value is None:
+            raise ValueError("run_limit must be -1 or >= 0")
+        return normalize_scheduled_task_run_limit(value, field_name="run_limit")
+
+    @model_validator(mode="after")
+    def validate_has_mutation_fields(self) -> TimerUpdateArgs:
+        mutable_fields = {"task_name", "cron_expr", "prompt", "run_limit"}
+        if not (mutable_fields & self.model_fields_set):
+            raise ValueError("timer.update 至少需要提供一个可更新字段。")
+        return self
 
 
 class HistoryListArgs(ThoughtToolArgsBase):
@@ -288,6 +370,11 @@ THOUGHT_TOOL_ARGS_MODELS: dict[str, type[ThoughtToolArgsBase]] = {
     "schedule_update": ScheduleUpdateArgs,
     "schedule_delete": ScheduleIdArgs,
     "schedule_repeat": ScheduleRepeatArgs,
+    "timer_add": TimerAddArgs,
+    "timer_list": TimerListArgs,
+    "timer_get": TimerIdArgs,
+    "timer_update": TimerUpdateArgs,
+    "timer_delete": TimerIdArgs,
     "history_list": HistoryListArgs,
     "history_search": HistorySearchArgs,
     "thoughts_add": ThoughtsAddArgs,
@@ -354,6 +441,10 @@ __all__ = [
     "ScheduleUpdateArgs",
     "ScheduleViewArgs",
     "SystemDateArgs",
+    "TimerAddArgs",
+    "TimerIdArgs",
+    "TimerListArgs",
+    "TimerUpdateArgs",
     "THOUGHT_TOOL_ARGS_MODELS",
     "ThoughtToolArgsBase",
     "ThoughtsAddArgs",

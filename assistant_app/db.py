@@ -17,7 +17,11 @@ from assistant_app.schemas.domain import (
     ScheduleItem,
     ThoughtItem,
 )
-from assistant_app.schemas.scheduled_tasks import ScheduledPlannerTask, ScheduledPlannerTaskCreateInput
+from assistant_app.schemas.scheduled_tasks import (
+    ScheduledPlannerTask,
+    ScheduledPlannerTaskCreateInput,
+    ScheduledPlannerTaskUpdateInput,
+)
 from assistant_app.schemas.storage import (
     ScheduleBatchCreateInput,
     ScheduleCreateInput,
@@ -978,6 +982,20 @@ class AssistantDB:
             ).fetchall()
         return [_scheduled_planner_task_from_row(row) for row in rows]
 
+    def get_scheduled_planner_task(self, task_id: int) -> ScheduledPlannerTask | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, task_name, run_limit, cron_expr, prompt, next_run_at, last_run_at, created_at, updated_at
+                FROM scheduled_planner_tasks
+                WHERE id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _scheduled_planner_task_from_row(row)
+
     def list_uninitialized_scheduled_planner_tasks(self) -> list[ScheduledPlannerTask]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1033,6 +1051,63 @@ class AssistantDB:
                 WHERE id = ? AND run_limit != 0 AND next_run_at IS NULL
                 """,
                 (next_run_at, normalized_updated_at, task_id),
+            )
+            return cur.rowcount > 0
+
+    def update_scheduled_planner_task(
+        self,
+        task_id: int,
+        *,
+        task_name: str,
+        cron_expr: str,
+        prompt: str,
+        run_limit: int,
+        next_run_at: str | None,
+    ) -> bool:
+        try:
+            payload = ScheduledPlannerTaskUpdateInput.model_validate(
+                {
+                    "task_name": task_name,
+                    "run_limit": run_limit,
+                    "cron_expr": cron_expr,
+                    "prompt": prompt,
+                    "next_run_at": next_run_at,
+                }
+            )
+        except ValidationError as exc:
+            self._log_input_validation_failed(method="update_scheduled_planner_task", exc=exc)
+            raise ValueError(str(exc)) from exc
+
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE scheduled_planner_tasks
+                SET
+                    task_name = ?,
+                    run_limit = ?,
+                    cron_expr = ?,
+                    prompt = ?,
+                    next_run_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload.task_name,
+                    payload.run_limit,
+                    payload.cron_expr,
+                    payload.prompt,
+                    payload.next_run_at,
+                    _now_iso(),
+                    task_id,
+                ),
+            )
+            return cur.rowcount > 0
+
+    def delete_scheduled_planner_task(self, task_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM scheduled_planner_tasks WHERE id = ?",
+                (task_id,),
             )
             return cur.rowcount > 0
 

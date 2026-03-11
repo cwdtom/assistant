@@ -18,6 +18,7 @@ from assistant_app.schemas.tools import (
     coerce_schedule_action_payload,
     coerce_system_action_payload,
     coerce_thoughts_action_payload,
+    coerce_timer_action_payload,
     parse_json_object,
     validate_thought_tool_arguments,
 )
@@ -57,6 +58,24 @@ class ToolSchemaTest(unittest.TestCase):
         self.assertEqual(properties, {})
         self.assertFalse(system_date_schema["function"]["parameters"]["additionalProperties"])
 
+    def test_build_thought_tool_schemas_expands_timer_group(self) -> None:
+        schemas = build_thought_tool_schemas(["timer"])
+        timer_list_schema = next(item for item in schemas if item["function"]["name"] == "timer_list")
+
+        properties = timer_list_schema["function"]["parameters"]["properties"]
+        self.assertEqual(properties, {})
+        self.assertFalse(timer_list_schema["function"]["parameters"]["additionalProperties"])
+        timer_tool_names = {item["function"]["name"] for item in schemas}
+        self.assertTrue(
+            {"timer_add", "timer_list", "timer_get", "timer_update", "timer_delete"}.issubset(timer_tool_names)
+        )
+
+    def test_build_thought_tool_schemas_can_disable_timer_group(self) -> None:
+        schemas = build_thought_tool_schemas(["timer"], allow_ask_user=False, allow_timer=False)
+        tool_names = {item["function"]["name"] for item in schemas}
+
+        self.assertEqual(tool_names, {"done"})
+
     def test_parse_json_object_rejects_non_object_json(self) -> None:
         self.assertIsNone(parse_json_object('[1,2,3]'))
 
@@ -87,6 +106,19 @@ class ToolSchemaTest(unittest.TestCase):
 
     def test_validate_thought_tool_arguments_rejects_invalid_fetch_url(self) -> None:
         parsed = validate_thought_tool_arguments('internet_search_fetch_url', {'url': 'ftp://example.com'})
+
+        self.assertIsNone(parsed)
+
+    def test_validate_thought_tool_arguments_rejects_invalid_timer_cron_expr(self) -> None:
+        parsed = validate_thought_tool_arguments(
+            'timer_add',
+            {'task_name': 'daily-report', 'cron_expr': 'not-a-cron', 'prompt': '生成日报'},
+        )
+
+        self.assertIsNone(parsed)
+
+    def test_validate_thought_tool_arguments_rejects_timer_update_without_mutation_fields(self) -> None:
+        parsed = validate_thought_tool_arguments('timer_update', {'id': 3})
 
         self.assertIsNone(parsed)
 
@@ -249,6 +281,43 @@ class ToolSchemaTest(unittest.TestCase):
             coerce_system_action_payload({'action': 'date'}),
         )
 
+    def test_normalize_thought_tool_call_timer_payload_matches_system_action_contract(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_timer_add',
+                'type': 'function',
+                'function': {
+                    'name': 'timer_add',
+                    'arguments': json.dumps(
+                        {
+                            'task_name': 'daily-report',
+                            'cron_expr': '0 9 * * *',
+                            'prompt': '生成日报',
+                            'run_limit': '3',
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        assert decision.next_action is not None
+        assert decision.next_action.payload is not None
+        self.assertEqual(
+            decision.next_action.payload,
+            coerce_timer_action_payload(
+                {
+                    'action': 'add',
+                    'task_name': 'daily-report',
+                    'cron_expr': '0 9 * * *',
+                    'prompt': '生成日报',
+                    'run_limit': '3',
+                }
+            ),
+        )
+
 
 class ProactiveToolSchemaTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -283,6 +352,12 @@ class ProactiveToolSchemaTest(unittest.TestCase):
         self.assertNotIn("score", properties)
         self.assertNotIn("reason", properties)
         self.assertFalse(done_schema["function"]["parameters"]["additionalProperties"])
+
+    def test_build_proactive_tool_schemas_does_not_expose_timer_tools(self) -> None:
+        schemas = build_proactive_tool_schemas()
+        tool_names = {item["function"]["name"] for item in schemas}
+
+        self.assertFalse(any(name.startswith("timer_") for name in tool_names))
 
     def test_execute_accepts_prevalidated_model_arguments(self) -> None:
         result = self.executor.execute(

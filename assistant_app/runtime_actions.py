@@ -15,6 +15,7 @@ from assistant_app.schemas.tools import (
     coerce_schedule_action_payload,
     coerce_system_action_payload,
     coerce_thoughts_action_payload,
+    coerce_timer_action_payload,
     parse_json_object,
 )
 
@@ -26,6 +27,11 @@ _ACTION_TOOL_BY_TOOL_NAME: dict[str, str] = {
     "schedule_update": "schedule",
     "schedule_delete": "schedule",
     "schedule_repeat": "schedule",
+    "timer_add": "timer",
+    "timer_list": "timer",
+    "timer_get": "timer",
+    "timer_update": "timer",
+    "timer_delete": "timer",
     "history_list": "history",
     "history_search": "history",
     "thoughts_add": "thoughts",
@@ -46,6 +52,11 @@ _COMPAT_ACTION_BY_TOOL_NAME: dict[str, str] = {
     "schedule_update": "update",
     "schedule_delete": "delete",
     "schedule_repeat": "repeat",
+    "timer_add": "add",
+    "timer_list": "list",
+    "timer_get": "get",
+    "timer_update": "update",
+    "timer_delete": "delete",
     "history_list": "list",
     "history_search": "search",
     "thoughts_add": "add",
@@ -85,6 +96,11 @@ _COMPAT_FIELDS_BY_TOOL_NAME: dict[str, tuple[str, ...]] = {
     ),
     "schedule_delete": ("id",),
     "schedule_repeat": ("id", "enabled"),
+    "timer_add": ("task_name", "cron_expr", "prompt", "run_limit"),
+    "timer_list": (),
+    "timer_get": ("id",),
+    "timer_update": ("id", "task_name", "cron_expr", "prompt", "run_limit"),
+    "timer_delete": ("id",),
     "history_list": ("limit",),
     "history_search": ("keyword", "limit"),
     "thoughts_add": ("content",),
@@ -107,7 +123,7 @@ def serialize_runtime_action_input(*, action_tool: str, payload: RuntimePlannerA
     if payload_tool != action_tool:
         raise ValueError("payload tool does not match action tool")
 
-    if action_tool in {"schedule", "history", "thoughts", "system", "internet_search"}:
+    if action_tool in {"schedule", "timer", "history", "thoughts", "system", "internet_search"}:
         compat_action = _COMPAT_ACTION_BY_TOOL_NAME.get(payload.tool_name)
         if compat_action is None:
             raise ValueError("unsupported compat action payload")
@@ -126,7 +142,7 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
     if not normalized_input:
         return None
 
-    if action_tool in {"schedule", "history", "thoughts", "system", "internet_search"}:
+    if action_tool in {"schedule", "timer", "history", "thoughts", "system", "internet_search"}:
         if normalized_input.startswith("/"):
             command_payload = parse_tool_command_payload(normalized_input)
             if command_payload is None:
@@ -140,6 +156,8 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
             try:
                 if action_tool == "schedule":
                     return coerce_schedule_action_payload(parsed_payload)
+                if action_tool == "timer":
+                    return coerce_timer_action_payload(parsed_payload)
                 if action_tool == "history":
                     return coerce_history_action_payload(parsed_payload)
                 if action_tool == "system":

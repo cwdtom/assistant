@@ -385,7 +385,11 @@ class PlannerSession:
     def current_thought_tool_names(self, task: PendingPlanTask) -> list[str]:
         current_step = self.current_plan_step(task)
         raw_tools: list[str] = current_step.tools if current_step is not None else []
-        return resolve_current_subtask_tool_names(raw_tools, allow_ask_user=task.source == "interactive")
+        return resolve_current_subtask_tool_names(
+            raw_tools,
+            allow_ask_user=task.source == "interactive",
+            allow_timer=task.source == "interactive",
+        )
 
     @staticmethod
     def sync_current_plan_index(outer: OuterPlanContext) -> None:

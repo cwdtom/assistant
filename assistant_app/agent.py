@@ -49,6 +49,9 @@ from assistant_app.agent_components.tools.system import (
 from assistant_app.agent_components.tools.thoughts import (
     execute_thoughts_system_action as _execute_thoughts_system_action_impl,
 )
+from assistant_app.agent_components.tools.timer import (
+    execute_timer_system_action as _execute_timer_system_action_impl,
+)
 from assistant_app.db import AssistantDB, ScheduleItem
 from assistant_app.llm import LLMClient
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
@@ -148,6 +151,10 @@ class AssistantAgent:
         self._planner_tool_executor = PlannerToolExecutor(
             command_executor=self._handle_command,
             schedule_executor=lambda payload, raw_input: self._execute_schedule_system_action(
+                payload,
+                raw_input=raw_input,
+            ),
+            timer_executor=lambda payload, raw_input: self._execute_timer_system_action(
                 payload,
                 raw_input=raw_input,
             ),
@@ -362,6 +369,15 @@ class AssistantAgent:
             raw_input=raw_input,
             observation_tool=observation_tool,
         )
+
+    def _execute_timer_system_action(
+        self,
+        payload: dict[str, Any] | RuntimePlannerActionPayload,
+        *,
+        raw_input: str,
+        source: str = "planner",
+    ) -> PlannerObservation:
+        return _execute_timer_system_action_impl(self, payload, raw_input=raw_input, source=source)
 
     def _execute_thoughts_system_action(
         self,

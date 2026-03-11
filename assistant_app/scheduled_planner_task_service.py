@@ -6,23 +6,19 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from assistant_app.agent import AssistantAgent
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import split_semantic_messages
 from assistant_app.scheduled_result_decision import ScheduledResultDecisionRunner
+from assistant_app.scheduled_task_cron import CronIterator, build_cron_iterator, compute_next_run_at_from_cron
 from assistant_app.schemas.scheduled_tasks import (
     ScheduledPlannerTask,
     ScheduledTaskResultDecisionPromptPayload,
 )
 
 DEFAULT_SCHEDULED_RESULT_DECISION_MAX_STEPS = 3
-
-
-class _CronIterator(Protocol):
-    def get_next(self, ret_type: type[datetime]) -> datetime: ...
-
 
 @dataclass(frozen=True)
 class _ScheduledPlannerQueueItem:
@@ -46,7 +42,7 @@ class ScheduledPlannerTaskService:
         send_text_to_open_id: Callable[[str, str], None],
         result_decision_max_steps: int = DEFAULT_SCHEDULED_RESULT_DECISION_MAX_STEPS,
         clock: Callable[[], datetime] | None = None,
-        croniter_factory: Callable[[str, datetime], _CronIterator] | None = None,
+        croniter_factory: Callable[[str, datetime], CronIterator] | None = None,
     ) -> None:
         self._db = db
         self._agent = agent
@@ -406,8 +402,11 @@ class ScheduledPlannerTaskService:
         now: datetime,
     ) -> str | None:
         try:
-            iterator = self._croniter_factory(cron_expr, now)
-            next_run_at = iterator.get_next(datetime).replace(microsecond=0)
+            return compute_next_run_at_from_cron(
+                cron_expr=cron_expr,
+                now=now,
+                iterator_factory=self._croniter_factory,
+            )
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(
                 "scheduled task cron parse failed",
@@ -421,15 +420,10 @@ class ScheduledPlannerTaskService:
                 },
             )
             return None
-        return next_run_at.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _default_croniter_factory(expr: str, now: datetime) -> _CronIterator:
-    try:
-        from croniter import croniter
-    except ImportError as exc:  # pragma: no cover - exercised in integration environments
-        raise RuntimeError("croniter is required for scheduled planner tasks") from exc
-    return croniter(expr, now)
+def _default_croniter_factory(expr: str, now: datetime) -> CronIterator:
+    return build_cron_iterator(expr, now)
 
 
 def _run_limit_after_start(run_limit: int) -> int:

@@ -23,6 +23,10 @@ from assistant_app.schemas.tool_args import (
     ThoughtsIdArgs,
     ThoughtsListArgs,
     ThoughtsUpdateArgs,
+    TimerAddArgs,
+    TimerIdArgs,
+    TimerListArgs,
+    TimerUpdateArgs,
 )
 from assistant_app.schemas.values import (
     HistoryListLimitValue,
@@ -300,6 +304,78 @@ class ScheduleRepeatCompatPayload(FrozenModel):
         )
 
 
+class TimerListCompatPayload(FrozenModel):
+    action: Literal["list"]
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="timer_list",
+            arguments=TimerListArgs(),
+        )
+
+
+class TimerIdCompatPayload(FrozenModel):
+    action: Literal["get", "delete"]
+    id: int = Field(ge=1)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        return PositiveIntValue.model_validate({"value": value}).value
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        tool_name = "timer_get" if self.action == "get" else "timer_delete"
+        return RuntimePlannerActionPayload(
+            tool_name=tool_name,
+            arguments=TimerIdArgs(id=self.id),
+        )
+
+
+class TimerAddCompatPayload(FrozenModel):
+    action: Literal["add"]
+    task_name: Any
+    cron_expr: Any
+    prompt: Any
+    run_limit: Any = -1
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="timer_add",
+            arguments=TimerAddArgs.model_validate(
+                {
+                    "task_name": self.task_name,
+                    "cron_expr": self.cron_expr,
+                    "prompt": self.prompt,
+                    "run_limit": self.run_limit,
+                }
+            ),
+        )
+
+
+class TimerUpdateCompatPayload(FrozenModel):
+    action: Literal["update"]
+    id: int = Field(ge=1)
+    task_name: Any | None = None
+    cron_expr: Any | None = None
+    prompt: Any | None = None
+    run_limit: Any | None = None
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> int:
+        return PositiveIntValue.model_validate({"value": value}).value
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {"id": self.id}
+        for field_name in ("task_name", "cron_expr", "prompt", "run_limit"):
+            if field_name in self.model_fields_set:
+                arguments[field_name] = getattr(self, field_name)
+        return RuntimePlannerActionPayload(
+            tool_name="timer_update",
+            arguments=TimerUpdateArgs.model_validate(arguments),
+        )
+
+
 class ThoughtsAddCompatPayload(FrozenModel):
     action: Literal["add"]
     content: str = Field(min_length=1)
@@ -463,6 +539,13 @@ ScheduleCompatPayload = Annotated[
     | ScheduleRepeatCompatPayload,
     Field(discriminator="action"),
 ]
+TimerCompatPayload = Annotated[
+    TimerListCompatPayload
+    | TimerIdCompatPayload
+    | TimerAddCompatPayload
+    | TimerUpdateCompatPayload,
+    Field(discriminator="action"),
+]
 ThoughtsCompatPayload = Annotated[
     ThoughtsAddCompatPayload | ThoughtsListCompatPayload | ThoughtsIdCompatPayload | ThoughtsUpdateCompatPayload,
     Field(discriminator="action"),
@@ -478,6 +561,7 @@ SystemCompatPayload = Annotated[
 
 _HISTORY_COMPAT_ADAPTER: TypeAdapter[HistoryCompatPayload] = TypeAdapter(HistoryCompatPayload)
 _SCHEDULE_COMPAT_ADAPTER: TypeAdapter[ScheduleCompatPayload] = TypeAdapter(ScheduleCompatPayload)
+_TIMER_COMPAT_ADAPTER: TypeAdapter[TimerCompatPayload] = TypeAdapter(TimerCompatPayload)
 _THOUGHTS_COMPAT_ADAPTER: TypeAdapter[ThoughtsCompatPayload] = TypeAdapter(ThoughtsCompatPayload)
 _INTERNET_SEARCH_COMPAT_ADAPTER: TypeAdapter[InternetSearchCompatPayloadUnion] = TypeAdapter(
     InternetSearchCompatPayloadUnion
@@ -492,6 +576,15 @@ def coerce_history_action_payload(raw_payload: dict[str, Any]) -> RuntimePlanner
 
 def coerce_schedule_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
     compat_payload = _SCHEDULE_COMPAT_ADAPTER.validate_python(_normalize_action_payload(raw_payload))
+    return compat_payload.to_runtime_payload()
+
+
+def coerce_timer_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    normalized_payload = _normalize_action_payload(raw_payload)
+    action = normalized_payload.get("action")
+    if action not in {"add", "list", "get", "update", "delete"}:
+        raise ValueError("timer.action 非法。")
+    compat_payload = _TIMER_COMPAT_ADAPTER.validate_python(normalized_payload)
     return compat_payload.to_runtime_payload()
 
 
@@ -553,6 +646,10 @@ __all__ = [
     "ScheduleUpdateCompatPayload",
     "ScheduleViewCompatPayload",
     "SystemDateCompatPayload",
+    "TimerAddCompatPayload",
+    "TimerIdCompatPayload",
+    "TimerListCompatPayload",
+    "TimerUpdateCompatPayload",
     "ThoughtsAddCompatPayload",
     "ThoughtsIdCompatPayload",
     "ThoughtsListCompatPayload",
@@ -561,6 +658,7 @@ __all__ = [
     "coerce_internet_search_action_payload",
     "coerce_schedule_action_payload",
     "coerce_system_action_payload",
+    "coerce_timer_action_payload",
     "coerce_thoughts_action_payload",
     "parse_json_object",
 ]

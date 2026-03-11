@@ -19,6 +19,7 @@ class PlannerToolExecutor:
         *,
         command_executor: Callable[[str], str],
         schedule_executor: JsonRouteExecutor,
+        timer_executor: JsonRouteExecutor,
         history_executor: JsonRouteExecutor,
         history_search_executor: JsonRouteExecutor,
         thoughts_executor: JsonRouteExecutor,
@@ -28,6 +29,7 @@ class PlannerToolExecutor:
         self._routes = self._build_routes(
             command_executor=command_executor,
             schedule_executor=schedule_executor,
+            timer_executor=timer_executor,
             history_executor=history_executor,
             history_search_executor=history_search_executor,
             thoughts_executor=thoughts_executor,
@@ -57,6 +59,7 @@ class PlannerToolExecutor:
         *,
         command_executor: Callable[[str], str],
         schedule_executor: JsonRouteExecutor,
+        timer_executor: JsonRouteExecutor,
         history_executor: JsonRouteExecutor,
         history_search_executor: JsonRouteExecutor,
         thoughts_executor: JsonRouteExecutor,
@@ -70,6 +73,12 @@ class PlannerToolExecutor:
                 legacy_command_prefix="/schedule",
                 payload_executor=lambda payload, raw_input: schedule_executor(payload, raw_input),
                 typed_payload_executor=lambda payload, raw_input: schedule_executor(payload, raw_input),
+            ),
+            "timer": JsonPlannerToolRoute(
+                tool="timer",
+                invalid_json_result="timer 工具参数无效：需要 JSON 对象。",
+                payload_executor=lambda payload, raw_input: timer_executor(payload, raw_input),
+                typed_payload_executor=lambda payload, raw_input: timer_executor(payload, raw_input),
             ),
             "history": JsonPlannerToolRoute(
                 tool="history",

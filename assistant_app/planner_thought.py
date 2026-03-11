@@ -33,6 +33,7 @@ THOUGHT_PROMPT = """
 工具与参数定义以 API 请求里的 tools schema 为准（不以 prompt 中的示例字段为准）。
 可用工具名：
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
+- timer_add、timer_list、timer_get、timer_update、timer_delete（通用定时任务，不是普通日程）
 - internet_search_tool、internet_search_fetch_url、history_list、history_search
 - thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete、system_date
 - done
@@ -50,6 +51,7 @@ THOUGHT_PROMPT = """
 - 必须优先输出结构化工具参数，不要主动输出命令字符串
 - 系统仅为兼容旧模型保留命令字符串兜底路径；该路径不作为标准输出契约
 - thoughts_* 工具用于记录碎片想法；优先使用结构化参数进行新增/查询/更新/软删除
+- timer_* 工具用于管理通用定时 planner 任务；不要将其用于普通日程
 """.strip()
 
 _THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -60,6 +62,11 @@ _THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("schedule_update", "更新日程，直接传结构化参数，不要传命令字符串。", ("current_step",)),
     ("schedule_delete", "删除日程，直接传结构化参数，不要传命令字符串。", ("current_step",)),
     ("schedule_repeat", "切换重复规则开关，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("timer_add", "新增通用定时 planner 任务，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("timer_list", "列出通用定时 planner 任务，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("timer_get", "获取通用定时 planner 任务详情，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("timer_update", "更新通用定时 planner 任务，直接传结构化参数，不要传命令字符串。", ("current_step",)),
+    ("timer_delete", "删除通用定时 planner 任务，直接传结构化参数，不要传命令字符串。", ("current_step",)),
     ("internet_search_tool", "搜索互联网信息，返回结构化搜索结果摘要。", ("current_step",)),
     ("internet_search_fetch_url", "按 URL 抓取网页正文信息，返回主文本内容。", ("current_step",)),
     ("history_list", "列出最近历史会话，直接传结构化参数，不要传命令字符串。", ("current_step",)),
@@ -89,10 +96,21 @@ _THOUGHT_SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
 }
 
 
-def resolve_current_subtask_tool_names(raw_tools: Any, *, allow_ask_user: bool = True) -> list[str]:
+def resolve_current_subtask_tool_names(
+    raw_tools: Any,
+    *,
+    allow_ask_user: bool = True,
+    allow_timer: bool = True,
+) -> list[str]:
     base_tools = normalize_tool_names(raw_tools)
     if base_tools is None:
         base_tools = []
+    if not allow_timer:
+        base_tools = [
+            name
+            for name in base_tools
+            if name != "timer" and not name.startswith("timer_")
+        ]
     runtime_tool_names = [name for name in THOUGHT_RUNTIME_TOOL_NAMES if allow_ask_user or name != "ask_user"]
     for name in runtime_tool_names:
         if name not in base_tools:
@@ -100,8 +118,17 @@ def resolve_current_subtask_tool_names(raw_tools: Any, *, allow_ask_user: bool =
     return base_tools
 
 
-def build_thought_tool_schemas(raw_tools: Any, *, allow_ask_user: bool = True) -> list[dict[str, Any]]:
-    tool_names = resolve_current_subtask_tool_names(raw_tools, allow_ask_user=allow_ask_user)
+def build_thought_tool_schemas(
+    raw_tools: Any,
+    *,
+    allow_ask_user: bool = True,
+    allow_timer: bool = True,
+) -> list[dict[str, Any]]:
+    tool_names = resolve_current_subtask_tool_names(
+        raw_tools,
+        allow_ask_user=allow_ask_user,
+        allow_timer=allow_timer,
+    )
     schema_tool_names = expand_tool_groups(tool_names)
     schemas: list[dict[str, Any]] = []
     for name in schema_tool_names:
