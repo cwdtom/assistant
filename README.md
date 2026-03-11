@@ -142,7 +142,6 @@ python main.py
 - `/version`
 - `/date`
 - `/profile refresh`
-- `/notify`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
 - `/thoughts add|list|get|update|delete`
@@ -155,8 +154,6 @@ python main.py
 - `/thoughts delete` 为软删除（状态置为 `删除`）
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
 - `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
-- `/notify` 会立即手动触发一次主动提醒决策；该命令会绕过定时间隔限制，但仍遵守 `PROACTIVE_REMINDER_SCORE_THRESHOLD`
-- `/notify` 本身不返回正文；CLI 与 Feishu DM 均保持静默，仅保留日志。若本次决策达到阈值，仍会按既有链路向 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 发送主动提醒文本
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）

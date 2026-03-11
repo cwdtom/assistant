@@ -51,7 +51,6 @@ from assistant_app.agent_components.tools.thoughts import (
 )
 from assistant_app.db import AssistantDB, ScheduleItem
 from assistant_app.llm import LLMClient
-from assistant_app.schemas.proactive import ProactiveExecutionResult
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
 from assistant_app.search import BingSearchProvider, SearchProvider, fetch_webpage_main_text
 
@@ -96,8 +95,6 @@ class AssistantAgent:
         user_profile_path: str = "",
         user_profile_max_chars: int = DEFAULT_USER_PROFILE_MAX_CHARS,
         user_profile_refresh_runner: Callable[[], str] | None = None,
-        proactive_notify_runner: Callable[[], ProactiveExecutionResult] | None = None,
-        proactive_notify_target_open_id: str = "",
         final_response_rewriter: Callable[[str], str] | None = None,
         app_version: str = UNKNOWN_APP_VERSION,
         schedule_sync_service: Any | None = None,
@@ -174,8 +171,6 @@ class AssistantAgent:
         )
 
         self._user_profile_refresh_runner = user_profile_refresh_runner
-        self._proactive_notify_runner = proactive_notify_runner
-        self._proactive_notify_target_open_id = proactive_notify_target_open_id.strip()
         self._final_response_rewriter = final_response_rewriter
         self._app_version = app_version.strip() or UNKNOWN_APP_VERSION
         self._schedule_sync_service = schedule_sync_service
@@ -185,15 +180,6 @@ class AssistantAgent:
 
     def set_user_profile_refresh_runner(self, runner: Callable[[], str] | None) -> None:
         self._user_profile_refresh_runner = runner
-
-    def set_proactive_notify_runner(
-        self,
-        runner: Callable[[], ProactiveExecutionResult] | None,
-        *,
-        target_open_id: str = "",
-    ) -> None:
-        self._proactive_notify_runner = runner
-        self._proactive_notify_target_open_id = target_open_id.strip()
 
     def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None:
         self._planner_session.set_subtask_result_callback(callback)

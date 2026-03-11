@@ -87,13 +87,6 @@ class ProactiveReminderService:
         )
         self._execute_once(now=now, raise_on_failure=False)
 
-    def run_manual_trigger(self) -> ProactiveExecutionResult:
-        self._ensure_manual_trigger_available()
-        result = self._execute_once(now=self._clock(), raise_on_failure=True)
-        if result is None:
-            raise RuntimeError("主动提醒未产出有效决策。")
-        return result
-
     def _execute_once(
         self,
         *,
@@ -226,16 +219,6 @@ class ProactiveReminderService:
             RuntimeError("主动提醒未产出有效决策。"),
             raise_on_failure=raise_on_failure,
         )
-
-    def _ensure_manual_trigger_available(self) -> None:
-        if not self._target_open_id:
-            raise RuntimeError("缺少 PROACTIVE_REMINDER_TARGET_OPEN_ID，无法执行主动提醒。")
-        llm_client = self._llm_client
-        if llm_client is None:
-            raise RuntimeError("当前未配置 LLM，无法执行主动提醒。")
-        reply_with_tools = getattr(llm_client, "reply_with_tools", None)
-        if not callable(reply_with_tools):
-            raise RuntimeError("当前 LLM 不支持 tool-calling，无法执行主动提醒。")
 
     @staticmethod
     def _raise_or_none(

@@ -33,7 +33,6 @@ Supported input forms in CLI:
 - `/version`
 - `/date`
 - `/profile refresh`
-- `/notify`
 - `/history list [--limit <>=1>]`
 - `/history search <关键词> [--limit <>=1>]`
 - `/thoughts add|list|get|update|delete`
@@ -128,8 +127,6 @@ Optional runtime flags (all supported in `.env`):
 - Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
 - Schedule includes `duration_minutes` (default `60` on create).
 - `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
-- `/notify` supports manually triggering one proactive reminder decision; it bypasses interval gating, still respects the proactive score threshold, stays silent in both CLI and Feishu DM, and relies on logs for command outcome visibility.
-- If a manual `/notify` decision reaches the threshold, proactive reminder content is still sent to `PROACTIVE_REMINDER_TARGET_OPEN_ID` through the normal Feishu proactive send path.
 - Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.

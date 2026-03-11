@@ -25,11 +25,10 @@ from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.schemas.commands import parse_tool_command_payload
 from assistant_app.schemas.planner import ToolReplyPayload
-from assistant_app.schemas.proactive import ProactiveExecutionResult
 from assistant_app.schemas.routing import JsonPlannerToolRoute, RuntimePlannerActionPayload
 from assistant_app.schemas.tools import (
-    InternetSearchArgs,
     HistorySearchArgs,
+    InternetSearchArgs,
     InternetSearchFetchUrlArgs,
     ScheduleAddArgs,
     ScheduleUpdateArgs,
@@ -557,13 +556,13 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertEqual(result, "当前版本：v1.2.3")
 
-    def test_help_command_lists_notify(self) -> None:
+    def test_help_command_lists_supported_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
         result = agent.handle_input("/help")
 
         self.assertIn("/date", result)
-        self.assertIn("/notify", result)
+        self.assertNotIn("/notify", result)
 
     def test_date_command_returns_current_local_datetime(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -603,27 +602,13 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("暂无日程", response)
         self.assertFalse(task_completed)
 
-    def test_handle_input_with_task_status_returns_true_for_notify_command(self) -> None:
-        def _runner() -> ProactiveExecutionResult:
-            return ProactiveExecutionResult(
-                score=81,
-                threshold=80,
-                notify=True,
-                reason="未来24小时有重要事项",
-                message="请准备明早会议的三个要点。",
-            )
-
-        agent = AssistantAgent(
-            db=self.db,
-            llm_client=None,
-            proactive_notify_runner=_runner,
-            proactive_notify_target_open_id="ou_target",
-        )
+    def test_handle_input_with_task_status_returns_false_for_removed_notify_command(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
 
         response, task_completed = agent.handle_input_with_task_status("/notify")
 
-        self.assertEqual(response, "")
-        self.assertTrue(task_completed)
+        self.assertEqual(response, "未知命令。输入 /help 查看可用命令。")
+        self.assertFalse(task_completed)
 
     def test_profile_refresh_command_returns_runner_output(self) -> None:
         profile_content = "# 最新画像\n- 偏好: 咖啡"
@@ -666,66 +651,19 @@ class AssistantAgentTest(unittest.TestCase):
 
         self.assertIn("当前未启用 user_profile 刷新服务", result)
 
-    def test_notify_command_returns_empty_string_and_logs(self) -> None:
-        call_count = 0
-
-        def _runner() -> ProactiveExecutionResult:
-            nonlocal call_count
-            call_count += 1
-            return ProactiveExecutionResult(
-                score=81,
-                threshold=80,
-                notify=True,
-                reason="未来24小时有重要事项",
-                message="请准备明早会议的三个要点。",
-            )
-
-        agent = AssistantAgent(
-            db=self.db,
-            llm_client=None,
-            proactive_notify_runner=_runner,
-            proactive_notify_target_open_id="ou_target",
-        )
-
-        with self.assertLogs("assistant_app.app", level="INFO") as captured:
-            result = agent.handle_input("/notify")
-
-        self.assertEqual(result, "")
-        self.assertEqual(call_count, 1)
-        merged = "\n".join(captured.output)
-        self.assertIn("proactive manual trigger started", merged)
-        self.assertIn("proactive manual trigger completed", merged)
-
-    def test_notify_command_requires_runner(self) -> None:
+    def test_notify_command_returns_unknown_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
         result = agent.handle_input("/notify")
 
-        self.assertEqual(result, "")
+        self.assertEqual(result, "未知命令。输入 /help 查看可用命令。")
 
-    def test_notify_command_rejects_extra_args(self) -> None:
+    def test_notify_command_with_extra_args_returns_unknown_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
         result = agent.handle_input("/notify now")
 
-        self.assertEqual(result, "")
-
-    def test_notify_command_handles_runner_error(self) -> None:
-        def _runner() -> ProactiveExecutionResult:
-            raise RuntimeError("send failed")
-
-        agent = AssistantAgent(
-            db=self.db,
-            llm_client=None,
-            proactive_notify_runner=_runner,
-            proactive_notify_target_open_id="ou_target",
-        )
-
-        with self.assertLogs("assistant_app.app", level="WARNING") as captured:
-            result = agent.handle_input("/notify")
-
-        self.assertEqual(result, "")
-        self.assertIn("proactive manual trigger failed", "\n".join(captured.output))
+        self.assertEqual(result, "未知命令。输入 /help 查看可用命令。")
 
     def test_interrupt_current_task_stops_inflight_planner_loop(self) -> None:
         blocking_llm = _BlockingLLMClient(response=_planner_planned(["查看日程"]))

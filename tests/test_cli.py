@@ -108,9 +108,9 @@ class CLIFeedbackTest(unittest.TestCase):
     def test_print_assistant_response_renders_non_empty_response(self) -> None:
         stream = io.StringIO()
 
-        _print_assistant_response("echo:/notify", stream=stream)
+        _print_assistant_response("echo:/version", stream=stream)
 
-        self.assertEqual(stream.getvalue(), "助手> echo:/notify\n")
+        self.assertEqual(stream.getvalue(), "助手> echo:/version\n")
 
     def test_resolve_progress_color_off(self) -> None:
         prefix, suffix = _resolve_progress_color("off")

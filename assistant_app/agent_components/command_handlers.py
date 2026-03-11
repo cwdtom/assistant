@@ -15,9 +15,9 @@ from assistant_app.schemas.commands import (
     ThoughtsGetCommand,
     ThoughtsListCommand,
     ThoughtsUpdateCommand,
+    parse_date_command,
     parse_history_list_command,
     parse_history_search_command,
-    parse_date_command,
     parse_schedule_add_command,
     parse_schedule_delete_command,
     parse_schedule_get_command,
@@ -42,7 +42,6 @@ def help_text() -> str:
         "/version\n"
         "/date\n"
         "/profile refresh\n"
-        "/notify\n"
         "/history list [--limit <>=1>]\n"
         "/history search <关键词> [--limit <>=1>]\n"
         "/thoughts add <内容>\n"
@@ -103,11 +102,6 @@ def handle_command(agent: Any, command: str) -> str:
                 },
             )
             return f"刷新 user_profile 失败: {exc}"
-    if command == "/notify":
-        return _execute_proactive_notify_command(agent)
-    if command.split(maxsplit=1)[0] == "/notify":
-        return _complete_proactive_notify(agent)
-
     if command == "/history list" or command.startswith("/history list "):
         history_list_command = parse_history_list_command(command)
         if history_list_command is None:
@@ -249,46 +243,6 @@ def _execute_system_cli_command(agent: Any, *, parsed_command: CliCommandBase, r
     ).result
 
 
-def _execute_proactive_notify_command(agent: Any) -> str:
-    runner = agent._proactive_notify_runner
-    if runner is None:
-        return _complete_proactive_notify(agent)
-    agent._app_logger.info(
-        "proactive manual trigger started",
-        extra={
-            "event": "proactive_manual_trigger_start",
-            "context": {"target_open_id": agent._proactive_notify_target_open_id},
-        },
-    )
-    try:
-        result = runner()
-    except Exception as exc:  # noqa: BLE001
-        agent._app_logger.warning(
-            "proactive manual trigger failed",
-            extra={
-                "event": "proactive_manual_trigger_failed",
-                "context": {
-                    "target_open_id": agent._proactive_notify_target_open_id,
-                    "error": repr(exc),
-                },
-            },
-        )
-        return _complete_proactive_notify(agent)
-    agent._app_logger.info(
-        "proactive manual trigger completed",
-        extra={
-            "event": "proactive_manual_trigger_done",
-            "context": {
-                "target_open_id": agent._proactive_notify_target_open_id,
-                "score": result.score,
-                "threshold": result.threshold,
-                "notify": result.notify,
-            },
-        },
-    )
-    return _complete_proactive_notify(agent)
-
-
 def _execute_thoughts_cli_command(
     agent: Any,
     *,
@@ -345,8 +299,3 @@ def _fail_thoughts_command(agent: Any, *, action: str, exc: Exception) -> str:
         },
     )
     return f"thoughts 命令执行失败: {exc}"
-
-
-def _complete_proactive_notify(agent: Any) -> str:
-    agent._last_task_completed = True
-    return ""

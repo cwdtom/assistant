@@ -269,7 +269,7 @@ def _internet_search_validation_error_text(*, payload: dict[str, Any], exc: Vali
             if not raw_url:
                 return "internet_search.fetch_url 缺少 url。"
             try:
-                HttpUrlValue.model_validate({"url": raw_url}).url
+                HttpUrlValue.model_validate({"url": raw_url})
             except ValidationError:
                 return "internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。"
             return "internet_search.fetch_url url 非法，需为 http:// 或 https:// 开头。"
