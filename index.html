@@ -9,7 +9,7 @@
     />
     <meta
       name="description"
-      content="一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、本地提醒和飞书接入。"
+      content="一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、定时后台任务和飞书接入。"
     />
     <meta name="theme-color" content="#f5f5f7" />
     <title>Assistant | AI Agent 个人助手</title>
@@ -800,7 +800,7 @@
           <div class="eyebrow">Local-first · Chinese-first · GitHub Pages</div>
           <h1 id="hero-title">一个中文优先的 AI Agent 个人助手。</h1>
           <p>
-            一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、本地提醒和飞书接入。
+            一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、定时后台任务和飞书接入。
           </p>
           <div class="cta-row">
             <a class="button button-primary" href="https://github.com/cwdtom/assistant" target="_blank" rel="noreferrer">
@@ -826,7 +826,7 @@
             </div>
             <div class="meta-card">
               <strong>使用场景</strong>
-              <span>个人计划、提醒、聊天、检索与任务执行</span>
+              <span>个人计划、定时任务、聊天、检索与任务执行</span>
             </div>
           </div>
         </div>
@@ -841,7 +841,7 @@
             <div class="window-body terminal">
               <div class="terminal-line"><span class="prompt">$</span><span>./scripts/bootstrap.sh --dev</span></div>
               <div class="terminal-line"><span class="prompt">/</span><span>schedule list</span></div>
-              <div class="terminal-line"><span class="prompt">?</span><span>帮我安排明天下午的复盘，并设置提醒</span></div>
+              <div class="terminal-line"><span class="prompt">?</span><span>帮我安排明天下午的复盘，并打上 work 标签</span></div>
             </div>
           </div>
           <div class="overlay-card" data-placeholder="hero-overlay">
@@ -856,8 +856,8 @@
             <h2 id="capabilities-title">围绕真实任务，而不是单纯对话。</h2>
           </div>
           <p>
-            当前仓库聚焦本地执行路径：计划拆解、结构化 tool-calling、日程与想法的 SQLite 持久化、本地提醒线程，以及可选
-            Feishu 长连接与日历同步。
+            当前仓库聚焦本地执行路径：计划拆解、结构化 tool-calling、日程与想法的 SQLite 持久化、timer_tasks
+            后台任务线程，以及可选 Feishu 长连接与日历同步。
           </p>
         </div>
         <div class="capability-grid">
@@ -873,25 +873,27 @@
             </div>
           </article>
           <article class="card">
-            <h3>本地日程与提醒</h3>
+            <h3>本地日程与定时任务</h3>
             <p>
-              日程支持 CRUD、时长、重复规则、提醒时间、日历视图和标签过滤，单次任务与循环任务都可以在本地线程中触发提醒。
+              日程支持 CRUD、时长、重复规则、提醒字段、日历视图和标签过滤；后台线程用于执行 timer_tasks 定时 planner
+              任务，不再自动投递本地日程提醒。
             </p>
             <div class="pill-row">
               <span class="pill">SQLite</span>
               <span class="pill">Repeat Rules</span>
-              <span class="pill">Reminder Thread</span>
+              <span class="pill">Timer Tasks</span>
             </div>
           </article>
           <article class="card">
             <h3>可选外部通道扩展</h3>
             <p>
-              在不破坏本地优先原则的前提下，可按配置接入 Feishu 消息、Feishu 日历同步，以及基于上下文的主动提醒。
+              在不破坏本地优先原则的前提下，可按配置接入 Feishu 消息与日历同步；日历链路启动时执行窗口重建，运行期仅保留
+              本地到 Feishu 的异步写同步。
             </p>
             <div class="pill-row">
               <span class="pill">Feishu</span>
               <span class="pill">Calendar Sync</span>
-              <span class="pill">Proactive Notify</span>
+              <span class="pill">Result Push</span>
             </div>
           </article>
         </div>
@@ -961,11 +963,11 @@
             </div>
 
             <div class="placeholder-panel" data-placeholder="quickstart-mock">
-              <strong>飞书日历同步</strong>
+              <strong>飞书日历同步（本地写入方向）</strong>
               <div class="sync-mock" aria-label="飞书日历同步示意面板">
                 <div class="sync-topbar">
                   <span class="sync-title">Calendar Sync</span>
-                  <span class="sync-badge">同步中</span>
+                  <span class="sync-badge">Local → Feishu</span>
                 </div>
                 <div class="sync-columns">
                   <div class="sync-column">
@@ -975,11 +977,11 @@
                       <span>周四 14:00 - 15:00</span>
                     </div>
                     <div class="sync-event">
-                      <strong>提醒提前 30 分钟</strong>
-                      <span>标签：work</span>
+                      <strong>标签：work</strong>
+                      <span>写入 description 字段</span>
                     </div>
                   </div>
-                  <div class="sync-bridge">⇄</div>
+                  <div class="sync-bridge">→</div>
                   <div class="sync-column">
                     <p class="sync-label">Feishu Calendar</p>
                     <div class="sync-event">
@@ -987,14 +989,14 @@
                       <span>状态：最新</span>
                     </div>
                     <div class="sync-event">
-                      <strong>参与人已更新</strong>
-                      <span>双向对齐</span>
+                      <strong>本地变更异步写入</strong>
+                      <span>不执行周期回拉</span>
                     </div>
                   </div>
                 </div>
                 <div class="sync-footer">
                   <span>title + tag + start + end</span>
-                  <span>minute-level identity</span>
+                  <span>minute-level identity · no periodic pull</span>
                 </div>
               </div>
             </div>
