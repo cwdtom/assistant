@@ -23,6 +23,7 @@ class PlannerToolExecutor:
         history_executor: JsonRouteExecutor,
         history_search_executor: JsonRouteExecutor,
         thoughts_executor: JsonRouteExecutor,
+        user_profile_executor: JsonRouteExecutor,
         system_executor: JsonRouteExecutor,
         internet_search_executor: InternetSearchRouteExecutor,
     ) -> None:
@@ -33,6 +34,7 @@ class PlannerToolExecutor:
             history_executor=history_executor,
             history_search_executor=history_search_executor,
             thoughts_executor=thoughts_executor,
+            user_profile_executor=user_profile_executor,
             system_executor=system_executor,
             internet_search_executor=internet_search_executor,
         )
@@ -63,6 +65,7 @@ class PlannerToolExecutor:
         history_executor: JsonRouteExecutor,
         history_search_executor: JsonRouteExecutor,
         thoughts_executor: JsonRouteExecutor,
+        user_profile_executor: JsonRouteExecutor,
         system_executor: JsonRouteExecutor,
         internet_search_executor: InternetSearchRouteExecutor,
     ) -> dict[str, Callable[[str, RuntimePlannerActionPayload | None], PlannerObservation]]:
@@ -101,6 +104,12 @@ class PlannerToolExecutor:
                 legacy_command_prefix="/thoughts",
                 payload_executor=lambda payload, raw_input: thoughts_executor(payload, raw_input),
                 typed_payload_executor=lambda payload, raw_input: thoughts_executor(payload, raw_input),
+            ),
+            "user_profile": JsonPlannerToolRoute(
+                tool="user_profile",
+                invalid_json_result="user_profile 工具参数无效：需要 JSON 对象。",
+                payload_executor=lambda payload, raw_input: user_profile_executor(payload, raw_input),
+                typed_payload_executor=lambda payload, raw_input: user_profile_executor(payload, raw_input),
             ),
             "system": JsonPlannerToolRoute(
                 tool="system",

@@ -1513,6 +1513,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertNotIn("view（all|today|overdue|upcoming|inbox）", first_messages[0]["content"])
         self.assertIn("interval_minutes/times/remind_start_time（重复规则）", first_messages[0]["content"])
         self.assertIn("history：历史会话检索", first_messages[0]["content"])
+        self.assertIn("user_profile：读取和覆盖用户画像文件", first_messages[0]["content"])
         self.assertIn("历史对话", first_messages[0]["content"])
         planner_user_payload = _extract_payload_from_messages(first_messages)
         self.assertNotIn("tool_contract", planner_user_payload)
@@ -1852,6 +1853,29 @@ class AssistantAgentTest(unittest.TestCase):
         first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
         self.assertEqual(set(first_tool_names), {"system_date", "ask_user", "done"})
         self.assertNotIn("system", first_tool_names)
+
+    def test_scheduled_source_thought_tool_calling_expands_user_profile_group_tools(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(
+                    ["查看画像", "总结"],
+                    tools_by_task={"查看画像": ["user_profile"], "总结": []},
+                ),
+                _planner_done("已读取画像。"),
+                _planner_done("全部完成。"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, completed = agent.handle_input_with_task_status("后台执行查看画像", source="scheduled")
+
+        self.assertTrue(completed)
+        self.assertIn("全部完成", response)
+        self.assertTrue(fake_llm.tool_schema_calls)
+        first_tool_names = _extract_tool_names_from_schemas(fake_llm.tool_schema_calls[0])
+        self.assertEqual(set(first_tool_names), {"user_profile_get", "user_profile_overwrite", "done"})
+        self.assertNotIn("ask_user", first_tool_names)
+        self.assertNotIn("user_profile", first_tool_names)
 
     def test_scheduled_source_thought_tool_calling_omits_ask_user(self) -> None:
         fake_llm = FakeToolCallingLLMClient(

@@ -20,6 +20,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
+            user_profile_executor=lambda payload, raw_input: _ok_observation("user_profile", raw_input),
             system_executor=lambda payload, raw_input: _ok_observation("system", raw_input),
             internet_search_executor=lambda action_input, action_payload=None: _ok_observation(
                 "internet_search",
@@ -50,6 +51,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=history_search_executor,
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
+            user_profile_executor=lambda payload, raw_input: _ok_observation("user_profile", raw_input),
             system_executor=lambda payload, raw_input: _ok_observation("system", raw_input),
             internet_search_executor=lambda action_input, action_payload=None: _ok_observation(
                 "internet_search",
@@ -79,6 +81,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
+            user_profile_executor=lambda payload, raw_input: _ok_observation("user_profile", raw_input),
             system_executor=lambda payload, raw_input: _ok_observation("system", raw_input),
             internet_search_executor=lambda action_input, action_payload=None: _ok_observation(
                 "internet_search",
@@ -106,6 +109,7 @@ class PlannerToolExecutorTest(unittest.TestCase):
             history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
             history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
             thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
+            user_profile_executor=lambda payload, raw_input: _ok_observation("user_profile", raw_input),
             system_executor=lambda payload, raw_input: _ok_observation("system", raw_input),
             internet_search_executor=lambda action_input, action_payload=None: _ok_observation(
                 "internet_search",
@@ -123,6 +127,39 @@ class PlannerToolExecutorTest(unittest.TestCase):
         payload, raw_input = captured_payloads[0]
         self.assertEqual({"action": "list"}, payload)
         self.assertEqual('{"action":"list"}', raw_input)
+
+    def test_user_profile_route_uses_json_payload_without_legacy_command(self) -> None:
+        captured_payloads: list[tuple[dict[str, Any], str]] = []
+
+        def user_profile_executor(payload: dict[str, Any], raw_input: str) -> PlannerObservation:
+            captured_payloads.append((payload, raw_input))
+            return _ok_observation("user_profile", raw_input)
+
+        executor = PlannerToolExecutor(
+            command_executor=lambda command: command,
+            schedule_executor=lambda payload, raw_input: _ok_observation("schedule", raw_input),
+            timer_executor=lambda payload, raw_input: _ok_observation("timer", raw_input),
+            history_executor=lambda payload, raw_input: _ok_observation("history", raw_input),
+            history_search_executor=lambda payload, raw_input: _ok_observation("history_search", raw_input),
+            thoughts_executor=lambda payload, raw_input: _ok_observation("thoughts", raw_input),
+            user_profile_executor=user_profile_executor,
+            system_executor=lambda payload, raw_input: _ok_observation("system", raw_input),
+            internet_search_executor=lambda action_input, action_payload=None: _ok_observation(
+                "internet_search",
+                action_input,
+            ),
+        )
+
+        observation = executor.execute(
+            action_tool="user_profile",
+            action_input='{"action":"overwrite","content":""}',
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(1, len(captured_payloads))
+        payload, raw_input = captured_payloads[0]
+        self.assertEqual({"action": "overwrite", "content": ""}, payload)
+        self.assertEqual('{"action":"overwrite","content":""}', raw_input)
 
 
 if __name__ == "__main__":

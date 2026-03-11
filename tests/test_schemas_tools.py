@@ -19,6 +19,7 @@ from assistant_app.schemas.tools import (
     coerce_system_action_payload,
     coerce_thoughts_action_payload,
     coerce_timer_action_payload,
+    coerce_user_profile_action_payload,
     parse_json_object,
     validate_thought_tool_arguments,
 )
@@ -70,6 +71,16 @@ class ToolSchemaTest(unittest.TestCase):
             {"timer_add", "timer_list", "timer_get", "timer_update", "timer_delete"}.issubset(timer_tool_names)
         )
 
+    def test_build_thought_tool_schemas_expands_user_profile_group(self) -> None:
+        schemas = build_thought_tool_schemas(["user_profile"])
+        tool_names = {item["function"]["name"] for item in schemas}
+        overwrite_schema = next(item for item in schemas if item["function"]["name"] == "user_profile_overwrite")
+
+        self.assertEqual(tool_names, {"user_profile_get", "user_profile_overwrite", "ask_user", "done"})
+        properties = overwrite_schema["function"]["parameters"]["properties"]
+        self.assertEqual(properties["content"]["type"], "string")
+        self.assertNotIn("current_step", properties)
+
     def test_build_thought_tool_schemas_can_disable_timer_group(self) -> None:
         schemas = build_thought_tool_schemas(["timer"], allow_ask_user=False, allow_timer=False)
         tool_names = {item["function"]["name"] for item in schemas}
@@ -119,6 +130,18 @@ class ToolSchemaTest(unittest.TestCase):
 
     def test_validate_thought_tool_arguments_rejects_timer_update_without_mutation_fields(self) -> None:
         parsed = validate_thought_tool_arguments('timer_update', {'id': 3})
+
+        self.assertIsNone(parsed)
+
+    def test_validate_thought_tool_arguments_accepts_empty_user_profile_overwrite_content(self) -> None:
+        parsed = validate_thought_tool_arguments('user_profile_overwrite', {'content': ''})
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.model_dump(), {'current_step': '', 'content': ''})
+
+    def test_validate_thought_tool_arguments_rejects_null_user_profile_overwrite_content(self) -> None:
+        parsed = validate_thought_tool_arguments('user_profile_overwrite', {'content': None})
 
         self.assertIsNone(parsed)
 
@@ -316,6 +339,27 @@ class ToolSchemaTest(unittest.TestCase):
                     'run_limit': '3',
                 }
             ),
+        )
+
+    def test_normalize_thought_tool_call_user_profile_payload_matches_system_action_contract(self) -> None:
+        decision = normalize_thought_tool_call(
+            {
+                'id': 'call_user_profile_overwrite',
+                'type': 'function',
+                'function': {
+                    'name': 'user_profile_overwrite',
+                    'arguments': json.dumps({'content': ''}, ensure_ascii=False),
+                },
+            }
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        assert decision.next_action is not None
+        assert decision.next_action.payload is not None
+        self.assertEqual(
+            decision.next_action.payload,
+            coerce_user_profile_action_payload({'action': 'overwrite', 'content': ''}),
         )
 
 

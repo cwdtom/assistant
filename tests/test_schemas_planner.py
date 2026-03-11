@@ -32,10 +32,11 @@ from pydantic import ValidationError
 
 
 class PlannerSchemaTest(unittest.TestCase):
-    def test_plan_and_replan_prompts_describe_timer_capability(self) -> None:
+    def test_plan_and_replan_prompts_describe_timer_and_user_profile_capabilities(self) -> None:
         self.assertIn("- timer：通用定时 planner 任务管理", PLANNER_CAPABILITIES_TEXT)
-        self.assertIn("schedule|timer|internet_search|history|thoughts|system", PLAN_ONCE_PROMPT)
-        self.assertIn("schedule|timer|internet_search|history|thoughts|system", REPLAN_PROMPT)
+        self.assertIn("- user_profile：读取和覆盖用户画像文件", PLANNER_CAPABILITIES_TEXT)
+        self.assertIn("schedule|timer|internet_search|history|thoughts|user_profile|system", PLAN_ONCE_PROMPT)
+        self.assertIn("schedule|timer|internet_search|history|thoughts|user_profile|system", REPLAN_PROMPT)
 
     def test_planned_decision_normalizes_tools(self) -> None:
         decision = PlannedDecision.model_validate(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-THOUGHT_EXECUTION_TOOL_NAMES = ("schedule", "timer", "internet_search", "history", "thoughts", "system")
+THOUGHT_EXECUTION_TOOL_NAMES = ("schedule", "timer", "internet_search", "history", "thoughts", "user_profile", "system")
 THOUGHT_RUNTIME_TOOL_NAMES = ("ask_user", "done")
 THOUGHT_ALL_TOOL_NAMES = (*THOUGHT_EXECUTION_TOOL_NAMES, *THOUGHT_RUNTIME_TOOL_NAMES)
 THOUGHT_HISTORY_TOOL_NAMES = (
@@ -36,6 +36,10 @@ THOUGHT_THOUGHTS_TOOL_NAMES = (
     "thoughts_update",
     "thoughts_delete",
 )
+THOUGHT_USER_PROFILE_TOOL_NAMES = (
+    "user_profile_get",
+    "user_profile_overwrite",
+)
 THOUGHT_SYSTEM_TOOL_NAMES = ("system_date",)
 THOUGHT_TOOL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
     "history": THOUGHT_HISTORY_TOOL_NAMES,
@@ -43,6 +47,7 @@ THOUGHT_TOOL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
     "timer": THOUGHT_TIMER_TOOL_NAMES,
     "internet_search": THOUGHT_INTERNET_SEARCH_TOOL_NAMES,
     "thoughts": THOUGHT_THOUGHTS_TOOL_NAMES,
+    "user_profile": THOUGHT_USER_PROFILE_TOOL_NAMES,
     "system": THOUGHT_SYSTEM_TOOL_NAMES,
 }
 

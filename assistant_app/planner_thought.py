@@ -35,7 +35,8 @@ THOUGHT_PROMPT = """
 - schedule_add、schedule_list、schedule_view、schedule_get、schedule_update、schedule_delete、schedule_repeat
 - timer_add、timer_list、timer_get、timer_update、timer_delete（通用定时任务，不是普通日程）
 - internet_search_tool、internet_search_fetch_url、history_list、history_search
-- thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete、system_date
+- thoughts_add、thoughts_list、thoughts_get、thoughts_update、thoughts_delete
+- user_profile_get、user_profile_overwrite、system_date
 - done
 - ask_user 仅在本轮 tools schema 明确提供时可用
 
@@ -52,6 +53,7 @@ THOUGHT_PROMPT = """
 - 系统仅为兼容旧模型保留命令字符串兜底路径；该路径不作为标准输出契约
 - thoughts_* 工具用于记录碎片想法；优先使用结构化参数进行新增/查询/更新/软删除
 - timer_* 工具用于管理通用定时 planner 任务；不要将其用于普通日程
+- user_profile_* 工具用于读取或整份覆盖用户画像文件；overwrite 为整文件替换，不是增量编辑
 """.strip()
 
 _THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -76,6 +78,8 @@ _THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("thoughts_get", "记录碎片想法：查看单条想法详情。", ("current_step",)),
     ("thoughts_update", "记录碎片想法：更新内容，并可选更新状态。", ("current_step",)),
     ("thoughts_delete", "记录碎片想法：软删除（状态置为删除）。", ("current_step",)),
+    ("user_profile_get", "读取当前 user_profile 文件内容；若文件不存在或内容为空，则返回当前为空。", ("current_step",)),
+    ("user_profile_overwrite", "用完整文本整份覆盖 user_profile 文件，并立即刷新运行时缓存。", ("current_step",)),
     ("system_date", "读取当前本地时间，返回 YYYY-MM-DD HH:MM:SS。", ("current_step",)),
     ("ask_user", "向用户提一个澄清问题。", ()),
     ("done", "声明当前子任务完成，并提供本轮最终结论。", ()),

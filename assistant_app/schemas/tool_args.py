@@ -274,6 +274,21 @@ class ThoughtsUpdateArgs(ThoughtToolArgsBase):
         return OptionalThoughtStatusValue.model_validate({"status": value}).status
 
 
+class UserProfileGetArgs(ThoughtToolArgsBase):
+    pass
+
+
+class UserProfileOverwriteArgs(ThoughtToolArgsBase):
+    content: str = Field(description="完整 user_profile 文本；允许空字符串，表示清空文件。")
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        if value is None:
+            raise ValueError("content is required")
+        return str(value)
+
+
 class InternetSearchArgs(ThoughtToolArgsBase):
     query: str = Field(min_length=1, description="搜索关键词文本。")
 
@@ -382,6 +397,8 @@ THOUGHT_TOOL_ARGS_MODELS: dict[str, type[ThoughtToolArgsBase]] = {
     "thoughts_get": ThoughtsIdArgs,
     "thoughts_update": ThoughtsUpdateArgs,
     "thoughts_delete": ThoughtsIdArgs,
+    "user_profile_get": UserProfileGetArgs,
+    "user_profile_overwrite": UserProfileOverwriteArgs,
     "internet_search_tool": InternetSearchArgs,
     "internet_search_fetch_url": InternetSearchFetchUrlArgs,
     "system_date": SystemDateArgs,
@@ -451,6 +468,8 @@ __all__ = [
     "ThoughtsIdArgs",
     "ThoughtsListArgs",
     "ThoughtsUpdateArgs",
+    "UserProfileGetArgs",
+    "UserProfileOverwriteArgs",
     "validate_proactive_tool_arguments",
     "validate_thought_tool_arguments",
 ]

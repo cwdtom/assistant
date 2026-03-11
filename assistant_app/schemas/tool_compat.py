@@ -27,6 +27,8 @@ from assistant_app.schemas.tool_args import (
     TimerIdArgs,
     TimerListArgs,
     TimerUpdateArgs,
+    UserProfileGetArgs,
+    UserProfileOverwriteArgs,
 )
 from assistant_app.schemas.values import (
     HistoryListLimitValue,
@@ -484,6 +486,34 @@ class ThoughtsUpdateCompatPayload(FrozenModel):
         )
 
 
+class UserProfileGetCompatPayload(FrozenModel):
+    action: Literal["get"]
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="user_profile_get",
+            arguments=UserProfileGetArgs(),
+        )
+
+
+class UserProfileOverwriteCompatPayload(FrozenModel):
+    action: Literal["overwrite"]
+    content: Any
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, value: Any) -> str:
+        if value is None:
+            raise ValueError("content is required")
+        return str(value)
+
+    def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        return RuntimePlannerActionPayload(
+            tool_name="user_profile_overwrite",
+            arguments=UserProfileOverwriteArgs.model_validate({"content": self.content}),
+        )
+
+
 class InternetSearchCompatPayload(FrozenModel):
     action: Literal["search"]
     query: str = Field(min_length=1)
@@ -550,6 +580,10 @@ ThoughtsCompatPayload = Annotated[
     ThoughtsAddCompatPayload | ThoughtsListCompatPayload | ThoughtsIdCompatPayload | ThoughtsUpdateCompatPayload,
     Field(discriminator="action"),
 ]
+UserProfileCompatPayload = Annotated[
+    UserProfileGetCompatPayload | UserProfileOverwriteCompatPayload,
+    Field(discriminator="action"),
+]
 InternetSearchCompatPayloadUnion = Annotated[
     InternetSearchCompatPayload | InternetSearchFetchUrlCompatPayload,
     Field(discriminator="action"),
@@ -563,6 +597,7 @@ _HISTORY_COMPAT_ADAPTER: TypeAdapter[HistoryCompatPayload] = TypeAdapter(History
 _SCHEDULE_COMPAT_ADAPTER: TypeAdapter[ScheduleCompatPayload] = TypeAdapter(ScheduleCompatPayload)
 _TIMER_COMPAT_ADAPTER: TypeAdapter[TimerCompatPayload] = TypeAdapter(TimerCompatPayload)
 _THOUGHTS_COMPAT_ADAPTER: TypeAdapter[ThoughtsCompatPayload] = TypeAdapter(ThoughtsCompatPayload)
+_USER_PROFILE_COMPAT_ADAPTER: TypeAdapter[UserProfileCompatPayload] = TypeAdapter(UserProfileCompatPayload)
 _INTERNET_SEARCH_COMPAT_ADAPTER: TypeAdapter[InternetSearchCompatPayloadUnion] = TypeAdapter(
     InternetSearchCompatPayloadUnion
 )
@@ -594,6 +629,15 @@ def coerce_thoughts_action_payload(raw_payload: dict[str, Any]) -> RuntimePlanne
     if action not in {"add", "list", "get", "update", "delete"}:
         raise ValueError("thoughts.action 非法。")
     compat_payload = _THOUGHTS_COMPAT_ADAPTER.validate_python(normalized_payload)
+    return compat_payload.to_runtime_payload()
+
+
+def coerce_user_profile_action_payload(raw_payload: dict[str, Any]) -> RuntimePlannerActionPayload:
+    normalized_payload = _normalize_action_payload(raw_payload)
+    action = normalized_payload.get("action")
+    if action not in {"get", "overwrite"}:
+        raise ValueError("user_profile.action 非法。")
+    compat_payload = _USER_PROFILE_COMPAT_ADAPTER.validate_python(normalized_payload)
     return compat_payload.to_runtime_payload()
 
 
@@ -654,11 +698,14 @@ __all__ = [
     "ThoughtsIdCompatPayload",
     "ThoughtsListCompatPayload",
     "ThoughtsUpdateCompatPayload",
+    "UserProfileGetCompatPayload",
+    "UserProfileOverwriteCompatPayload",
     "coerce_history_action_payload",
     "coerce_internet_search_action_payload",
     "coerce_schedule_action_payload",
     "coerce_system_action_payload",
     "coerce_timer_action_payload",
     "coerce_thoughts_action_payload",
+    "coerce_user_profile_action_payload",
     "parse_json_object",
 ]
