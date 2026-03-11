@@ -20,8 +20,6 @@ from assistant_app.logging_setup import (
 )
 from assistant_app.persona import PersonaRewriter
 from assistant_app.proactive_reminder_service import ProactiveReminderService
-from assistant_app.reminder_service import ReminderService
-from assistant_app.reminder_sink import StdoutReminderSink
 from assistant_app.search import create_search_provider
 from assistant_app.timer import TimerEngine
 from assistant_app.user_profile_refresh import UserProfileRefreshService
@@ -138,6 +136,20 @@ def _configure_feishu_logger(log_path: str, retention_days: int) -> logging.Logg
 
 def _configure_app_logger(log_path: str, retention_days: int) -> logging.Logger:
     return configure_app_logger(log_path, retention_days)
+
+
+def _log_schedule_reminder_polling_disabled(logger: logging.Logger, *, periodic_task_count: int) -> None:
+    logger.info(
+        "schedule reminder polling disabled",
+        extra={
+            "event": "schedule_reminder_polling_disabled",
+            "context": {
+                "timer_enabled": True,
+                "periodic_task_count": max(periodic_task_count, 0),
+                "reason": "feature_removed",
+            },
+        },
+    )
 
 
 def _is_same_log_path(path_a: str, path_b: str) -> bool:
@@ -293,17 +305,11 @@ def main() -> None:
             periodic_tasks.append(user_profile_refresh_service.poll_scheduled)
         if proactive_reminder_service is not None:
             periodic_tasks.append(proactive_reminder_service.poll_scheduled)
-        reminder_sink = StdoutReminderSink(stream=sys.stdout)
-        reminder_service = ReminderService(
-            db=db,
-            sink=reminder_sink,
-            lookahead_seconds=config.timer_lookahead_seconds,
-            batch_limit=config.timer_batch_limit,
-            logger=app_logger,
-            content_rewriter=persona_rewriter.rewrite_reminder_content,
+        _log_schedule_reminder_polling_disabled(
+            app_logger,
+            periodic_task_count=len(periodic_tasks),
         )
         timer_engine = TimerEngine(
-            reminder_service=reminder_service,
             periodic_tasks=periodic_tasks or None,
             poll_interval_seconds=config.timer_poll_interval_seconds,
             logger=app_logger,

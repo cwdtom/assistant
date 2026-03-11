@@ -11,7 +11,7 @@ class TimerEngine:
     def __init__(
         self,
         *,
-        reminder_service: ReminderService,
+        reminder_service: ReminderService | None = None,
         periodic_tasks: list[Callable[[], None]] | None = None,
         poll_interval_seconds: int = 15,
         logger: logging.Logger | None = None,
@@ -69,20 +69,22 @@ class TimerEngine:
             self._thread = None
 
     def tick_once(self) -> None:
-        stats = self._reminder_service.poll_once()
-        if stats.candidate_count > 0:
-            self._logger.info(
-                "timer tick completed",
-                extra={
-                    "event": "timer_tick",
-                    "context": {
-                        "candidates": stats.candidate_count,
-                        "delivered": stats.delivered_count,
-                        "skipped": stats.skipped_count,
-                        "failed": stats.failed_count,
+        reminder_service = self._reminder_service
+        if reminder_service is not None:
+            stats = reminder_service.poll_once()
+            if stats.candidate_count > 0:
+                self._logger.info(
+                    "timer tick completed",
+                    extra={
+                        "event": "timer_tick",
+                        "context": {
+                            "candidates": stats.candidate_count,
+                            "delivered": stats.delivered_count,
+                            "skipped": stats.skipped_count,
+                            "failed": stats.failed_count,
+                        },
                     },
-                },
-            )
+                )
         for index, task in enumerate(self._periodic_tasks):
             try:
                 task()

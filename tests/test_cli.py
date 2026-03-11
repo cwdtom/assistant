@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from assistant_app.cli import (
     _is_feishu_calendar_sync_configured,
     _is_feishu_configured,
     _is_proactive_reminder_configured,
+    _log_schedule_reminder_polling_disabled,
     _print_assistant_response,
     _resolve_progress_color,
     _should_show_waiting,
@@ -77,6 +79,42 @@ class CLIFeedbackTest(unittest.TestCase):
         self.assertTrue(_is_proactive_reminder_configured("ou_target"))
         self.assertFalse(_is_proactive_reminder_configured(""))
         self.assertFalse(_is_proactive_reminder_configured("   "))
+
+    def test_log_schedule_reminder_polling_disabled_writes_expected_payload(self) -> None:
+        stream = io.StringIO()
+        logger = logging.getLogger("tests.cli.schedule_reminder_disabled")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+
+            _log_schedule_reminder_polling_disabled(logger, periodic_task_count=3)
+
+            lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+            self.assertEqual(len(lines), 1)
+            payload = json.loads(lines[0])
+            self.assertEqual(payload.get("event"), "schedule_reminder_polling_disabled")
+            self.assertEqual(payload.get("message"), "schedule reminder polling disabled")
+            self.assertEqual(
+                payload.get("context"),
+                {
+                    "timer_enabled": True,
+                    "periodic_task_count": 3,
+                    "reason": "feature_removed",
+                },
+            )
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
 
     def test_handle_input_with_feedback_renders_progress_lines(self) -> None:
         agent = _FakeAgent(llm_enabled=True)

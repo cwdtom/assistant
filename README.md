@@ -1,12 +1,12 @@
 # CLI AI Personal Assistant (Current Code Snapshot)
 
-一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、本地提醒和飞书接入。当前代码已实现：
+一个中文优先的AI Agent个人助手，支持自然语言任务执行、日程管理、历史检索、定时后台任务和飞书接入。当前代码已实现：
 - 自然语言任务执行（plan -> thought -> act -> observe -> replan）
 - thought 阶段默认使用 chat tool-calling（结构化参数）直接调用本地系统函数
-- 日程管理（CRUD、时长、重复规则、提醒、日历视图）
+- 日程管理（CRUD、时长、重复规则、提醒字段、日历视图）
 - 碎片想法管理（CRUD，最小字段：content + status）
 - 历史会话持久化与检索
-- 本地提醒线程（单次日程、重复日程）
+- 本地定时后台任务线程（user_profile 刷新、Feishu 日历周期对账、主动提醒）
 - 可选 Feishu 长连接接入
 - Feishu 任务执行中可异步回传进度：plan 完成后的扩展目标（`任务目标：...`）与子任务完成状态（默认直出，不走 persona 重写）
 
@@ -121,7 +121,7 @@ python main.py
 - `BOCHA_API_KEY`：当 provider 为 `bocha` 时推荐配置
 - `BOCHA_SEARCH_SUMMARY`：是否请求 Bocha 返回 summary（默认 `true`）
 - `INTERNET_SEARCH_TOP_K`：Bocha rerank 的 `rerankTopK` 目标值（默认 `3`）
-- `TIMER_ENABLED`：是否启用本地提醒线程（默认 `true`）
+- `TIMER_ENABLED`：是否启用本地定时后台任务线程（默认 `true`）
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：配置后自动启用 Feishu 长连接
 - `FEISHU_ALLOWED_OPEN_IDS`：open_id 白名单；支持逗号分隔字符串，也支持 JSON 数组
 - `FEISHU_CALENDAR_ID`：配置后自动启用本地日程与 Feishu 日历同步；需同时配置 Feishu 凭据
@@ -148,6 +148,7 @@ python main.py
 说明：
 - `/date` 无参数，返回当前本地时间，格式为 `YYYY-MM-DD HH:MM:SS`
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
+- `--remind` 与 `--remind-start` 仍会持久化到本地数据库，但当前运行时不再自动轮询或投递本地日程提醒
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
 - `/thoughts list` 支持 `--status <未完成|完成|删除>`；默认仅展示 `未完成|完成`
 - `/thoughts delete` 为软删除（状态置为 `删除`）
@@ -197,7 +198,7 @@ python main.py
 ## Logging
 - 日志格式：统一 JSON Lines（每行一个 JSON 对象），核心字段包含 `ts`、`level`、`logger`。
 - 常见排障字段：
-  - `event`：事件名，例如 `llm_request`、`timer_tick`、`user_profile_read_failed`
+  - `event`：事件名，例如 `llm_request`、`schedule_reminder_polling_disabled`、`user_profile_read_failed`
   - `context`：事件上下文（message_id、call_id、路径、统计值等）
 - Feishu 通道日志会记录消息内容文本：
   - 入站：`feishu inbound message received`（含 `message_id/chat_id/open_id/text`）

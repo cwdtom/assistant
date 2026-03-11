@@ -85,10 +85,10 @@ Optional runtime flags (all supported in `.env`):
 - `BOCHA_API_KEY`: Bocha Web Search API key (fallback to Bing when empty)
 - `BOCHA_SEARCH_SUMMARY`: whether Bocha returns summary (default `true`; parsing prefers `summary` and falls back to `snippet`)
 - `SCHEDULE_MAX_WINDOW_DAYS`: max days in schedule list window (default `31`)
-- `TIMER_ENABLED`: enable local reminder thread (default `true`)
-- `TIMER_POLL_INTERVAL_SECONDS`: reminder poll interval (default `15`)
-- `TIMER_LOOKAHEAD_SECONDS`: reminder lookahead window (default `30`)
-- `TIMER_BATCH_LIMIT`: max reminders per poll batch (default `200`)
+- `TIMER_ENABLED`: enable periodic background timer thread (default `true`)
+- `TIMER_POLL_INTERVAL_SECONDS`: periodic background timer poll interval (default `15`)
+- `TIMER_LOOKAHEAD_SECONDS`: retained for compatibility; schedule reminder polling is removed, so current runtime no longer consumes this value (default `30`)
+- `TIMER_BATCH_LIMIT`: retained for compatibility; schedule reminder polling is removed, so current runtime no longer consumes this value (default `200`)
 - `CLI_PROGRESS_COLOR`: progress output color (`gray|off`, default `gray`)
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text
@@ -130,14 +130,14 @@ Optional runtime flags (all supported in `.env`):
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.
 - Recurring schedules are stored in `recurring_schedules` and merged in list/view results.
 - Schedule supports reminder timestamps (`--remind`).
+- Schedule reminder fields remain persisted, but runtime no longer auto-polls or auto-delivers local schedule reminders.
 - Optional Feishu calendar sync uses identity matching by `title + description(tag) + start + end` (minute-level); local writes still sync asynchronously, and updates perform old-identity cleanup + new-identity upsert.
 - Optional Feishu calendar startup bootstrap + periodic reconcile window is day-aligned by default:
   start=`(today-2d) 00:00:00`, end=`(today+5d) 23:59:59`.
 - Feishu calendar sync startup does not run immediate Feishu->local reconcile pull; first reconcile is delayed by one reconcile interval.
 - Feishu calendar periodic reconcile is driven by timer periodic tasks, so it does not run when `TIMER_ENABLED=false`.
 - Recurring schedule supports reminder start (`--remind-start`).
-- CLI starts a local reminder thread by default (`TIMER_ENABLED=off` to disable).
-- V1 reminders include single schedule reminders and recurring occurrence reminders.
+- CLI starts a timer thread for periodic background tasks by default (`TIMER_ENABLED=off` to disable).
 - If `--interval` is provided without `--times`, default `times=-1` (infinite repeat).
 - Repeat rules support enable/disable via `/schedule repeat <id> <on|off>`.
 - `/schedule list` default window is from two days before now to +31 days.
@@ -156,7 +156,6 @@ Optional runtime flags (all supported in `.env`):
 - `ask_user` sends a single clarification question prefixed with `请确认：...`.
 - `TASK_CANCEL_COMMAND` phrase interrupts current task loop.
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
-- Local reminder output can also be persona-rewritten (fallback on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Feishu ack-only completion (task completed with empty response) sends ACK/DONE reactions only and skips text sending.
 - Proactive reminder uses an independent ReAct runtime (not coupled with the existing task ReAct loop).

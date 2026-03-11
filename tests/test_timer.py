@@ -131,6 +131,17 @@ class TimerEngineTest(unittest.TestCase):
         self.assertEqual(service.poll_count, 1)
         self.assertEqual(periodic.call_count, 1)
 
+    def test_tick_once_runs_periodic_tasks_without_reminder_service(self) -> None:
+        periodic = _FakePeriodicTask()
+        engine = TimerEngine(
+            periodic_tasks=[periodic],
+            poll_interval_seconds=1,
+        )
+
+        engine.tick_once()
+
+        self.assertEqual(periodic.call_count, 1)
+
     def test_tick_once_continues_when_periodic_task_fails(self) -> None:
         service = _FakeReminderService()
         failing = _FakePeriodicTask(raises=True)
@@ -146,6 +157,20 @@ class TimerEngineTest(unittest.TestCase):
         self.assertEqual(service.poll_count, 1)
         self.assertEqual(failing.call_count, 1)
         self.assertEqual(succeeding.call_count, 1)
+
+    def test_start_and_stop_loop_without_reminder_service(self) -> None:
+        periodic = _FakePeriodicTask()
+        engine = TimerEngine(
+            periodic_tasks=[periodic],
+            poll_interval_seconds=1,
+        )
+
+        engine.start()
+        self.assertTrue(self._wait_until(lambda: periodic.call_count >= 1, timeout=2.0))
+        engine.stop(join_timeout=1.0)
+
+        self.assertGreaterEqual(periodic.call_count, 1)
+        self.assertFalse(engine.running)
 
 
 if __name__ == "__main__":
