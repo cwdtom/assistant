@@ -6,7 +6,7 @@
 - 日程管理（CRUD、时长、重复规则、提醒字段、日历视图）
 - 碎片想法管理（CRUD，最小字段：content + status）
 - 历史会话持久化与检索
-- 本地定时后台任务线程（user_profile 刷新、Feishu 日历周期对账、主动提醒）
+- 本地定时后台任务线程（timer_tasks 定时 planner 任务、主动提醒）
 - 可选 Feishu 长连接接入
 - Feishu 任务执行中可异步回传进度：plan 完成后的扩展目标（`任务目标：...`）与子任务完成状态（默认直出，不走 persona 重写）
 
@@ -113,10 +113,9 @@ python main.py
 - `DEEPSEEK_BASE_URL`：默认 `https://api.deepseek.com`
 - `DEEPSEEK_MODEL`：默认 `deepseek-chat`
 - LLM 配置仅支持 `DEEPSEEK_*` 环境变量，不再兼容 `OPENAI_*` 同名配置
-- `LLM_TEMPERATURE`：默认 LLM 调用温度（默认 `1.3`，范围 `0.0~2.0`；`user_profile refresh` 固定使用 `0.0`）
+- `LLM_TEMPERATURE`：默认 LLM 调用温度（默认 `1.3`，范围 `0.0~2.0`）
 - `ASSISTANT_DB_PATH`：SQLite 路径（默认 `assistant.db`）
-- `USER_PROFILE_PATH`：user_profile 文件路径（用于计划上下文与自动刷新）
-- `USER_PROFILE_REFRESH_ENABLED`：是否启用 user_profile 自动刷新（默认 `true`）
+- `USER_PROFILE_PATH`：user_profile 文件路径（用于计划上下文注入与相关工具读写）
 - `SEARCH_PROVIDER`：搜索 provider（`bocha|bochaai|bing`；其中 `bochaai` 作为 `bocha` 兼容别名）
 - `BOCHA_API_KEY`：当 provider 为 `bocha` 时推荐配置
 - `BOCHA_SEARCH_SUMMARY`：是否请求 Bocha 返回 summary（默认 `true`）
@@ -140,7 +139,6 @@ python main.py
 - `/help`
 - `/version`
 - `/date`
-- `/profile refresh`
 - `/schedule add|list|get|update|delete|repeat|view`
 - `/history list|search`
 - `/thoughts add|list|get|update|delete`
@@ -153,7 +151,6 @@ python main.py
 - `/thoughts list` 支持 `--status <未完成|完成|删除>`；默认仅展示 `未完成|完成`
 - `/thoughts delete` 为软删除（状态置为 `删除`）
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
-- `/profile refresh` 会立即执行一次画像刷新并返回最新 profile 文件内容（同自动刷新链路）
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）

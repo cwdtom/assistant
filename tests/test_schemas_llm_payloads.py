@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from assistant_app.schemas.llm_payloads import (
-    PersonaRewriteRequestPayload,
-    UserProfileRefreshPromptPayload,
-)
+from assistant_app.schemas.llm_payloads import PersonaRewriteRequestPayload
 from pydantic import ValidationError
 
 
@@ -20,34 +17,6 @@ class LLMPayloadSchemaTest(unittest.TestCase):
                     "requirements": ["", "   "],
                 }
             )
-
-    def test_user_profile_refresh_prompt_payload_accepts_chat_turns(self) -> None:
-        payload = UserProfileRefreshPromptPayload.model_validate(
-            {
-                "task": "refresh_user_profile",
-                "time": {"now": "2026-03-09 10:00", "window_days": 30},
-                "limits": {"max_turns": 100, "actual_turns": 2},
-                "current_user_profile": "# 画像",
-                "chat_turns": [
-                    {
-                        "created_at": "2026-03-09 09:00:00",
-                        "user_content": "今天想喝咖啡",
-                        "assistant_content": "记下来了",
-                    },
-                    {
-                        "created_at": "2026-03-09 09:05:00",
-                        "user_content": "下午提醒我开会",
-                        "assistant_content": "好的",
-                    },
-                ],
-                "output_requirements": ["输出完整新版 user_profile Markdown"],
-            }
-        )
-
-        self.assertEqual(payload.time.now, "2026-03-09 10:00")
-        self.assertEqual(payload.limits.actual_turns, 2)
-        self.assertEqual(payload.chat_turns[0].user_content, "今天想喝咖啡")
-
 
 if __name__ == "__main__":
     unittest.main()

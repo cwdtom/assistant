@@ -610,46 +610,12 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(response, "未知命令。输入 /help 查看可用命令。")
         self.assertFalse(task_completed)
 
-    def test_profile_refresh_command_returns_runner_output(self) -> None:
-        profile_content = "# 最新画像\n- 偏好: 咖啡"
-        call_count = 0
-
-        def _runner() -> str:
-            nonlocal call_count
-            call_count += 1
-            return profile_content
-
-        agent = AssistantAgent(
-            db=self.db,
-            llm_client=None,
-            user_profile_refresh_runner=_runner,
-        )
-
-        result = agent.handle_input("/profile refresh")
-
-        self.assertEqual(result, profile_content)
-        self.assertEqual(call_count, 1)
-
-    def test_profile_refresh_command_handles_runner_error(self) -> None:
-        def _runner() -> str:
-            raise RuntimeError("refresh failed")
-
-        agent = AssistantAgent(
-            db=self.db,
-            llm_client=None,
-            user_profile_refresh_runner=_runner,
-        )
-
-        result = agent.handle_input("/profile refresh")
-
-        self.assertIn("刷新 user_profile 失败", result)
-
-    def test_profile_refresh_command_requires_runner(self) -> None:
+    def test_profile_refresh_command_returns_unknown_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
         result = agent.handle_input("/profile refresh")
 
-        self.assertIn("当前未启用 user_profile 刷新服务", result)
+        self.assertEqual(result, "未知命令。输入 /help 查看可用命令。")
 
     def test_notify_command_returns_unknown_command(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)

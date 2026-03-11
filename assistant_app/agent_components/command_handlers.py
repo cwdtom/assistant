@@ -41,7 +41,6 @@ def help_text() -> str:
         "/help\n"
         "/version\n"
         "/date\n"
-        "/profile refresh\n"
         "/history list [--limit <>=1>]\n"
         "/history search <关键词> [--limit <>=1>]\n"
         "/thoughts add <内容>\n"
@@ -83,25 +82,6 @@ def handle_command(agent: Any, command: str) -> str:
         return _execute_system_cli_command(agent, parsed_command=date_command, raw_input=command)
     if command.split(maxsplit=1)[0] == "/date":
         return "用法: /date"
-
-    if command == "/profile refresh":
-        runner = agent._user_profile_refresh_runner
-        if runner is None:
-            return (
-                "当前未启用 user_profile 刷新服务。"
-                "请检查 USER_PROFILE_REFRESH_ENABLED、USER_PROFILE_PATH 与 LLM 配置。"
-            )
-        try:
-            return runner()
-        except Exception as exc:  # noqa: BLE001
-            agent._app_logger.warning(
-                "manual user profile refresh failed",
-                extra={
-                    "event": "user_profile_manual_refresh_failed",
-                    "context": {"error": repr(exc)},
-                },
-            )
-            return f"刷新 user_profile 失败: {exc}"
     if command == "/history list" or command.startswith("/history list "):
         history_list_command = parse_history_list_command(command)
         if history_list_command is None:

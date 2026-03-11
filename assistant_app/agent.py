@@ -100,7 +100,6 @@ class AssistantAgent:
         schedule_max_window_days: int = DEFAULT_SCHEDULE_MAX_WINDOW_DAYS,
         user_profile_path: str = "",
         user_profile_max_chars: int = DEFAULT_USER_PROFILE_MAX_CHARS,
-        user_profile_refresh_runner: Callable[[], str] | None = None,
         final_response_rewriter: Callable[[str], str] | None = None,
         app_version: str = UNKNOWN_APP_VERSION,
         schedule_sync_service: Any | None = None,
@@ -185,16 +184,12 @@ class AssistantAgent:
             internet_search_executor=self._execute_internet_search_planner_action,
         )
 
-        self._user_profile_refresh_runner = user_profile_refresh_runner
         self._final_response_rewriter = final_response_rewriter
         self._app_version = app_version.strip() or UNKNOWN_APP_VERSION
         self._schedule_sync_service = schedule_sync_service
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self._planner_session.set_progress_callback(callback)
-
-    def set_user_profile_refresh_runner(self, runner: Callable[[], str] | None) -> None:
-        self._user_profile_refresh_runner = runner
 
     def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None:
         self._planner_session.set_subtask_result_callback(callback)

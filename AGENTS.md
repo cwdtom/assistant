@@ -32,7 +32,6 @@ Supported input forms in CLI:
 - `/help`
 - `/version`
 - `/date`
-- `/profile refresh`
 - `/history list [--limit <>=1>]`
 - `/history search <关键词> [--limit <>=1>]`
 - `/thoughts add|list|get|update|delete`
@@ -73,7 +72,7 @@ Default model:
 - 配置读取优先级：若系统环境变量与 `.env` 同名，最终以 `.env` 中的值为准
 
 Optional runtime flags (all supported in `.env`):
-- `LLM_TEMPERATURE`: default temperature for general LLM calls (default `1.3`, range `0.0~2.0`; `user_profile refresh` is fixed at `0.0`)
+- `LLM_TEMPERATURE`: default temperature for general LLM calls (default `1.3`, range `0.0~2.0`)
 - `PLAN_REPLAN_MAX_STEPS`: max plan-loop steps (default `100`)
 - `PLAN_REPLAN_RETRY_COUNT`: planner JSON retry count (default `3`)
 - `PLAN_OBSERVATION_CHAR_LIMIT`: max chars per observation (default `10000`)
@@ -93,10 +92,6 @@ Optional runtime flags (all supported in `.env`):
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text
 - `USER_PROFILE_PATH`: user profile markdown file path (loaded content is injected into plan/replan context)
-- `USER_PROFILE_REFRESH_ENABLED`: enable daily user_profile refresh task (default `true`)
-- `USER_PROFILE_REFRESH_HOUR`: refresh trigger hour in local time (default `4`, range `0~23`)
-- `USER_PROFILE_REFRESH_LOOKBACK_DAYS`: chat lookback window in days for refresh prompt (default `30`)
-- `USER_PROFILE_REFRESH_MAX_TURNS`: max chat turns injected into refresh prompt (default `10000`)
 - `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
 - `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
 - `LLM_TRACE_LOG_PATH`: LLM trace log path (default follows `APP_LOG_PATH`, empty to disable)
@@ -124,8 +119,6 @@ Optional runtime flags (all supported in `.env`):
 - Thoughts supports minimal fields: `content` + `status` (`未完成|完成|删除`).
 - Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
 - Schedule includes `duration_minutes` (default `60` on create).
-- `/profile refresh` supports manual user_profile refresh; success returns latest profile file content.
-- Timer includes a daily user_profile refresh trigger (default local `04:00`, no catch-up).
 - Timer also scans `timer_tasks` every `TIMER_POLL_INTERVAL_SECONDS`; rows with `run_limit != 0` and due `next_run_at` are queued serially, pushed into the existing planner flow via `prompt`, and do not catch up missed runs. Starting execution decrements `run_limit` once, except `-1` which remains unlimited.
 - New database initialization seeds two default `timer_tasks`: `每日用户侧写更新` (`0 4 * * *`) and `每小时提醒` (`0 * * * *`), both with `run_limit=-1` and `next_run_at=NULL` before timer initialization.
 - Schedule supports `tag` labels (default `default`), and list/view can filter by tag.

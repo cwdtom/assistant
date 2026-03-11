@@ -33,10 +33,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.llm_temperature, 1.3)
         self.assertEqual(config.db_path, "custom.db")
         self.assertEqual(config.user_profile_path, "")
-        self.assertTrue(config.user_profile_refresh_enabled)
-        self.assertEqual(config.user_profile_refresh_hour, 4)
-        self.assertEqual(config.user_profile_refresh_lookback_days, 30)
-        self.assertEqual(config.user_profile_refresh_max_turns, 10000)
         self.assertEqual(config.plan_replan_max_steps, 100)
         self.assertEqual(config.plan_observation_history_limit, 100)
         self.assertEqual(config.internet_search_top_k, 3)
@@ -89,10 +85,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.llm_temperature, 1.3)
         self.assertEqual(config.db_path, "assistant.db")
         self.assertEqual(config.user_profile_path, "")
-        self.assertTrue(config.user_profile_refresh_enabled)
-        self.assertEqual(config.user_profile_refresh_hour, 4)
-        self.assertEqual(config.user_profile_refresh_lookback_days, 30)
-        self.assertEqual(config.user_profile_refresh_max_turns, 10000)
         self.assertEqual(config.llm_trace_log_path, "logs/app.log")
         self.assertEqual(config.app_log_path, "logs/app.log")
         self.assertEqual(config.app_log_retention_days, 7)
@@ -185,10 +177,10 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_continuous_failure_limit, 3)
         self.assertEqual(config.task_cancel_command, "停止任务")
         self.assertEqual(config.user_profile_path, "profiles/me.md")
-        self.assertFalse(config.user_profile_refresh_enabled)
-        self.assertEqual(config.user_profile_refresh_hour, 5)
-        self.assertEqual(config.user_profile_refresh_lookback_days, 45)
-        self.assertEqual(config.user_profile_refresh_max_turns, 999)
+        self.assertFalse(hasattr(config, "user_profile_refresh_enabled"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_hour"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_lookback_days"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_max_turns"))
         self.assertEqual(config.internet_search_top_k, 5)
         self.assertEqual(config.search_provider, "bing")
         self.assertEqual(config.bocha_api_key, "bocha-key")
@@ -226,7 +218,7 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_rejects_invalid_bool_value(self) -> None:
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
-            "USER_PROFILE_REFRESH_ENABLED": "invalid",
+            "TIMER_ENABLED": "invalid",
         }
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaises(ValidationError):
@@ -326,6 +318,52 @@ class ConfigTest(unittest.TestCase):
                 os.chdir(original_cwd)
 
         self.assertEqual(config.api_key, "file-key")
+
+    def test_load_config_ignores_removed_user_profile_refresh_fields_in_env(self) -> None:
+        env = {
+            "DEEPSEEK_API_KEY": "deep-key",
+            "USER_PROFILE_REFRESH_ENABLED": "invalid",
+            "USER_PROFILE_REFRESH_HOUR": "25",
+            "USER_PROFILE_REFRESH_LOOKBACK_DAYS": "0",
+            "USER_PROFILE_REFRESH_MAX_TURNS": "0",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = load_config(load_dotenv=False)
+
+        self.assertEqual(config.api_key, "deep-key")
+        self.assertFalse(hasattr(config, "user_profile_refresh_enabled"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_hour"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_lookback_days"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_max_turns"))
+
+    def test_load_config_ignores_removed_user_profile_refresh_fields_in_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "DEEPSEEK_API_KEY=file-key",
+                        "USER_PROFILE_REFRESH_ENABLED=invalid",
+                        "USER_PROFILE_REFRESH_HOUR=25",
+                        "USER_PROFILE_REFRESH_LOOKBACK_DAYS=0",
+                        "USER_PROFILE_REFRESH_MAX_TURNS=0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            original_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                config = load_config(load_dotenv=True)
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(config.api_key, "file-key")
+        self.assertFalse(hasattr(config, "user_profile_refresh_enabled"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_hour"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_lookback_days"))
+        self.assertFalse(hasattr(config, "user_profile_refresh_max_turns"))
 
     def test_load_config_ignores_removed_feishu_calendar_reconcile_interval_in_env(self) -> None:
         env = {

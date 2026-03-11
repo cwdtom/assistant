@@ -23,7 +23,6 @@ from assistant_app.proactive_reminder_service import ProactiveReminderService
 from assistant_app.scheduled_planner_task_service import ScheduledPlannerTaskService
 from assistant_app.search import create_search_provider
 from assistant_app.timer import TimerEngine
-from assistant_app.user_profile_refresh import UserProfileRefreshService
 
 CLEAR_TERMINAL_SEQUENCE = "\033[3J\033[2J\033[H"
 PROGRESS_COLOR_PREFIX = "\033[90m"
@@ -229,19 +228,6 @@ def main() -> None:
         final_response_rewriter=persona_rewriter.rewrite_final_response,
         app_version=app_version,
     )
-    user_profile_refresh_service: UserProfileRefreshService | None = None
-    if config.user_profile_refresh_enabled:
-        user_profile_refresh_service = UserProfileRefreshService(
-            db=db,
-            llm_client=llm_client,
-            user_profile_path=config.user_profile_path,
-            agent_reloader=agent.reload_user_profile,
-            logger=app_logger,
-            scheduled_hour=config.user_profile_refresh_hour,
-            lookback_days=config.user_profile_refresh_lookback_days,
-            max_turns=config.user_profile_refresh_max_turns,
-        )
-        agent.set_user_profile_refresh_runner(user_profile_refresh_service.run_manual_refresh)
     proactive_sender_holder: dict[str, _ProactiveTextSender | None] = {"send": None}
     feishu_configured = _is_feishu_configured(config.feishu_app_id, config.feishu_app_secret)
     calendar_sync_configured = _is_feishu_calendar_sync_configured(config.feishu_calendar_id)
@@ -332,8 +318,6 @@ def main() -> None:
     feishu_runner = None
     if config.timer_enabled:
         periodic_tasks: list[Callable[[], None]] = []
-        if user_profile_refresh_service is not None:
-            periodic_tasks.append(user_profile_refresh_service.poll_scheduled)
         if proactive_reminder_service is not None:
             periodic_tasks.append(proactive_reminder_service.poll_scheduled)
         periodic_tasks.append(scheduled_planner_task_service.poll_scheduled)

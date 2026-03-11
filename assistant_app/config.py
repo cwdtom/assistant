@@ -16,6 +16,10 @@ _PROJECT_VERSION_PATTERN = re.compile(r"""^version\s*=\s*["']([^"']+)["']\s*$"""
 _REMOVED_CONFIG_FIELDS = {
     "proactive_reminder_score_threshold",
     "feishu_calendar_reconcile_interval_minutes",
+    "user_profile_refresh_enabled",
+    "user_profile_refresh_hour",
+    "user_profile_refresh_lookback_days",
+    "user_profile_refresh_max_turns",
 }
 
 
@@ -34,14 +38,6 @@ class AppConfig(BaseSettings):
     llm_temperature: float = Field(default=1.3, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
     db_path: str = Field(default="assistant.db", validation_alias="ASSISTANT_DB_PATH")
     user_profile_path: str = Field(default="", validation_alias="USER_PROFILE_PATH")
-    user_profile_refresh_enabled: bool = Field(default=True, validation_alias="USER_PROFILE_REFRESH_ENABLED")
-    user_profile_refresh_hour: int = Field(default=4, ge=0, le=23, validation_alias="USER_PROFILE_REFRESH_HOUR")
-    user_profile_refresh_lookback_days: int = Field(
-        default=30,
-        ge=1,
-        validation_alias="USER_PROFILE_REFRESH_LOOKBACK_DAYS",
-    )
-    user_profile_refresh_max_turns: int = Field(default=10000, ge=1, validation_alias="USER_PROFILE_REFRESH_MAX_TURNS")
     llm_trace_log_path: str = Field(default="", validation_alias="LLM_TRACE_LOG_PATH")
     app_log_path: str = Field(default="logs/app.log", validation_alias="APP_LOG_PATH")
     app_log_retention_days: int = Field(default=7, ge=1, validation_alias="APP_LOG_RETENTION_DAYS")
