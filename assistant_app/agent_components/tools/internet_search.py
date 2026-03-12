@@ -114,6 +114,7 @@ def _execute_typed_internet_search_action(
         return _execute_internet_search_query_action(
             agent,
             query=arguments.query,
+            freshness=arguments.freshness,
             raw_input=raw_input,
         )
     if tool_name == "internet_search_fetch_url" and isinstance(arguments, InternetSearchFetchUrlArgs):
@@ -130,6 +131,7 @@ def _execute_internet_search_query_action(
     agent: Any,
     *,
     query: str,
+    freshness: str | None = None,
     raw_input: str,
 ) -> PlannerObservation:
     normalized_query = query.strip()
@@ -144,13 +146,18 @@ def _execute_internet_search_query_action(
         "query_preview": _truncate_text(normalized_query, 120),
         "query_length": len(normalized_query),
         "top_k": agent._internet_search_top_k,
+        "freshness": freshness,
     }
     agent._app_logger.info(
         "planner_tool_internet_search_start",
         extra={"event": "planner_tool_internet_search_start", "context": log_context},
     )
     try:
-        search_results = agent.search_provider.search(normalized_query, top_k=agent._internet_search_top_k)
+        search_results = agent.search_provider.search(
+            normalized_query,
+            top_k=agent._internet_search_top_k,
+            freshness=freshness,
+        )
     except Exception as exc:  # noqa: BLE001
         agent._app_logger.warning(
             "planner_tool_internet_search_failed",
@@ -173,7 +180,7 @@ def _execute_internet_search_query_action(
         return PlannerObservation(
             tool="internet_search",
             input_text=normalized_query,
-            ok=False,
+            ok=True,
             result=f"未搜索到与“{normalized_query}”相关的结果。",
         )
     formatted = _format_search_results(search_results, top_k=agent._internet_search_top_k)
@@ -262,6 +269,11 @@ def _internet_search_validation_error_text(*, payload: dict[str, Any], exc: Vali
     if action == "search":
         if issue.field == "query":
             return "internet_search.search query 不能为空。"
+        if issue.field == "freshness":
+            return (
+                "internet_search.search freshness 非法。支持 "
+                "noLimit|oneYear|oneMonth|oneWeek|oneDay|YYYY-MM-DD|YYYY-MM-DD..YYYY-MM-DD。"
+            )
         return "internet_search.action 非法。"
     if action == "fetch_url":
         if issue.field == "url":

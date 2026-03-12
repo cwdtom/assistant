@@ -519,10 +519,10 @@ class FakeSearchProvider:
     def __init__(self, results: list[SearchResult] | None = None, raises: Exception | None = None) -> None:
         self.results = results or []
         self.raises = raises
-        self.queries: list[tuple[str, int]] = []
+        self.queries: list[tuple[str, int, str | None]] = []
 
-    def search(self, query: str, top_k: int = 3) -> list[SearchResult]:
-        self.queries.append((query, top_k))
+    def search(self, query: str, top_k: int = 3, freshness: str | None = None) -> list[SearchResult]:
+        self.queries.append((query, top_k, freshness))
         if self.raises is not None:
             raise self.raises
         return self.results[:top_k]
@@ -2494,7 +2494,7 @@ class AssistantAgentTest(unittest.TestCase):
 
         response = agent.handle_input("帮我查下 Responses API 最新资料")
         self.assertIn("3 条相关资料", response)
-        self.assertEqual(fake_search.queries, [("OpenAI Responses API", 3)])
+        self.assertEqual(fake_search.queries, [("OpenAI Responses API", 3, None)])
         self.assertEqual(fake_llm.model_call_count, 3)
 
     def test_internet_search_observation_respects_configured_top_k(self) -> None:
@@ -2518,7 +2518,7 @@ class AssistantAgentTest(unittest.TestCase):
             observation = agent._execute_planner_tool(action_tool="internet_search", action_input="OpenAI")
 
         self.assertTrue(observation.ok)
-        self.assertEqual(fake_search.queries, [("OpenAI", 5)])
+        self.assertEqual(fake_search.queries, [("OpenAI", 5, None)])
         self.assertIn("互联网搜索结果（返回 5 条，目标 Top 5）", observation.result)
         self.assertIn("5. E", observation.result)
         merged = "\n".join(captured.output)
@@ -2549,6 +2549,81 @@ class AssistantAgentTest(unittest.TestCase):
         merged = "\n".join(captured.output)
         self.assertIn("planner_tool_internet_search_start", merged)
         self.assertIn("planner_tool_internet_search_failed", merged)
+
+    def test_internet_search_observation_no_results_is_success(self) -> None:
+        fake_search = FakeSearchProvider(results=[])
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=fake_search,
+        )
+
+        with self.assertLogs("assistant_app.app", level="INFO") as captured:
+            observation = agent._execute_planner_tool(
+                action_tool="internet_search",
+                action_input=json.dumps(
+                    {"action": "search", "query": "unlikely-keyword-zzz"},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(
+            observation.result,
+            "未搜索到与“unlikely-keyword-zzz”相关的结果。",
+        )
+        merged = "\n".join(captured.output)
+        self.assertIn("planner_tool_internet_search_start", merged)
+        self.assertIn("planner_tool_internet_search_no_results", merged)
+
+    def test_internet_search_observation_passes_freshness_to_provider(self) -> None:
+        fake_search = FakeSearchProvider(
+            results=[
+                SearchResult(title="A", snippet="S1", url="https://example.com/a"),
+            ]
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=fake_search,
+        )
+
+        observation = agent._execute_planner_tool(
+            action_tool="internet_search",
+            action_input=json.dumps(
+                {"action": "search", "query": "OpenAI", "freshness": "oneweek"},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
+        self.assertTrue(observation.ok)
+        self.assertEqual(fake_search.queries, [("OpenAI", 3, "oneWeek")])
+
+    def test_internet_search_observation_rejects_invalid_freshness(self) -> None:
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=FakeLLMClient(),
+            search_provider=FakeSearchProvider(),
+        )
+        observation = agent._execute_planner_tool(
+            action_tool="internet_search",
+            action_input=json.dumps(
+                {"action": "search", "query": "OpenAI", "freshness": "today"},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(
+            observation.result,
+            (
+                "internet_search.search freshness 非法。支持 "
+                "noLimit|oneYear|oneMonth|oneWeek|oneDay|YYYY-MM-DD|YYYY-MM-DD..YYYY-MM-DD。"
+            ),
+        )
 
     def test_internet_search_url_input_auto_routes_to_fetch_url(self) -> None:
         fake_search = FakeSearchProvider(
@@ -2951,6 +3026,19 @@ class AssistantAgentTest(unittest.TestCase):
             RuntimePlannerActionPayload(
                 tool_name="internet_search_tool",
                 arguments=InternetSearchArgs(query="OpenAI Responses API"),
+            ),
+        )
+
+    def test_internet_search_json_payload_with_freshness_matches_runtime_payload(self) -> None:
+        compat_payload = coerce_internet_search_action_payload(
+            {"action": "search", "query": "OpenAI Responses API", "freshness": "oneweek"}
+        )
+
+        self.assertEqual(
+            compat_payload,
+            RuntimePlannerActionPayload(
+                tool_name="internet_search_tool",
+                arguments=InternetSearchArgs(query="OpenAI Responses API", freshness="oneWeek"),
             ),
         )
 

@@ -154,6 +154,8 @@ python main.py
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
 - thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`timer` -> `timer_add|timer_list|timer_get|timer_update|timer_delete`（管理通用定时 planner 任务，不是普通日程，且仅对交互式 thought 开放），`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法），`user_profile` -> `user_profile_get|user_profile_overwrite`（读取/整份覆盖画像文件，缺文件视为空，overwrite 允许空字符串清空），`system` -> `system_date`（读取当前本地时间）；后台定时 planner 任务链路不会向 thought 暴露 `ask_user` 或 `timer`
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
+- `internet_search` 关键词检索支持可选 `freshness` 时效过滤（`noLimit|oneYear|oneMonth|oneWeek|oneDay|YYYY-MM-DD|YYYY-MM-DD..YYYY-MM-DD`）；当前该参数在 Bocha provider 路径生效，Bing fallback 会忽略该参数
+- `internet_search` 无命中结果时返回“执行成功但结果为空”（`ok=true` + 无结果提示文案），不会按工具失败计数
 - 当 rerank 请求失败时，会自动降级重试为非 rerank Bocha 搜索
 - `internet_search` 在收到裸 `http/https` URL 输入时会自动按 `fetch_url` 路径执行（不再按关键词搜索）
 - `fetch_url` 默认先走 Playwright；若 Playwright 失败，会自动降级为 `requests` 直连抓取并提取文本

@@ -17,6 +17,7 @@ from assistant_app.schemas.tools import (
     parse_json_object,
     validate_thought_tool_arguments,
 )
+from pydantic import ValidationError
 
 
 class ToolSchemaTest(unittest.TestCase):
@@ -238,6 +239,20 @@ class ToolSchemaTest(unittest.TestCase):
 
         self.assertEqual(payload.tool_name, 'internet_search_tool')
         self.assertEqual(payload.arguments, InternetSearchArgs(query='OpenAI Responses API'))
+
+    def test_coerce_internet_search_action_payload_search_normalizes_freshness(self) -> None:
+        payload = coerce_internet_search_action_payload(
+            {'action': 'search', 'query': 'OpenAI Responses API', 'freshness': 'oneweek'}
+        )
+
+        self.assertEqual(payload.tool_name, 'internet_search_tool')
+        self.assertEqual(payload.arguments, InternetSearchArgs(query='OpenAI Responses API', freshness='oneWeek'))
+
+    def test_coerce_internet_search_action_payload_search_rejects_invalid_freshness(self) -> None:
+        with self.assertRaises(ValidationError):
+            coerce_internet_search_action_payload(
+                {'action': 'search', 'query': 'OpenAI Responses API', 'freshness': 'today'}
+            )
 
     def test_coerce_internet_search_action_payload_fetch_url(self) -> None:
         payload = coerce_internet_search_action_payload({'action': 'fetch_url', 'url': 'https://example.com'})

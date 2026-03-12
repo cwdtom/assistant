@@ -153,6 +153,8 @@ Optional runtime flags (all supported in `.env`):
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).
+- `internet_search` keyword search supports optional `freshness` filter (`noLimit|oneYear|oneMonth|oneWeek|oneDay|YYYY-MM-DD|YYYY-MM-DD..YYYY-MM-DD`); currently this filter is effective on Bocha provider path and ignored by Bing fallback.
+- `internet_search` no-result responses are treated as successful empty outcomes (`ok=true` with no-result message), not tool failures.
 - If rerank request fails, search automatically retries once without reranker.
 - `internet_search` receives a plain `http/https` URL input and auto-routes to `fetch_url` execution instead of keyword search.
 - `fetch_url` uses Playwright first; if Playwright fails, it falls back to direct HTTP fetch via `requests`.

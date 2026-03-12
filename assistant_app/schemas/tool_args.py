@@ -10,6 +10,7 @@ from assistant_app.schemas.scheduled_tasks import (
     normalize_scheduled_task_cron_expr,
     normalize_scheduled_task_run_limit,
 )
+from assistant_app.schemas.search import normalize_bocha_freshness
 from assistant_app.schemas.values import (
     HistoryListLimitValue,
     OptionalScheduleDateTimeValue,
@@ -291,6 +292,18 @@ class UserProfileOverwriteArgs(ThoughtToolArgsBase):
 
 class InternetSearchArgs(ThoughtToolArgsBase):
     query: str = Field(min_length=1, description="搜索关键词文本。")
+    freshness: str | None = Field(
+        default=None,
+        description=(
+            "可选时效过滤。支持 noLimit|oneYear|oneMonth|oneWeek|oneDay，"
+            "或 YYYY-MM-DD、YYYY-MM-DD..YYYY-MM-DD。"
+        ),
+    )
+
+    @field_validator("freshness", mode="before")
+    @classmethod
+    def normalize_freshness(cls, value: Any) -> str | None:
+        return normalize_bocha_freshness(value, field_name="freshness")
 
 
 class InternetSearchFetchUrlArgs(ThoughtToolArgsBase):

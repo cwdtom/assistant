@@ -1,11 +1,57 @@
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from typing import Any
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.domain import HttpUrlValue
+
+_BOCHA_FRESHNESS_PRESET_BY_KEY: dict[str, str] = {
+    "nolimit": "noLimit",
+    "oneyear": "oneYear",
+    "onemonth": "oneMonth",
+    "oneweek": "oneWeek",
+    "oneday": "oneDay",
+}
+_BOCHA_FRESHNESS_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_BOCHA_FRESHNESS_DATE_RANGE_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$")
+_BOCHA_FRESHNESS_ERROR = (
+    "freshness 非法。支持 noLimit|oneYear|oneMonth|oneWeek|oneDay|YYYY-MM-DD|YYYY-MM-DD..YYYY-MM-DD。"
+)
+
+
+def normalize_bocha_freshness(value: Any, *, field_name: str = "freshness") -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{field_name} 不能为空。")
+    normalized_preset = _BOCHA_FRESHNESS_PRESET_BY_KEY.get(text.lower())
+    if normalized_preset is not None:
+        return normalized_preset
+    if _BOCHA_FRESHNESS_DATE_PATTERN.fullmatch(text):
+        _validate_ymd_date(text)
+        return text
+    match = _BOCHA_FRESHNESS_DATE_RANGE_PATTERN.fullmatch(text)
+    if match is not None:
+        start_raw = match.group(1)
+        end_raw = match.group(2)
+        start = _validate_ymd_date(start_raw)
+        end = _validate_ymd_date(end_raw)
+        if start > end:
+            raise ValueError("freshness 日期区间非法，开始日期不能晚于结束日期。")
+        return f"{start_raw}..{end_raw}"
+    raise ValueError(_BOCHA_FRESHNESS_ERROR)
+
+
+def _validate_ymd_date(value: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(_BOCHA_FRESHNESS_ERROR) from exc
 
 
 class BochaSearchRequestReranker(FrozenModel):
@@ -19,7 +65,13 @@ class BochaSearchRequestPayload(FrozenModel):
     query: str = Field(min_length=1)
     summary: bool
     count: int = Field(ge=1)
+    freshness: str | None = None
     reranker: BochaSearchRequestReranker | None = None
+
+    @field_validator("freshness", mode="before")
+    @classmethod
+    def normalize_freshness(cls, value: Any) -> str | None:
+        return normalize_bocha_freshness(value, field_name="freshness")
 
 
 class BochaSummaryTextPart(FrozenModel):
@@ -128,4 +180,5 @@ __all__ = [
     "BochaSummaryTextPart",
     "BochaWebPageItem",
     "BochaWebPagesPayload",
+    "normalize_bocha_freshness",
 ]

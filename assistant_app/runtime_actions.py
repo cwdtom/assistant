@@ -116,7 +116,7 @@ _COMPAT_FIELDS_BY_TOOL_NAME: dict[str, tuple[str, ...]] = {
     "user_profile_get": (),
     "user_profile_overwrite": ("content",),
     "system_date": (),
-    "internet_search_tool": ("query",),
+    "internet_search_tool": ("query", "freshness"),
     "internet_search_fetch_url": ("url",),
 }
 

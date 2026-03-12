@@ -7,6 +7,7 @@ from pydantic import Field, TypeAdapter, ValidationError, field_validator, model
 
 from assistant_app.schemas.base import FrozenModel
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
+from assistant_app.schemas.search import normalize_bocha_freshness
 from assistant_app.schemas.tool_args import (
     HistoryListArgs,
     HistorySearchArgs,
@@ -517,16 +518,25 @@ class UserProfileOverwriteCompatPayload(FrozenModel):
 class InternetSearchCompatPayload(FrozenModel):
     action: Literal["search"]
     query: str = Field(min_length=1)
+    freshness: str | None = None
 
     @field_validator("query", mode="before")
     @classmethod
     def normalize_query(cls, value: Any) -> str:
         return _normalize_required_text(value, field_name="query")
 
+    @field_validator("freshness", mode="before")
+    @classmethod
+    def normalize_freshness(cls, value: Any) -> str | None:
+        return normalize_bocha_freshness(value, field_name="freshness")
+
     def to_runtime_payload(self) -> RuntimePlannerActionPayload:
+        arguments: dict[str, Any] = {"query": self.query}
+        if "freshness" in self.model_fields_set:
+            arguments["freshness"] = self.freshness
         return RuntimePlannerActionPayload(
             tool_name="internet_search_tool",
-            arguments=InternetSearchArgs.model_validate({"query": self.query}),
+            arguments=InternetSearchArgs.model_validate(arguments),
         )
 
 

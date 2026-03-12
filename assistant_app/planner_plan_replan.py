@@ -16,6 +16,7 @@ PLANNER_CAPABILITIES_TEXT = """
   - 关键字段：task_name（任务名）、cron_expr（cron 表达式）、prompt（到点后执行的任务内容）、
     run_limit（剩余执行次数；-1 表示不限次数）
 - internet_search：互联网检索网页信息并返回摘要（支持 query 关键词检索与已知 URL 正文抓取）
+  - 关键字段：query（搜索关键词）；freshness（可选时效过滤，支持 oneDay/oneWeek/oneMonth/oneYear/noLimit 或日期范围）
 - history：历史会话检索（最近列表与关键词搜索）
   - 常用动作：list/search
   - 关键字段：keyword（搜索关键词，可用于 search）、limit（返回条数上限，>=1）

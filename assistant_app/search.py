@@ -15,11 +15,12 @@ from assistant_app.schemas.search import (
     BochaSearchRequestPayload,
     BochaSearchRequestReranker,
     BochaSearchResponsePayload,
+    normalize_bocha_freshness,
 )
 
 
 class SearchProvider(Protocol):
-    def search(self, query: str, top_k: int = 3) -> list[SearchResult]: ...
+    def search(self, query: str, top_k: int = 3, freshness: str | None = None) -> list[SearchResult]: ...
 
 
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 8.0
@@ -35,10 +36,11 @@ class BingSearchProvider:
     def __init__(self, timeout: float = DEFAULT_SEARCH_TIMEOUT_SECONDS) -> None:
         self.timeout = timeout
 
-    def search(self, query: str, top_k: int = 3) -> list[SearchResult]:
+    def search(self, query: str, top_k: int = 3, freshness: str | None = None) -> list[SearchResult]:
         normalized_query = _normalize_query(query)
         if not normalized_query or top_k <= 0:
             return []
+        del freshness
         params = urllib_parse.urlencode({"q": normalized_query, "setlang": "zh-Hans"})
         req = urllib_request.Request(
             f"https://www.bing.com/search?{params}",
@@ -63,10 +65,11 @@ class BochaSearchProvider:
         self.timeout = timeout
         self.summary = summary
 
-    def search(self, query: str, top_k: int = 3) -> list[SearchResult]:
+    def search(self, query: str, top_k: int = 3, freshness: str | None = None) -> list[SearchResult]:
         normalized_query = _normalize_query(query)
         if not normalized_query or top_k <= 0:
             return []
+        normalized_freshness = normalize_bocha_freshness(freshness, field_name="freshness")
 
         log_context = {
             "query_preview": _text_preview(normalized_query),
@@ -75,6 +78,7 @@ class BochaSearchProvider:
             "count": BOCHA_MAX_COUNT,
             "summary": self.summary,
             "rerank_model": BOCHA_RERANK_MODEL,
+            "freshness": normalized_freshness,
         }
         _SEARCH_LOGGER.info(
             "internet_search_rerank_start",
@@ -84,6 +88,7 @@ class BochaSearchProvider:
             parsed = self._request_search(
                 query=normalized_query,
                 top_k=top_k,
+                freshness=normalized_freshness,
                 use_reranker=True,
             )
             if parsed is None:
@@ -114,6 +119,7 @@ class BochaSearchProvider:
             parsed = self._request_search(
                 query=normalized_query,
                 top_k=top_k,
+                freshness=normalized_freshness,
                 use_reranker=False,
             )
         except Exception as fallback_exc:  # noqa: BLE001
@@ -151,6 +157,7 @@ class BochaSearchProvider:
         *,
         query: str,
         top_k: int,
+        freshness: str | None,
         use_reranker: bool,
     ) -> BochaSearchResponsePayload | None:
         request_context = {
@@ -158,6 +165,7 @@ class BochaSearchProvider:
             "query_length": len(query),
             "top_k": max(top_k, 1),
             "count": BOCHA_MAX_COUNT,
+            "freshness": freshness,
             "use_reranker": use_reranker,
             "endpoint": self.endpoint,
         }
@@ -165,7 +173,12 @@ class BochaSearchProvider:
             "internet_search_bocha_request_start",
             extra={"event": "internet_search_bocha_request_start", "context": request_context},
         )
-        payload = self._build_payload(query=query, top_k=top_k, use_reranker=use_reranker)
+        payload = self._build_payload(
+            query=query,
+            top_k=top_k,
+            freshness=freshness,
+            use_reranker=use_reranker,
+        )
         req = urllib_request.Request(
             self.endpoint,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -207,7 +220,14 @@ class BochaSearchProvider:
             return None
         return _parse_bocha_response(parsed)
 
-    def _build_payload(self, *, query: str, top_k: int, use_reranker: bool) -> dict[str, object]:
+    def _build_payload(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        freshness: str | None,
+        use_reranker: bool,
+    ) -> dict[str, object]:
         reranker = None
         if use_reranker:
             reranker = BochaSearchRequestReranker(
@@ -220,6 +240,7 @@ class BochaSearchProvider:
             query=query,
             summary=self.summary,
             count=BOCHA_MAX_COUNT,
+            freshness=freshness,
             reranker=reranker,
         )
         return payload.model_dump(mode="python", exclude_none=True)

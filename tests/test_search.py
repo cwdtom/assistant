@@ -123,6 +123,8 @@ class SearchProviderTest(unittest.TestCase):
         self.assertEqual(second_body["count"], BOCHA_MAX_COUNT)
         self.assertTrue(first_body["summary"])
         self.assertTrue(second_body["summary"])
+        self.assertNotIn("freshness", first_body)
+        self.assertNotIn("freshness", second_body)
         self.assertEqual(first_body["reranker"]["enable"], True)
         self.assertEqual(second_body["reranker"]["enable"], True)
         self.assertEqual(first_body["reranker"]["apiKey"], "demo-key")
@@ -165,6 +167,34 @@ class SearchProviderTest(unittest.TestCase):
         self.assertNotIn("reranker", second_body)
         self.assertEqual(first_body["count"], BOCHA_MAX_COUNT)
         self.assertEqual(second_body["count"], BOCHA_MAX_COUNT)
+
+    def test_bocha_provider_includes_normalized_freshness_in_request_payload(self) -> None:
+        provider = BochaSearchProvider(api_key="demo-key")
+        payload = {
+            "code": 200,
+            "data": {
+                "webPages": {
+                    "value": [
+                        {"name": "Title", "url": "https://example.com/item", "snippet": "text"},
+                    ]
+                }
+            },
+        }
+
+        with patch("assistant_app.search.urllib_request.urlopen", return_value=_FakeHTTPResponse(payload)) as mocked:
+            provider.search("bocha api", top_k=5, freshness="oneweek")
+
+        body = json.loads(mocked.call_args_list[0].args[0].data.decode("utf-8"))
+        self.assertEqual(body["freshness"], "oneWeek")
+
+    def test_bocha_provider_rejects_invalid_freshness_before_request(self) -> None:
+        provider = BochaSearchProvider(api_key="demo-key")
+
+        with patch("assistant_app.search.urllib_request.urlopen") as mocked:
+            with self.assertRaises(ValueError):
+                provider.search("bocha api", top_k=5, freshness="today")
+
+        mocked.assert_not_called()
 
     def test_bocha_provider_logs_rerank_request_start_and_done(self) -> None:
         provider = BochaSearchProvider(api_key="demo-key")
