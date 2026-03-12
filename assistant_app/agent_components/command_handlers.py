@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from assistant_app.agent_components.parsing_utils import _matches_command_prefix
 from assistant_app.agent_components.render_helpers import (
     _is_planner_command_success,
 )
@@ -33,6 +34,30 @@ from assistant_app.schemas.commands import (
 )
 
 UNKNOWN_APP_VERSION = "unknown"
+USAGE_HISTORY_LIST = "用法: /history list [--limit <>=1>]"
+USAGE_HISTORY_SEARCH = "用法: /history search <关键词> [--limit <>=1>]"
+USAGE_THOUGHTS_ADD = "用法: /thoughts add <内容>"
+USAGE_THOUGHTS_LIST = "用法: /thoughts list [--status <未完成|完成|删除>]"
+USAGE_THOUGHTS_GET = "用法: /thoughts get <id>"
+USAGE_THOUGHTS_UPDATE = "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]"
+USAGE_THOUGHTS_DELETE = "用法: /thoughts delete <id>"
+USAGE_SCHEDULE_LIST = "用法: /schedule list [--tag <标签>]"
+USAGE_SCHEDULE_VIEW = "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"
+USAGE_SCHEDULE_GET = "用法: /schedule get <id>"
+USAGE_SCHEDULE_ADD = (
+    "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
+    "[--tag <标签>] "
+    "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+    "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
+)
+USAGE_SCHEDULE_UPDATE = (
+    "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
+    "[--tag <标签>] "
+    "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+    "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
+)
+USAGE_SCHEDULE_DELETE = "用法: /schedule delete <id>"
+USAGE_SCHEDULE_REPEAT = "用法: /schedule repeat <id> <on|off>"
 
 
 def help_text() -> str:
@@ -69,131 +94,121 @@ def help_text() -> str:
 def handle_command(agent: Any, command: str) -> str:
     if command == "/help":
         return help_text()
-    if command == "/version":
-        if agent._app_version == UNKNOWN_APP_VERSION:
-            return "当前版本：unknown"
-        return f"当前版本：v{agent._app_version}"
-    if command.split(maxsplit=1)[0] == "/version":
+    if _matches_command_prefix(command, "/version"):
+        if command == "/version":
+            if agent._app_version == UNKNOWN_APP_VERSION:
+                return "当前版本：unknown"
+            return f"当前版本：v{agent._app_version}"
         return "用法: /version"
-    if command == "/date":
-        date_command = parse_date_command(command)
-        if date_command is None:
-            return "用法: /date"
-        return _execute_system_cli_command(agent, parsed_command=date_command, raw_input=command)
-    if command.split(maxsplit=1)[0] == "/date":
+    if _matches_command_prefix(command, "/date"):
+        if command == "/date":
+            date_command = parse_date_command(command)
+            if date_command is None:
+                return "用法: /date"
+            return _execute_system_cli_command(agent, parsed_command=date_command, raw_input=command)
         return "用法: /date"
-    if command == "/history list" or command.startswith("/history list "):
+    if _matches_command_prefix(command, "/history list"):
         history_list_command = parse_history_list_command(command)
         if history_list_command is None:
-            return "用法: /history list [--limit <>=1>]"
+            return USAGE_HISTORY_LIST
         return _execute_history_cli_command(agent, parsed_command=history_list_command, raw_input=command)
 
-    if command.startswith("/history search "):
+    if _matches_command_prefix(command, "/history search"):
         history_search_command = parse_history_search_command(command)
         if history_search_command is None:
-            return "用法: /history search <关键词> [--limit <>=1>]"
+            return USAGE_HISTORY_SEARCH
         return _execute_history_cli_command(agent, parsed_command=history_search_command, raw_input=command)
 
-    if command == "/thoughts add" or command.startswith("/thoughts add "):
+    if _matches_command_prefix(command, "/thoughts add"):
         thoughts_add_command = parse_thoughts_add_command(command)
         return _execute_thoughts_cli_command(
             agent,
             action="add",
             parsed_command=thoughts_add_command,
             raw_input=command,
-            usage_text="用法: /thoughts add <内容>",
+            usage_text=USAGE_THOUGHTS_ADD,
         )
 
-    if command == "/thoughts list" or command.startswith("/thoughts list "):
+    if _matches_command_prefix(command, "/thoughts list"):
         thoughts_list_command = parse_thoughts_list_command(command)
         return _execute_thoughts_cli_command(
             agent,
             action="list",
             parsed_command=thoughts_list_command,
             raw_input=command,
-            usage_text="用法: /thoughts list [--status <未完成|完成|删除>]",
+            usage_text=USAGE_THOUGHTS_LIST,
         )
 
-    if command.startswith("/thoughts get "):
+    if _matches_command_prefix(command, "/thoughts get"):
         thoughts_get_command = parse_thoughts_get_command(command)
         return _execute_thoughts_cli_command(
             agent,
             action="get",
             parsed_command=thoughts_get_command,
             raw_input=command,
-            usage_text="用法: /thoughts get <id>",
+            usage_text=USAGE_THOUGHTS_GET,
         )
 
-    if command.startswith("/thoughts update "):
+    if _matches_command_prefix(command, "/thoughts update"):
         thoughts_update_command = parse_thoughts_update_command(command)
         return _execute_thoughts_cli_command(
             agent,
             action="update",
             parsed_command=thoughts_update_command,
             raw_input=command,
-            usage_text="用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]",
+            usage_text=USAGE_THOUGHTS_UPDATE,
         )
 
-    if command.startswith("/thoughts delete "):
+    if _matches_command_prefix(command, "/thoughts delete"):
         thoughts_delete_command = parse_thoughts_delete_command(command)
         return _execute_thoughts_cli_command(
             agent,
             action="delete",
             parsed_command=thoughts_delete_command,
             raw_input=command,
-            usage_text="用法: /thoughts delete <id>",
+            usage_text=USAGE_THOUGHTS_DELETE,
         )
 
-    if command == "/schedule list" or command.startswith("/schedule list "):
+    if _matches_command_prefix(command, "/schedule list"):
         schedule_list_command = parse_schedule_list_command(command)
         if schedule_list_command is None:
-            return "用法: /schedule list [--tag <标签>]"
+            return USAGE_SCHEDULE_LIST
         return _execute_schedule_cli_command(agent, parsed_command=schedule_list_command, raw_input=command)
 
-    if command.startswith("/schedule view "):
+    if _matches_command_prefix(command, "/schedule view"):
         schedule_view_command = parse_schedule_view_command(command)
         if schedule_view_command is None:
-            return "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"
+            return USAGE_SCHEDULE_VIEW
         return _execute_schedule_cli_command(agent, parsed_command=schedule_view_command, raw_input=command)
 
-    if command.startswith("/schedule get "):
+    if _matches_command_prefix(command, "/schedule get"):
         schedule_get_command = parse_schedule_get_command(command)
         if schedule_get_command is None:
-            return "用法: /schedule get <id>"
+            return USAGE_SCHEDULE_GET
         return _execute_schedule_cli_command(agent, parsed_command=schedule_get_command, raw_input=command)
 
-    if command.startswith("/schedule add"):
+    if _matches_command_prefix(command, "/schedule add"):
         schedule_add_command = parse_schedule_add_command(command)
         if schedule_add_command is None:
-            return (
-                "用法: /schedule add <YYYY-MM-DD HH:MM> <标题> "
-                "[--tag <标签>] "
-                "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
-                "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
-            )
+            return USAGE_SCHEDULE_ADD
         return _execute_schedule_cli_command(agent, parsed_command=schedule_add_command, raw_input=command)
 
-    if command.startswith("/schedule update "):
+    if _matches_command_prefix(command, "/schedule update"):
         schedule_update_command = parse_schedule_update_command(command)
         if schedule_update_command is None:
-            return (
-                "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
-                "[--tag <标签>] "
-                "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
-                "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]"
-            )
+            return USAGE_SCHEDULE_UPDATE
         return _execute_schedule_cli_command(agent, parsed_command=schedule_update_command, raw_input=command)
 
-    if command.startswith("/schedule delete "):
+    if _matches_command_prefix(command, "/schedule delete"):
         schedule_delete_command = parse_schedule_delete_command(command)
         if schedule_delete_command is None:
-            return "用法: /schedule delete <id>"
+            return USAGE_SCHEDULE_DELETE
         return _execute_schedule_cli_command(agent, parsed_command=schedule_delete_command, raw_input=command)
 
-    if command.startswith("/schedule repeat "):
+    if _matches_command_prefix(command, "/schedule repeat"):
         schedule_repeat_command = parse_schedule_repeat_command(command)
         if schedule_repeat_command is None:
-            return "用法: /schedule repeat <id> <on|off>"
+            return USAGE_SCHEDULE_REPEAT
         return _execute_schedule_cli_command(agent, parsed_command=schedule_repeat_command, raw_input=command)
 
     return "未知命令。输入 /help 查看可用命令。"

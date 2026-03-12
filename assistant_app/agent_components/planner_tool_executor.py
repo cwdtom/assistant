@@ -70,53 +70,46 @@ class PlannerToolExecutor:
         internet_search_executor: InternetSearchRouteExecutor,
     ) -> dict[str, Callable[[str, RuntimePlannerActionPayload | None], PlannerObservation]]:
         json_routes: dict[str, JsonPlannerToolRoute] = {
-            "schedule": JsonPlannerToolRoute(
+            "schedule": self._build_json_route(
                 tool="schedule",
                 invalid_json_result="schedule 工具参数无效：需要 JSON 对象。",
+                executor=schedule_executor,
                 legacy_command_prefix="/schedule",
-                payload_executor=lambda payload, raw_input: schedule_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: schedule_executor(payload, raw_input),
             ),
-            "timer": JsonPlannerToolRoute(
+            "timer": self._build_json_route(
                 tool="timer",
                 invalid_json_result="timer 工具参数无效：需要 JSON 对象。",
-                payload_executor=lambda payload, raw_input: timer_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: timer_executor(payload, raw_input),
+                executor=timer_executor,
             ),
-            "history": JsonPlannerToolRoute(
+            "history": self._build_json_route(
                 tool="history",
                 invalid_json_result="history 工具参数无效：需要 JSON 对象。",
+                executor=history_executor,
                 legacy_command_prefix="/history",
-                payload_executor=lambda payload, raw_input: history_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: history_executor(payload, raw_input),
             ),
-            "history_search": JsonPlannerToolRoute(
+            "history_search": self._build_json_route(
                 tool="history_search",
                 invalid_json_result="history_search 工具参数无效：需要 JSON 对象。",
+                executor=history_search_executor,
                 legacy_command_prefix="/history search",
                 compat_action="search",
-                payload_executor=lambda payload, raw_input: history_search_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: history_search_executor(payload, raw_input),
             ),
-            "thoughts": JsonPlannerToolRoute(
+            "thoughts": self._build_json_route(
                 tool="thoughts",
                 invalid_json_result="thoughts 工具参数无效：需要 JSON 对象。",
+                executor=thoughts_executor,
                 legacy_command_prefix="/thoughts",
-                payload_executor=lambda payload, raw_input: thoughts_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: thoughts_executor(payload, raw_input),
             ),
-            "user_profile": JsonPlannerToolRoute(
+            "user_profile": self._build_json_route(
                 tool="user_profile",
                 invalid_json_result="user_profile 工具参数无效：需要 JSON 对象。",
-                payload_executor=lambda payload, raw_input: user_profile_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: user_profile_executor(payload, raw_input),
+                executor=user_profile_executor,
             ),
-            "system": JsonPlannerToolRoute(
+            "system": self._build_json_route(
                 tool="system",
                 invalid_json_result="system 工具参数无效：需要 JSON 对象。",
+                executor=system_executor,
                 legacy_command_prefix="/date",
-                payload_executor=lambda payload, raw_input: system_executor(payload, raw_input),
-                typed_payload_executor=lambda payload, raw_input: system_executor(payload, raw_input),
             ),
         }
         routes = {
@@ -125,3 +118,21 @@ class PlannerToolExecutor:
         }
         routes["internet_search"] = internet_search_executor
         return routes
+
+    @staticmethod
+    def _build_json_route(
+        *,
+        tool: str,
+        invalid_json_result: str,
+        executor: JsonRouteExecutor,
+        legacy_command_prefix: str | None = None,
+        compat_action: str | None = None,
+    ) -> JsonPlannerToolRoute:
+        return JsonPlannerToolRoute(
+            tool=tool,
+            invalid_json_result=invalid_json_result,
+            payload_executor=lambda payload, raw_input: executor(payload, raw_input),
+            typed_payload_executor=lambda payload, raw_input: executor(payload, raw_input),
+            legacy_command_prefix=legacy_command_prefix,
+            compat_action=compat_action,
+        )

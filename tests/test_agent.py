@@ -709,6 +709,38 @@ class AssistantAgentTest(unittest.TestCase):
         invalid = agent.handle_input("/history search --limit 2")
         self.assertIn("用法: /history search <关键词> [--limit <>=1>]", invalid)
 
+    def test_missing_args_commands_return_usage_instead_of_unknown(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+        command_cases = [
+            ("/history search", "用法: /history search <关键词> [--limit <>=1>]"),
+            ("/thoughts get", "用法: /thoughts get <id>"),
+            ("/thoughts update", "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]"),
+            ("/thoughts delete", "用法: /thoughts delete <id>"),
+            ("/schedule view", "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"),
+            ("/schedule get", "用法: /schedule get <id>"),
+            (
+                "/schedule update",
+                "用法: /schedule update <id> <YYYY-MM-DD HH:MM> <标题> "
+                "[--tag <标签>] "
+                "[--duration <>=1>] [--remind <YYYY-MM-DD HH:MM>] "
+                "[--interval <>=1>] [--times <-1|>=2>] [--remind-start <YYYY-MM-DD HH:MM>]",
+            ),
+            ("/schedule delete", "用法: /schedule delete <id>"),
+            ("/schedule repeat", "用法: /schedule repeat <id> <on|off>"),
+        ]
+
+        for command, expected in command_cases:
+            with self.subTest(command=command):
+                result = agent.handle_input(command)
+                self.assertEqual(result, expected)
+
+    def test_command_typo_does_not_match_known_prefix(self) -> None:
+        agent = AssistantAgent(db=self.db, llm_client=None)
+
+        result = agent.handle_input("/schedule addx 2026-02-20 09:30 站会")
+
+        self.assertEqual(result, "未知命令。输入 /help 查看可用命令。")
+
     def test_thoughts_crud_commands(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
 
@@ -3121,6 +3153,11 @@ class AssistantAgentTest(unittest.TestCase):
         )
 
         self.assertEqual(command_payload, compat_payload)
+
+    def test_parse_tool_command_payload_returns_none_for_typo_prefix(self) -> None:
+        payload = parse_tool_command_payload("/schedule addx 2026-03-01 09:30 项目同步")
+
+        self.assertIsNone(payload)
 
     def test_thoughts_tool_update_rejects_explicit_null_status(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=FakeLLMClient(), search_provider=FakeSearchProvider())

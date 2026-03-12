@@ -32,6 +32,11 @@ DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
 _INVALID_OPTION_VALUE = object()
 
 
+def _matches_command_prefix(command: str, prefix: str) -> bool:
+    normalized = command.strip()
+    return normalized == prefix or normalized.startswith(f"{prefix} ")
+
+
 def _parse_positive_int(raw: str) -> int | None:
     if not raw.isdigit():
         return None

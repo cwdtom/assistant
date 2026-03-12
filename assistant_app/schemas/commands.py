@@ -6,6 +6,7 @@ from pydantic import Field, ValidationError
 
 from assistant_app.agent_components.parsing_utils import (
     _INVALID_OPTION_VALUE,
+    _matches_command_prefix,
     _parse_history_list_limit,
     _parse_history_search_input,
     _parse_positive_int,
@@ -198,6 +199,12 @@ def _coerce_system_command_arguments(raw_payload: dict[str, object]) -> SystemDa
     return None
 
 
+def _strip_command_prefix(command: str, prefix: str) -> str:
+    if not _matches_command_prefix(command, prefix):
+        return command.strip()
+    return command[len(prefix) :].strip()
+
+
 def parse_history_list_command(command: str) -> HistoryListCommand | None:
     history_limit = _parse_history_list_limit(command)
     if history_limit is None:
@@ -212,7 +219,7 @@ def parse_history_list_command(command: str) -> HistoryListCommand | None:
 
 
 def parse_history_search_command(command: str) -> HistorySearchCommand | None:
-    raw = command.removeprefix("/history search ").strip()
+    raw = _strip_command_prefix(command, "/history search")
     parsed = _parse_history_search_input(raw)
     if parsed is None:
         return None
@@ -259,7 +266,7 @@ def parse_thoughts_list_command(command: str) -> ThoughtsListCommand | None:
 
 
 def parse_thoughts_get_command(command: str) -> ThoughtsGetCommand | None:
-    thought_id = _parse_positive_int(command.removeprefix("/thoughts get ").strip())
+    thought_id = _parse_positive_int(_strip_command_prefix(command, "/thoughts get"))
     if thought_id is None:
         return None
     arguments = _coerce_thoughts_command_arguments({"action": "get", "id": thought_id})
@@ -269,7 +276,7 @@ def parse_thoughts_get_command(command: str) -> ThoughtsGetCommand | None:
 
 
 def parse_thoughts_update_command(command: str) -> ThoughtsUpdateCommand | None:
-    parsed_update = _parse_thoughts_update_input(command.removeprefix("/thoughts update ").strip())
+    parsed_update = _parse_thoughts_update_input(_strip_command_prefix(command, "/thoughts update"))
     if parsed_update is None:
         return None
     thought_id, content, status, has_status = parsed_update
@@ -286,7 +293,7 @@ def parse_thoughts_update_command(command: str) -> ThoughtsUpdateCommand | None:
 
 
 def parse_thoughts_delete_command(command: str) -> ThoughtsDeleteCommand | None:
-    thought_id = _parse_positive_int(command.removeprefix("/thoughts delete ").strip())
+    thought_id = _parse_positive_int(_strip_command_prefix(command, "/thoughts delete"))
     if thought_id is None:
         return None
     arguments = _coerce_thoughts_command_arguments({"action": "delete", "id": thought_id})
@@ -297,35 +304,35 @@ def parse_thoughts_delete_command(command: str) -> ThoughtsDeleteCommand | None:
 
 def parse_tool_command_payload(command: str) -> RuntimePlannerActionPayload | None:
     parsed_command: CliCommandBase | None = None
-    if command == "/date" or command.startswith("/date "):
+    if _matches_command_prefix(command, "/date"):
         parsed_command = parse_date_command(command)
-    elif command == "/history list" or command.startswith("/history list "):
+    elif _matches_command_prefix(command, "/history list"):
         parsed_command = parse_history_list_command(command)
-    elif command.startswith("/history search "):
+    elif _matches_command_prefix(command, "/history search"):
         parsed_command = parse_history_search_command(command)
-    elif command == "/thoughts add" or command.startswith("/thoughts add "):
+    elif _matches_command_prefix(command, "/thoughts add"):
         parsed_command = parse_thoughts_add_command(command)
-    elif command == "/thoughts list" or command.startswith("/thoughts list "):
+    elif _matches_command_prefix(command, "/thoughts list"):
         parsed_command = parse_thoughts_list_command(command)
-    elif command.startswith("/thoughts get "):
+    elif _matches_command_prefix(command, "/thoughts get"):
         parsed_command = parse_thoughts_get_command(command)
-    elif command.startswith("/thoughts update "):
+    elif _matches_command_prefix(command, "/thoughts update"):
         parsed_command = parse_thoughts_update_command(command)
-    elif command.startswith("/thoughts delete "):
+    elif _matches_command_prefix(command, "/thoughts delete"):
         parsed_command = parse_thoughts_delete_command(command)
-    elif command == "/schedule list" or command.startswith("/schedule list "):
+    elif _matches_command_prefix(command, "/schedule list"):
         parsed_command = parse_schedule_list_command(command)
-    elif command.startswith("/schedule view "):
+    elif _matches_command_prefix(command, "/schedule view"):
         parsed_command = parse_schedule_view_command(command)
-    elif command.startswith("/schedule get "):
+    elif _matches_command_prefix(command, "/schedule get"):
         parsed_command = parse_schedule_get_command(command)
-    elif command.startswith("/schedule add"):
+    elif _matches_command_prefix(command, "/schedule add"):
         parsed_command = parse_schedule_add_command(command)
-    elif command.startswith("/schedule update "):
+    elif _matches_command_prefix(command, "/schedule update"):
         parsed_command = parse_schedule_update_command(command)
-    elif command.startswith("/schedule delete "):
+    elif _matches_command_prefix(command, "/schedule delete"):
         parsed_command = parse_schedule_delete_command(command)
-    elif command.startswith("/schedule repeat "):
+    elif _matches_command_prefix(command, "/schedule repeat"):
         parsed_command = parse_schedule_repeat_command(command)
     if parsed_command is None:
         return None
@@ -346,7 +353,7 @@ def parse_schedule_list_command(command: str) -> ScheduleListCommand | None:
 
 
 def parse_schedule_view_command(command: str) -> ScheduleViewCommand | None:
-    parsed_view = _parse_schedule_view_command_input(command.removeprefix("/schedule view ").strip())
+    parsed_view = _parse_schedule_view_command_input(_strip_command_prefix(command, "/schedule view"))
     if parsed_view is None:
         return None
     view_name, anchor, tag = parsed_view
@@ -362,7 +369,7 @@ def parse_schedule_view_command(command: str) -> ScheduleViewCommand | None:
 
 
 def parse_schedule_get_command(command: str) -> ScheduleGetCommand | None:
-    schedule_id = _parse_positive_int(command.removeprefix("/schedule get ").strip())
+    schedule_id = _parse_positive_int(_strip_command_prefix(command, "/schedule get"))
     if schedule_id is None:
         return None
     arguments = _coerce_schedule_command_arguments({"action": "get", "id": schedule_id})
@@ -406,7 +413,7 @@ def parse_schedule_add_command(command: str) -> ScheduleAddCommand | None:
 
 
 def parse_schedule_update_command(command: str) -> ScheduleUpdateCommand | None:
-    parsed_update = _parse_schedule_update_input(command.removeprefix("/schedule update ").strip())
+    parsed_update = _parse_schedule_update_input(_strip_command_prefix(command, "/schedule update"))
     if parsed_update is None:
         return None
     (
@@ -447,7 +454,7 @@ def parse_schedule_update_command(command: str) -> ScheduleUpdateCommand | None:
 
 
 def parse_schedule_delete_command(command: str) -> ScheduleDeleteCommand | None:
-    schedule_id = _parse_positive_int(command.removeprefix("/schedule delete ").strip())
+    schedule_id = _parse_positive_int(_strip_command_prefix(command, "/schedule delete"))
     if schedule_id is None:
         return None
     arguments = _coerce_schedule_command_arguments({"action": "delete", "id": schedule_id})
@@ -457,7 +464,7 @@ def parse_schedule_delete_command(command: str) -> ScheduleDeleteCommand | None:
 
 
 def parse_schedule_repeat_command(command: str) -> ScheduleRepeatCommand | None:
-    parsed_toggle = _parse_schedule_repeat_toggle_input(command.removeprefix("/schedule repeat ").strip())
+    parsed_toggle = _parse_schedule_repeat_toggle_input(_strip_command_prefix(command, "/schedule repeat"))
     if parsed_toggle is None:
         return None
     schedule_id, enabled = parsed_toggle
