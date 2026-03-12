@@ -9,7 +9,10 @@ from datetime import datetime
 from pathlib import Path
 
 from assistant_app.db import AssistantDB
-from assistant_app.scheduled_planner_task_service import ScheduledPlannerTaskService
+from assistant_app.scheduled_planner_task_service import (
+    SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX,
+    ScheduledPlannerTaskService,
+)
 
 
 class _MutableClock:
@@ -26,9 +29,11 @@ class _FakeAgent:
         *,
         response: tuple[str, bool] = ("任务已完成", True),
         raises: Exception | None = None,
+        should_send: bool | None = None,
     ) -> None:
         self._response = response
         self._raises = raises
+        self._should_send = should_send
         self.calls: list[tuple[str, str]] = []
 
     def handle_input_with_task_status(self, user_input: str, *, source: str = "interactive"):  # type: ignore[no-untyped-def]
@@ -36,6 +41,13 @@ class _FakeAgent:
         if self._raises is not None:
             raise self._raises
         return self._response
+
+    def get_recent_plan_step_trace(self, *, source: str = "interactive") -> dict[str, bool] | None:
+        if source != "scheduled":
+            return None
+        if self._should_send is None:
+            return None
+        return {"should_send": self._should_send}
 
 
 class _BlockingFakeAgent(_FakeAgent):
@@ -94,6 +106,10 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
             time.sleep(0.01)
         return bool(predicate())
 
+    @staticmethod
+    def _scheduled_prompt(prompt: str) -> str:
+        return f"{prompt}\n\n{SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX}"
+
     def test_poll_scheduled_initializes_missing_next_run_without_executing(self) -> None:
         self.db.add_scheduled_planner_task(
             task_name="daily-report",
@@ -142,7 +158,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         service.poll_scheduled()
         self.assertTrue(self._wait_until(lambda: len(agent.calls) == 1 and len(self.sent) == 1))
 
-        self.assertEqual(agent.calls, [("生成日报", "scheduled")])
+        self.assertEqual(agent.calls, [(self._scheduled_prompt("生成日报"), "scheduled")])
         self.assertEqual(self.sent, [("ou_target", "日报已生成")])
         stored = self.db.list_scheduled_planner_tasks()[0]
         self.assertEqual(stored.last_run_at, "2026-03-11 10:00:00")
@@ -270,7 +286,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
 
         service.poll_scheduled()
         self.assertTrue(agent.first_entered.wait(timeout=1.0))
-        self.assertEqual(agent.calls, [("任务一", "scheduled")])
+        self.assertEqual(agent.calls, [(self._scheduled_prompt("任务一"), "scheduled")])
         stored = self.db.list_scheduled_planner_tasks()
         self.assertEqual(stored[0].run_limit, 0)
         self.assertEqual(stored[0].last_run_at, "2026-03-11 10:00:00")
@@ -281,7 +297,7 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         self.clock.now = datetime(2026, 3, 11, 10, 2, 0)
         agent.release_first.set()
         self.assertTrue(self._wait_until(lambda: len(agent.calls) == 2))
-        self.assertEqual(agent.calls[1], ("任务二", "scheduled"))
+        self.assertEqual(agent.calls[1], (self._scheduled_prompt("任务二"), "scheduled"))
         self.assertTrue(self._wait_until(lambda: len(self.db.list_scheduled_planner_tasks()) == 2))
         time.sleep(0.05)
         self.assertEqual(len(agent.calls), 2)
@@ -346,6 +362,31 @@ class ScheduledPlannerTaskServiceTest(unittest.TestCase):
         self.assertTrue(self._wait_until(lambda: len(agent.calls) == 1))
         stored = self.db.list_scheduled_planner_tasks()[0]
         self.assertEqual(stored.run_limit, -1)
+        service.stop()
+
+    def test_poll_scheduled_skips_send_when_should_send_is_false(self) -> None:
+        self.db.add_scheduled_planner_task(
+            task_name="low-value-report",
+            cron_expr="*/5 * * * *",
+            prompt="低价值提醒",
+            run_limit=-1,
+            next_run_at="2026-03-11 09:55:00",
+        )
+        agent = _FakeAgent(response=("已生成提醒", True), should_send=False)
+        service = ScheduledPlannerTaskService(
+            db=self.db,
+            agent=agent,
+            logger=logging.getLogger("test.scheduled_task_service.should_send_false"),
+            target_open_id="ou_target",
+            send_text_to_open_id=lambda open_id, text: self.sent.append((open_id, text)),
+            clock=self.clock,
+            croniter_factory=_CronFactory({"*/5 * * * *": [datetime(2026, 3, 11, 10, 5, 0)]}),
+        )
+
+        service.poll_scheduled()
+        self.assertTrue(self._wait_until(lambda: len(agent.calls) == 1))
+        self.assertEqual(self.sent, [])
+        self.assertEqual(agent.calls[0], (self._scheduled_prompt("低价值提醒"), "scheduled"))
         service.stop()
 
 

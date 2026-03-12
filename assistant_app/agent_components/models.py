@@ -82,6 +82,7 @@ class InnerReActContext(StrictModel):
 class PendingPlanTask(StrictModel):
     goal: str = Field(min_length=1)
     source: Literal["interactive", "scheduled"] = "interactive"
+    should_send: bool = True
     outer_context: OuterPlanContext | None = None
     inner_context: InnerReActContext | None = None
     observations: list[PlannerObservation] = Field(default_factory=list)

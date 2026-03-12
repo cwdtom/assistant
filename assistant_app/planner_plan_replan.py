@@ -88,6 +88,7 @@ REPLAN_PROMPT = f"""
 输出 JSON 格式：
 {{
   "status": "replanned|done",
+  "should_send": true,
   "plan": [
     {{"task": "步骤1", "completed": true, "tools": ["history"]}},
     {{"task": "步骤2", "completed": false, "tools": ["schedule"]}}
@@ -96,11 +97,13 @@ REPLAN_PROMPT = f"""
 }}
 
 规则：
+- should_send 为可选布尔字段；缺省等价 true
 - status=replanned: 必须输出计划数组（至少 1 项）
 - status=replanned: plan 每项都必须包含 task/completed/tools
 - status=replanned: 至少要有 1 项 completed=false，表示仍有后续可执行任务
 - status=replanned: tools 仅填写该子任务可执行工具名，
   工具名可用：schedule|timer|internet_search|history|thoughts|user_profile|system
+- status=done: 可通过 should_send=false 表示“最终内容无需发送给用户”
 - 若基于当前 latest_plan/completed_subtasks/clarification_history 已能直接回答 goal，
   必须输出 status=done，并在 response 给出问题答案；不要继续扩写计划
 - status=done: 必须输出最终结论 response，不要再给后续计划

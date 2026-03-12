@@ -13,6 +13,12 @@ from assistant_app.feishu_adapter import split_semantic_messages
 from assistant_app.scheduled_task_cron import CronIterator, build_cron_iterator, compute_next_run_at_from_cron
 from assistant_app.schemas.scheduled_tasks import ScheduledPlannerTask
 
+SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX = (
+    "**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，"
+    "结合其他信息如果价值过低，should_send应该赋值为false**"
+)
+
+
 @dataclass(frozen=True)
 class _ScheduledPlannerQueueItem:
     task_id: int
@@ -192,9 +198,10 @@ class ScheduledPlannerTaskService:
                 },
             },
         )
+        scheduled_prompt = _append_scheduled_auto_trigger_prompt(item.prompt)
         try:
             response_text, task_completed = self._agent.handle_input_with_task_status(
-                item.prompt,
+                scheduled_prompt,
                 source="scheduled",
             )
         except Exception as exc:  # noqa: BLE001
@@ -210,6 +217,7 @@ class ScheduledPlannerTaskService:
                 },
             )
             return
+        should_send = self._read_scheduled_should_send(task_name=item.task_name)
 
         finished_at_dt = self._clock().replace(microsecond=0)
         finished_at = finished_at_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -243,6 +251,7 @@ class ScheduledPlannerTaskService:
         self._maybe_send_result(
             task_name=item.task_name,
             final_response=response,
+            should_send=should_send,
         )
 
     def _mark_task_queued(self, task_id: int) -> bool:
@@ -261,7 +270,21 @@ class ScheduledPlannerTaskService:
         *,
         task_name: str,
         final_response: str,
+        should_send: bool,
     ) -> None:
+        if not should_send:
+            self._logger.info(
+                "scheduled result send skipped",
+                extra={
+                    "event": "scheduled_result_send_skipped",
+                    "context": {
+                        "task_name": task_name,
+                        "reason": "should_send_false",
+                    },
+                },
+            )
+            return
+
         if not self._target_open_id:
             self._logger.info(
                 "scheduled result send skipped",
@@ -317,6 +340,40 @@ class ScheduledPlannerTaskService:
             },
         )
 
+    def _read_scheduled_should_send(self, *, task_name: str) -> bool:
+        getter = getattr(self._agent, "get_recent_plan_step_trace", None)
+        if not callable(getter):
+            return True
+        try:
+            snapshot = getter(source="scheduled")
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "failed to read scheduled should_send from trace",
+                extra={
+                    "event": "scheduled_result_should_send_read_failed",
+                    "context": {"task_name": task_name, "error": repr(exc)},
+                },
+            )
+            return True
+        if not isinstance(snapshot, dict):
+            return True
+        should_send = snapshot.get("should_send")
+        if should_send is None:
+            return True
+        if isinstance(should_send, bool):
+            return should_send
+        self._logger.warning(
+            "invalid scheduled should_send in trace",
+            extra={
+                "event": "scheduled_result_should_send_invalid",
+                "context": {
+                    "task_name": task_name,
+                    "should_send_type": type(should_send).__name__,
+                },
+            },
+        )
+        return True
+
     def _compute_next_run_at(self, *, task: ScheduledPlannerTask, now: datetime) -> str | None:
         return self._compute_next_run_at_from_parts(
             task_name=task.task_name,
@@ -354,6 +411,15 @@ class ScheduledPlannerTaskService:
 
 def _default_croniter_factory(expr: str, now: datetime) -> CronIterator:
     return build_cron_iterator(expr, now)
+
+
+def _append_scheduled_auto_trigger_prompt(prompt: str) -> str:
+    normalized = prompt.strip()
+    if not normalized:
+        return SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX
+    if normalized.endswith(SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX):
+        return normalized
+    return f"{normalized}\n\n{SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX}"
 
 
 def _run_limit_after_start(run_limit: int) -> int:

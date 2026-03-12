@@ -165,6 +165,7 @@ def run_replan_gate(agent: Any, task: Any) -> tuple[str, str | None]:
             session.emit_progress("重规划返回 done，但仍存在未完成步骤；已忽略该结果并继续执行剩余计划。")
             return "ok", None
         response = replan_decision.response.strip()
+        task.should_send = True if replan_decision.should_send is None else replan_decision.should_send
         task.needs_replan = False
         return "done", response or None
     updated_plan = [

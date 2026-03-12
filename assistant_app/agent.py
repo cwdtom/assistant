@@ -120,6 +120,7 @@ class AssistantAgent:
         self._pending_plan_task: PendingPlanTask | None = None
         self._last_task_completed = False
         self._skip_history_once = False
+        self._skip_history_reason: str | None = None
         self._interrupt_lock = threading.Lock()
         self._interrupt_requested = False
         self._handle_input_lock = threading.Lock()
@@ -269,16 +270,18 @@ class AssistantAgent:
                 return "请输入内容。输入 /help 查看可用命令。"
             self._last_task_completed = False
             self._skip_history_once = False
+            self._skip_history_reason = None
             self._clear_interrupt_request()
             self._latest_plan_step_trace_by_source[source] = None
             response = self._handle_input_text(text, source=source)
             if not text.startswith("/"):
                 if self._skip_history_once:
+                    skip_reason = self._skip_history_reason or "plan_ack_only"
                     self._app_logger.info(
                         "chat history skipped",
                         extra={
                             "event": "chat_history_skipped",
-                            "context": {"reason": "plan_ack_only"},
+                            "context": {"reason": skip_reason},
                         },
                     )
                 else:
@@ -443,8 +446,12 @@ class AssistantAgent:
             self._pending_plan_task = None
         self._record_plan_step_trace(task)
         self._last_task_completed = True
-        if task.plan_ack_only:
+        if task.source == "scheduled" and not task.should_send:
             self._skip_history_once = True
+            self._skip_history_reason = "scheduled_should_send_false"
+        elif task.plan_ack_only:
+            self._skip_history_once = True
+            self._skip_history_reason = "plan_ack_only"
             self._app_logger.info(
                 "plan ack-only completed",
                 extra={
@@ -481,6 +488,7 @@ class AssistantAgent:
         observations = task.observations[-self._plan_observation_history_limit :]
         return {
             "goal": outer.goal,
+            "should_send": task.should_send,
             "step_count": task.step_count,
             "latest_plan": [
                 {

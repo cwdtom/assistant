@@ -111,7 +111,7 @@ Optional runtime flags (all supported in `.env`):
 - `PROACTIVE_REMINDER_TARGET_OPEN_ID`: fixed Feishu target open_id for scheduled planner task final-result delivery; when non-empty and Feishu credentials are present, scheduled final message sending can be enabled
 
 ## Supplement: Detailed Behavior Notes (moved from README)
-- Every non-`/` input persists into `chat_history` with final assistant reply.
+- Every non-`/` input persists into `chat_history` with final assistant reply, except plan ack-only completion and scheduled tasks with `should_send=false`.
 - `/history search` supports fuzzy keyword search on user input and assistant output.
 - Thoughts supports minimal fields: `content` + `status` (`未完成|完成|删除`).
 - Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
@@ -138,9 +138,10 @@ Optional runtime flags (all supported in `.env`):
 - Entering and exiting CLI clears terminal history (scrollback).
 - Natural-language tasks show live progress for plan list, step status, tool calls, and outcomes.
 - Plan output schema is `status/goal/plan`; `goal` must be the expanded executable target and will overwrite the task goal used in subsequent plan/replan context.
+- Replan output accepts optional `should_send` (boolean); omitted means `true`.
 - Plan phase allows empty `plan` as ack-only completion (for short confirmation/thanks messages like `谢谢/好的/明白了`); this path skips thought/replan, skips `chat_history` persistence, and does not emit `任务目标：...` progress message.
 - Thought uses chat tool-calling with tools: `ask_user|done` + `schedule` group（展开为 `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`）+ `timer` group（展开为 `timer_add|timer_list|timer_get|timer_update|timer_delete`，用于管理通用定时 planner 任务，不是普通日程，且仅对交互式 thought 开放）+ `internet_search` group（展开为 `internet_search_tool|internet_search_fetch_url`）+ `history` group（展开为 `history_list|history_search`）+ `thoughts` group（展开为 `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`，用于记录碎片想法）+ `user_profile` group（展开为 `user_profile_get|user_profile_overwrite`，用于读取/整份覆盖画像文件；缺文件按空处理，overwrite 支持空字符串清空）+ `system` group（展开为 `system_date`，用于读取当前本地时间）.
-- Scheduled planner task source reuses the same plan/replan runtime but omits `ask_user` from thought tools; the final planner response still persists into `chat_history`.
+- Scheduled planner task source reuses the same plan/replan runtime but omits `ask_user` from thought tools; when replan final output is `should_send=false`, final planner response will skip `chat_history` persistence.
 - Thought 的标准契约要求 tool calls 传结构化参数；`/schedule` 等命令字符串仅保留兼容兜底，不作为主路径。
 - Plan/replan outer history now stores the raw user/assistant LLM payloads directly (no `plan_decision`/`replan_decision` wrapper).
 - 时间格式与单位约束通过 thought 的 tools schema 字段描述提供（不再单独注入 `time_unit_contract` 上下文）。
@@ -149,7 +150,8 @@ Optional runtime flags (all supported in `.env`):
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Feishu ack-only completion (task completed with empty response) sends ACK/DONE reactions only and skips text sending.
-- Scheduled planner task completion sends planner `final_response` directly when both `PROACTIVE_REMINDER_TARGET_OPEN_ID` and non-empty `final_response` are present; intermediate planner progress/subtask updates are never sent for this source.
+- Scheduled planner task execution appends `**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，结合其他信息如果价值过低，should_send应该赋值为false**` to the prompt before planner execution.
+- Scheduled planner task completion sends planner `final_response` directly when `should_send` is true (or omitted), `PROACTIVE_REMINDER_TARGET_OPEN_ID` is non-empty, and `final_response` is non-empty; intermediate planner progress/subtask updates are never sent for this source.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).

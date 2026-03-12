@@ -35,6 +35,7 @@ class PlannerSchemaTest(unittest.TestCase):
         self.assertIn("- user_profile：读取和覆盖用户画像文件", PLANNER_CAPABILITIES_TEXT)
         self.assertIn("schedule|timer|internet_search|history|thoughts|user_profile|system", PLAN_ONCE_PROMPT)
         self.assertIn("schedule|timer|internet_search|history|thoughts|user_profile|system", REPLAN_PROMPT)
+        self.assertIn("should_send", REPLAN_PROMPT)
 
     def test_planned_decision_normalizes_tools(self) -> None:
         decision = PlannedDecision.model_validate(
@@ -229,6 +230,7 @@ class PlannerSchemaTest(unittest.TestCase):
                 "decision": {
                     "status": "done",
                     "response": "已完成。",
+                    "should_send": False,
                 },
                 "raw_response": '{"status":"done"}',
             }
@@ -236,6 +238,7 @@ class PlannerSchemaTest(unittest.TestCase):
 
         self.assertIsInstance(payload.decision, ReplanDoneDecision)
         self.assertEqual(payload.decision.response, "已完成。")
+        self.assertFalse(payload.decision.should_send)
 
     def test_thought_response_payload_requires_assistant_message_for_tool_call_id(self) -> None:
         with self.assertRaises(ValidationError):
@@ -279,12 +282,38 @@ class PlannerSchemaTest(unittest.TestCase):
             {
                 "status": "DONE",
                 "response": "已完成。",
+                "should_send": True,
                 "plan": [{"task": "旧步骤", "completed": False, "tools": ["history"]}],
                 "unexpected": "value",
             }
         )
 
         self.assertIsInstance(decision, ReplanDoneDecision)
+        assert decision is not None
+        self.assertTrue(decision.should_send)
+
+    def test_normalize_replan_decision_defaults_should_send_to_none_when_omitted(self) -> None:
+        decision = normalize_replan_decision(
+            {
+                "status": "done",
+                "response": "已完成。",
+            }
+        )
+
+        self.assertIsInstance(decision, ReplanDoneDecision)
+        assert decision is not None
+        self.assertIsNone(decision.should_send)
+
+    def test_normalize_replan_decision_rejects_non_boolean_should_send(self) -> None:
+        decision = normalize_replan_decision(
+            {
+                "status": "done",
+                "response": "已完成。",
+                "should_send": "false",
+            }
+        )
+
+        self.assertIsNone(decision)
 
     def test_normalize_thought_decision_uses_first_plan_item_as_current_step(self) -> None:
         decision = normalize_thought_decision(

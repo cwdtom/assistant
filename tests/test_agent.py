@@ -112,13 +112,15 @@ def _planner_replanned(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _planner_done(response: str, plan: list[str] | None = None) -> str:
+def _planner_done(response: str, plan: list[str] | None = None, *, should_send: bool | None = None) -> str:
     payload = {
         "status": "done",
         "plan": plan or ["完成目标"],
         "next_action": None,
         "response": response,
     }
+    if should_send is not None:
+        payload["should_send"] = should_send
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -1884,6 +1886,26 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(turns[0].user_content, "后台任务：查看时间")
         self.assertEqual(turns[0].assistant_content, response)
 
+    def test_scheduled_source_should_send_false_skips_chat_history(self) -> None:
+        fake_llm = FakeToolCallingLLMClient(
+            responses=[
+                _planner_planned(["查看时间"]),
+                _planner_done("已获取时间。"),
+                _planner_done("全部完成。", should_send=False),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        response, completed = agent.handle_input_with_task_status("后台任务：查看时间", source="scheduled")
+
+        self.assertTrue(completed)
+        self.assertIn("全部完成", response)
+        self.assertEqual(self.db.recent_turns(limit=5), [])
+        trace = agent.get_recent_plan_step_trace(source="scheduled")
+        self.assertIsNotNone(trace)
+        assert trace is not None
+        self.assertFalse(bool(trace.get("should_send")))
+
     def test_scheduled_source_exposes_recent_plan_step_trace_snapshot(self) -> None:
         fake_llm = FakeToolCallingLLMClient(
             responses=[
@@ -1904,6 +1926,7 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIsNotNone(trace)
         assert trace is not None
         self.assertGreaterEqual(int(trace["step_count"]), 1)
+        self.assertTrue(bool(trace.get("should_send", True)))
         self.assertIsInstance(trace["latest_plan"], list)
         self.assertIsInstance(trace["completed_subtasks"], list)
         self.assertIsInstance(trace["observations"], list)

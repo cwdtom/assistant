@@ -151,6 +151,7 @@ python main.py
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
+- replan 输出可选 `should_send`（布尔）；缺失时按 `true` 处理；该字段用于后台定时任务最终发送判定
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
 - thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`timer` -> `timer_add|timer_list|timer_get|timer_update|timer_delete`（管理通用定时 planner 任务，不是普通日程，且仅对交互式 thought 开放），`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法），`user_profile` -> `user_profile_get|user_profile_overwrite`（读取/整份覆盖画像文件，缺文件视为空，overwrite 允许空字符串清空），`system` -> `system_date`（读取当前本地时间）；后台定时 planner 任务链路不会向 thought 暴露 `ask_user` 或 `timer`
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
@@ -165,7 +166,7 @@ python main.py
 - 若启用 Feishu，ack-only 空计划分支仅发送 ACK/DONE reaction，不发送正文文本
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 - 新建数据库时会自动初始化两条默认 `timer_tasks`：`每日用户侧写更新`（`0 4 * * *`）和 `每小时提醒`（`0 * * * *`）；两者初始 `run_limit=-1`，`next_run_at=NULL`（由 timer 启动后补齐）
-- 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，结果写入 `chat_history`，不补跑遗漏周期；任务完成后若 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 非空且 `final_response` 非空，会直接发送 planner `final_response`（不是单独决策文案），中间进度不会外发
+- 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，不补跑遗漏周期；执行前会在 prompt 末尾追加 `**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，结合其他信息如果价值过低，should_send应该赋值为false**`；任务完成后当 replan 最终输出 `should_send=false` 时，会跳过外发并跳过 `chat_history` 持久化；否则按默认 `should_send=true` 处理，且在 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 非空并且 `final_response` 非空时直接发送 planner `final_response`（不是单独决策文案），中间进度不会外发
 - 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；运行期仅保留本地日程变更到飞书的异步写同步，不再执行飞书->本地周期拉取
 
 ## Project Structure

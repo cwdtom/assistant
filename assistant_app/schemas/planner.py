@@ -41,6 +41,7 @@ class PlannedDecision(FrozenModel):
 class ReplannedDecision(FrozenModel):
     status: Literal["replanned"]
     plan: list[PlanStepPayload] = Field(min_length=1)
+    should_send: bool | None = None
 
     @model_validator(mode="after")
     def validate_pending_step(self) -> ReplannedDecision:
@@ -52,6 +53,7 @@ class ReplannedDecision(FrozenModel):
 class ReplanDoneDecision(FrozenModel):
     status: Literal["done"]
     response: str = Field(min_length=1)
+    should_send: bool | None = None
 
 
 class ThoughtNextAction(FrozenModel):
@@ -341,6 +343,7 @@ class ReplanDecisionCompatPayload(_CompatPayloadModel, FrozenModel):
     status: str
     response: str | None = None
     plan: list[Any] | None = None
+    should_send: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -351,6 +354,7 @@ class ReplanDecisionCompatPayload(_CompatPayloadModel, FrozenModel):
             "status": _normalize_required_text(value.get("status"), lowercase=True),
             "response": _normalize_optional_text(value.get("response")),
             "plan": [] if value.get("plan") is None else value.get("plan"),
+            "should_send": value.get("should_send"),
         }
 
 
@@ -512,12 +516,14 @@ def parse_replan_decision(raw_payload: Any) -> ReplanDecision | None:
                 {
                     "status": "done",
                     "response": compat_payload.response or "",
+                    "should_send": compat_payload.should_send,
                 }
             )
         return ReplannedDecision.model_validate(
             {
                 "status": compat_payload.status,
                 "plan": compat_payload.plan,
+                "should_send": compat_payload.should_send,
             }
         )
     except ValidationError:
