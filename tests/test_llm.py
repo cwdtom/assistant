@@ -21,7 +21,7 @@ class OpenAICompatibleClientTest(unittest.TestCase):
             result = client.reply(messages)
 
         self.assertEqual(result, "ok")
-        mock_create.assert_called_once_with(messages=messages, temperature=1.3)
+        mock_create.assert_called_once_with(messages=messages, temperature=0.5)
 
     def test_reply_uses_configured_temperature(self) -> None:
         client = OpenAICompatibleClient(

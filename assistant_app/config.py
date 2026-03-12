@@ -38,7 +38,7 @@ class AppConfig(BaseSettings):
     api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
     base_url: str = Field(default="https://api.deepseek.com", validation_alias="DEEPSEEK_BASE_URL")
     model: str = Field(default="deepseek-chat", validation_alias="DEEPSEEK_MODEL")
-    llm_temperature: float = Field(default=1.3, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
+    llm_temperature: float = Field(default=0.5, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
     db_path: str = Field(default="assistant.db", validation_alias="ASSISTANT_DB_PATH")
     user_profile_path: str = Field(default="", validation_alias="USER_PROFILE_PATH")
     llm_trace_log_path: str = Field(default="", validation_alias="LLM_TRACE_LOG_PATH")

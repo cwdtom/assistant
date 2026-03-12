@@ -72,7 +72,7 @@ Default model:
 - 配置读取优先级：若系统环境变量与 `.env` 同名，最终以 `.env` 中的值为准
 
 Optional runtime flags (all supported in `.env`):
-- `LLM_TEMPERATURE`: default temperature for general LLM calls (default `1.3`, range `0.0~2.0`)
+- `LLM_TEMPERATURE`: default temperature for general LLM calls (default `0.5`, range `0.0~2.0`)
 - `PLAN_REPLAN_MAX_STEPS`: max plan-loop steps (default `100`)
 - `PLAN_REPLAN_RETRY_COUNT`: planner JSON retry count (default `3`)
 - `PLAN_OBSERVATION_CHAR_LIMIT`: max chars per observation (default `10000`)
