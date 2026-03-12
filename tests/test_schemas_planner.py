@@ -15,7 +15,6 @@ from assistant_app.schemas.planner import (
     PlannedDecision,
     PlanPromptPayload,
     PlanResponsePayload,
-    ProactiveDoneArguments,
     ReplanDoneDecision,
     ReplannedDecision,
     ReplanResponsePayload,
@@ -251,12 +250,6 @@ class PlannerSchemaTest(unittest.TestCase):
                     },
                     "tool_call_id": "call_1",
                 }
-            )
-
-    def test_proactive_done_arguments_reject_non_bool_should_send(self) -> None:
-        with self.assertRaises(ValidationError):
-            ProactiveDoneArguments.model_validate(
-                {"should_send": 1, "message": "提醒"}
             )
 
     def test_normalize_plan_decision_ignores_extra_fields_for_compatibility(self) -> None:

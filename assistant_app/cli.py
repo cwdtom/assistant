@@ -280,7 +280,6 @@ def main() -> None:
     scheduled_planner_task_service = ScheduledPlannerTaskService(
         db=db,
         agent=agent,
-        llm_client=llm_client,
         logger=app_logger,
         target_open_id=config.proactive_reminder_target_open_id,
         send_text_to_open_id=_send_text_to_open_id,

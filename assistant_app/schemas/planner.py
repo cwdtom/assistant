@@ -306,11 +306,6 @@ class ThoughtObservationMessagePayload(FrozenModel):
     observation: ObservationPayload
 
 
-class ProactiveDoneArguments(FrozenModel):
-    should_send: bool = Field(description="是否应立即向用户发送主动提醒。")
-    message: str = Field(description="当 should_send=true 时发送给用户的提醒文案。")
-
-
 class _CompatPayloadModel:
     model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
 
@@ -582,7 +577,6 @@ __all__ = [
     "PlanResponsePayload",
     "PlanStepPayload",
     "PlannedDecision",
-    "ProactiveDoneArguments",
     "ReplanPromptPayload",
     "ReplanDecision",
     "ReplanDoneDecision",

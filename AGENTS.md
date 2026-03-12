@@ -149,7 +149,7 @@ Optional runtime flags (all supported in `.env`):
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Feishu ack-only completion (task completed with empty response) sends ACK/DONE reactions only and skips text sending.
-- Scheduled planner task completion triggers a second LLM decision with `should_send` only; decision context includes `result + user_profile + chat_history + plan_step_trace`, and if approved the sent text uses planner `final_response` (not an extra decision message). Intermediate planner progress/subtask updates are never sent for this source.
+- Scheduled planner task completion sends planner `final_response` directly when both `PROACTIVE_REMINDER_TARGET_OPEN_ID` and non-empty `final_response` are present; intermediate planner progress/subtask updates are never sent for this source.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).

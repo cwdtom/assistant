@@ -6,20 +6,12 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from assistant_app.agent import AssistantAgent
-from assistant_app.agent_components.planner_session import PLAN_HISTORY_LOOKBACK_HOURS, PLAN_HISTORY_MAX_TURNS
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import split_semantic_messages
-from assistant_app.scheduled_result_decision import ScheduledResultDecisionRunner
 from assistant_app.scheduled_task_cron import CronIterator, build_cron_iterator, compute_next_run_at_from_cron
-from assistant_app.schemas.scheduled_tasks import (
-    ScheduledPlannerTask,
-    ScheduledTaskResultDecisionPromptPayload,
-)
-
-DEFAULT_SCHEDULED_RESULT_DECISION_MAX_STEPS = 3
+from assistant_app.schemas.scheduled_tasks import ScheduledPlannerTask
 
 @dataclass(frozen=True)
 class _ScheduledPlannerQueueItem:
@@ -37,11 +29,9 @@ class ScheduledPlannerTaskService:
         *,
         db: AssistantDB,
         agent: AssistantAgent,
-        llm_client: Any | None,
         logger: logging.Logger,
         target_open_id: str,
         send_text_to_open_id: Callable[[str, str], None],
-        result_decision_max_steps: int = DEFAULT_SCHEDULED_RESULT_DECISION_MAX_STEPS,
         clock: Callable[[], datetime] | None = None,
         croniter_factory: Callable[[str, datetime], CronIterator] | None = None,
     ) -> None:
@@ -52,11 +42,6 @@ class ScheduledPlannerTaskService:
         self._send_text_to_open_id = send_text_to_open_id
         self._clock = clock or datetime.now
         self._croniter_factory = croniter_factory or _default_croniter_factory
-        self._result_decision_runner = ScheduledResultDecisionRunner(
-            llm_client=llm_client,
-            max_steps=result_decision_max_steps,
-            logger=logger,
-        )
         self._scan_lock = threading.Lock()
         self._worker_lock = threading.Lock()
         self._queued_task_ids_lock = threading.Lock()
@@ -257,11 +242,7 @@ class ScheduledPlannerTaskService:
         )
         self._maybe_send_result(
             task_name=item.task_name,
-            prompt=item.prompt,
             final_response=response,
-            started_at=started_at,
-            finished_at=finished_at,
-            finished_at_dt=finished_at_dt,
         )
 
     def _mark_task_queued(self, task_id: int) -> bool:
@@ -279,75 +260,8 @@ class ScheduledPlannerTaskService:
         self,
         *,
         task_name: str,
-        prompt: str,
         final_response: str,
-        started_at: str,
-        finished_at: str,
-        finished_at_dt: datetime,
     ) -> None:
-        started_at_dt = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S")
-        duration_seconds = max(int((finished_at_dt - started_at_dt).total_seconds()), 0)
-        decision_context_payload = ScheduledTaskResultDecisionPromptPayload(
-            result={
-                "task_name": task_name,
-                "prompt": prompt,
-                "final_response": final_response,
-                "started_at": started_at,
-                "finished_at": finished_at,
-                "duration_seconds": duration_seconds,
-            },
-            user_profile=self._read_user_profile_snapshot(),
-            chat_history=self._read_chat_history_snapshot(),
-            plan_step_trace=self._read_plan_step_trace_snapshot(),
-        )
-        try:
-            decision = self._result_decision_runner.run_once(context_payload=decision_context_payload)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "scheduled result decision failed",
-                extra={
-                    "event": "scheduled_result_decision_failed",
-                    "context": {
-                        "task_name": task_name,
-                        "reason": repr(exc),
-                    },
-                },
-            )
-            self._logger.info(
-                "scheduled result send skipped",
-                extra={
-                    "event": "scheduled_result_send_skipped",
-                    "context": {
-                        "task_name": task_name,
-                        "reason": "decision_runner_failed",
-                    },
-                },
-            )
-            return
-        if decision is None:
-            self._logger.info(
-                "scheduled result send skipped",
-                extra={
-                    "event": "scheduled_result_send_skipped",
-                    "context": {
-                        "task_name": task_name,
-                        "reason": "decision_unavailable",
-                    },
-                },
-            )
-            return
-        if not decision.should_send:
-            self._logger.info(
-                "scheduled result send skipped",
-                extra={
-                    "event": "scheduled_result_send_skipped",
-                    "context": {
-                        "task_name": task_name,
-                        "reason": "model_declined",
-                    },
-                },
-            )
-            return
         if not self._target_open_id:
             self._logger.info(
                 "scheduled result send skipped",
@@ -356,6 +270,19 @@ class ScheduledPlannerTaskService:
                     "context": {
                         "task_name": task_name,
                         "reason": "target_open_id_missing",
+                    },
+                },
+            )
+            return
+
+        if not final_response.strip():
+            self._logger.info(
+                "scheduled result send skipped",
+                extra={
+                    "event": "scheduled_result_send_skipped",
+                    "context": {
+                        "task_name": task_name,
+                        "reason": "empty_final_response",
                     },
                 },
             )
@@ -389,69 +316,6 @@ class ScheduledPlannerTaskService:
                 },
             },
         )
-
-    def _read_user_profile_snapshot(self) -> str | None:
-        getter = getattr(self._agent, "get_user_profile_snapshot", None)
-        if not callable(getter):
-            return None
-        try:
-            snapshot = getter()
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "scheduled result context read failed: user profile",
-                extra={
-                    "event": "scheduled_result_context_read_failed",
-                    "context": {"field": "user_profile", "error": repr(exc)},
-                },
-            )
-            return None
-        if snapshot is None:
-            return None
-        normalized = str(snapshot).strip()
-        return normalized or None
-
-    def _read_chat_history_snapshot(self) -> list[dict[str, str]]:
-        try:
-            turns = self._db.recent_turns_for_planner(
-                lookback_hours=PLAN_HISTORY_LOOKBACK_HOURS,
-                limit=PLAN_HISTORY_MAX_TURNS,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "scheduled result context read failed: chat history",
-                extra={
-                    "event": "scheduled_result_context_read_failed",
-                    "context": {"field": "chat_history", "error": repr(exc)},
-                },
-            )
-            return []
-        return [
-            {
-                "user_content": item.user_content,
-                "assistant_content": item.assistant_content,
-                "created_at": item.created_at,
-            }
-            for item in turns
-        ]
-
-    def _read_plan_step_trace_snapshot(self) -> dict[str, Any]:
-        getter = getattr(self._agent, "get_recent_plan_step_trace", None)
-        if not callable(getter):
-            return {}
-        try:
-            snapshot = getter(source="scheduled")
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "scheduled result context read failed: plan trace",
-                extra={
-                    "event": "scheduled_result_context_read_failed",
-                    "context": {"field": "plan_step_trace", "error": repr(exc)},
-                },
-            )
-            return {}
-        if not isinstance(snapshot, dict):
-            return {}
-        return snapshot
 
     def _compute_next_run_at(self, *, task: ScheduledPlannerTask, now: datetime) -> str | None:
         return self._compute_next_run_at_from_parts(
