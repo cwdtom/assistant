@@ -486,7 +486,13 @@
         font-family: "SF Mono", "Menlo", "Consolas", monospace;
         font-size: 0.9rem;
         line-height: 1.75;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
         overflow-x: auto;
+      }
+
+      .code-shell code {
+        font: inherit;
       }
 
       .side-stack {
@@ -915,8 +921,8 @@
               <div>
                 <h3>初始化环境</h3>
                 <p>推荐直接使用一键脚本创建虚拟环境、安装依赖并初始化数据库。</p>
-                <div class="code-shell">./scripts/bootstrap.sh
-./scripts/bootstrap.sh --dev</div>
+                <pre class="code-shell"><code>./scripts/bootstrap.sh
+./scripts/bootstrap.sh --dev</code></pre>
               </div>
             </article>
             <article class="step">
@@ -924,7 +930,7 @@
               <div>
                 <h3>填充配置</h3>
                 <p>复制 `.env.example` 为 `.env`，至少填入 `DEEPSEEK_API_KEY`。模型与运行开关都通过环境变量控制。</p>
-                <div class="code-shell">cp .env.example .env</div>
+                <pre class="code-shell"><code>cp .env.example .env</code></pre>
               </div>
             </article>
             <article class="step">
@@ -932,9 +938,9 @@
               <div>
                 <h3>启动 Assistant</h3>
                 <p>可以直接运行入口，也可以使用附带脚本管理后台实例、状态与重启。</p>
-                <div class="code-shell">python main.py
+                <pre class="code-shell"><code>python main.py
 ./scripts/assistant.sh start
-./scripts/assistant.sh status</div>
+./scripts/assistant.sh status</code></pre>
               </div>
             </article>
           </div>

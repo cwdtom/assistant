@@ -33,9 +33,7 @@ class GitHubPagesLandingTest(unittest.TestCase):
         self.assertIn('<html lang="zh-CN">', self.content)
         self.assertTrue(
             any(
-                tag == "meta"
-                and attrs.get("name") == "viewport"
-                and "width=device-width" in attrs.get("content", "")
+                tag == "meta" and attrs.get("name") == "viewport" and "width=device-width" in attrs.get("content", "")
                 for tag, attrs in self.parser.tags
             )
         )
@@ -44,9 +42,7 @@ class GitHubPagesLandingTest(unittest.TestCase):
         self.assertTrue({"hero", "capabilities", "quickstart", "commands", "repo"}.issubset(section_ids))
         self.assertTrue(
             any(
-                tag == "link"
-                and attrs.get("rel") == "icon"
-                and attrs.get("href", "").startswith("data:image/svg+xml,")
+                tag == "link" and attrs.get("rel") == "icon" and attrs.get("href", "").startswith("data:image/svg+xml,")
                 for tag, attrs in self.parser.tags
             )
         )
@@ -67,6 +63,13 @@ class GitHubPagesLandingTest(unittest.TestCase):
         self.assertIn("github_pages_landing_loaded", self.content)
         self.assertIn('page: "assistant-github-pages"', self.content)
         self.assertIn('theme: "apple-inspired"', self.content)
+
+    def test_quickstart_commands_use_preformatted_code_blocks(self) -> None:
+        code_shell_pre_count = sum(
+            1 for tag, attrs in self.parser.tags if tag == "pre" and "code-shell" in attrs.get("class", "").split()
+        )
+        self.assertGreaterEqual(code_shell_pre_count, 3)
+        self.assertNotIn('<div class="code-shell">', self.content)
 
 
 if __name__ == "__main__":

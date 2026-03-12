@@ -40,6 +40,8 @@
 ./scripts/fix_dirty_datetime_data.sh --db-path assistant.db
 ```
 
+若不使用 `bootstrap.sh`，可以按以下手动步骤执行：
+
 1. 创建虚拟环境并安装依赖
 ```bash
 python3 -m venv .venv
@@ -47,12 +49,10 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-Playwright 依赖安装（`internet_search_fetch_url` 需要）：
+Playwright 运行时准备（`internet_search_fetch_url` 需要）：
 ```bash
-# 安装 Python 包（若上一步已执行 pip install -e .，可跳过）
-pip install playwright
-
-# 安装 Chromium 浏览器内核（必需）
+# 若已执行 pip install -e .，playwright Python 包通常已随项目依赖安装
+# 仍需单独安装 Chromium 浏览器内核（必需）
 python -m playwright install chromium
 ```
 
