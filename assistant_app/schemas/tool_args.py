@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 
@@ -290,9 +290,20 @@ class UserProfileOverwriteArgs(ThoughtToolArgsBase):
         return str(value)
 
 
+InternetSearchFreshnessPreset = Literal["noLimit", "oneYear", "oneMonth", "oneWeek", "oneDay"]
+InternetSearchFreshnessDate = Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+InternetSearchFreshnessDateRange = Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")]
+InternetSearchFreshness = (
+    InternetSearchFreshnessPreset
+    | InternetSearchFreshnessDate
+    | InternetSearchFreshnessDateRange
+    | None
+)
+
+
 class InternetSearchArgs(ThoughtToolArgsBase):
     query: str = Field(min_length=1, description="搜索关键词文本。")
-    freshness: str | None = Field(
+    freshness: InternetSearchFreshness = Field(
         default=None,
         description=(
             "可选时效过滤。支持 noLimit|oneYear|oneMonth|oneWeek|oneDay，"
@@ -360,10 +371,30 @@ def validate_thought_tool_arguments(tool_name: str, arguments: dict[str, Any]) -
     model_cls = THOUGHT_TOOL_ARGS_MODELS.get(tool_name)
     if model_cls is None:
         return None
+    normalized_arguments = arguments
+    if tool_name == "internet_search_tool":
+        normalized_arguments = _normalize_internet_search_tool_arguments(arguments)
     try:
-        return model_cls.model_validate(arguments)
+        return model_cls.model_validate(normalized_arguments)
     except ValidationError:
-        return None
+        if tool_name != "internet_search_tool" or "freshness" not in normalized_arguments:
+            return None
+        # freshness is optional; when the model emits an unsupported value
+        # (for example `oneHour`), keep query execution available.
+        dropped_freshness = dict(normalized_arguments)
+        dropped_freshness.pop("freshness", None)
+        try:
+            return model_cls.model_validate(dropped_freshness)
+        except ValidationError:
+            return None
+
+
+def _normalize_internet_search_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(arguments)
+    action = normalized.get("action")
+    if action is not None and str(action).strip().lower() == "search":
+        normalized.pop("action", None)
+    return normalized
 
 
 __all__ = [

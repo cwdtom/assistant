@@ -60,6 +60,36 @@ class ToolSchemaTest(unittest.TestCase):
             {"timer_add", "timer_list", "timer_get", "timer_update", "timer_delete"}.issubset(timer_tool_names)
         )
 
+    def test_build_thought_tool_schemas_internet_search_freshness_has_enum_and_patterns(self) -> None:
+        schemas = build_thought_tool_schemas(["internet_search"])
+        search_schema = next(item for item in schemas if item["function"]["name"] == "internet_search_tool")
+
+        properties = search_schema["function"]["parameters"]["properties"]
+        freshness = properties["freshness"]
+        any_of = freshness.get("anyOf")
+        self.assertIsInstance(any_of, list)
+        assert isinstance(any_of, list)
+
+        enum_values: set[str] = set()
+        patterns: set[str] = set()
+        has_null = False
+        for item in any_of:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "null":
+                has_null = True
+            enum = item.get("enum")
+            if isinstance(enum, list):
+                enum_values.update(str(value) for value in enum)
+            pattern = item.get("pattern")
+            if isinstance(pattern, str):
+                patterns.add(pattern)
+
+        self.assertTrue(has_null)
+        self.assertEqual(enum_values, {"noLimit", "oneYear", "oneMonth", "oneWeek", "oneDay"})
+        self.assertIn(r"^\d{4}-\d{2}-\d{2}$", patterns)
+        self.assertIn(r"^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$", patterns)
+
     def test_build_thought_tool_schemas_expands_user_profile_group(self) -> None:
         schemas = build_thought_tool_schemas(["user_profile"])
         tool_names = {item["function"]["name"] for item in schemas}
@@ -106,6 +136,34 @@ class ToolSchemaTest(unittest.TestCase):
 
     def test_validate_thought_tool_arguments_rejects_invalid_fetch_url(self) -> None:
         parsed = validate_thought_tool_arguments('internet_search_fetch_url', {'url': 'ftp://example.com'})
+
+        self.assertIsNone(parsed)
+
+    def test_validate_thought_tool_arguments_internet_search_drops_invalid_freshness(self) -> None:
+        parsed = validate_thought_tool_arguments(
+            'internet_search_tool',
+            {'query': 'OpenAI Responses API', 'freshness': 'oneHour'},
+        )
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.model_dump(), {'current_step': '', 'query': 'OpenAI Responses API', 'freshness': None})
+
+    def test_validate_thought_tool_arguments_internet_search_accepts_legacy_search_action_field(self) -> None:
+        parsed = validate_thought_tool_arguments(
+            'internet_search_tool',
+            {'action': 'search', 'query': 'OpenAI Responses API'},
+        )
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.model_dump(), {'current_step': '', 'query': 'OpenAI Responses API', 'freshness': None})
+
+    def test_validate_thought_tool_arguments_internet_search_rejects_non_search_action_field(self) -> None:
+        parsed = validate_thought_tool_arguments(
+            'internet_search_tool',
+            {'action': 'fetch_url', 'query': 'OpenAI Responses API'},
+        )
 
         self.assertIsNone(parsed)
 
