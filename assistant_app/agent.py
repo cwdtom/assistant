@@ -124,6 +124,7 @@ class AssistantAgent:
         self._interrupt_lock = threading.Lock()
         self._interrupt_requested = False
         self._handle_input_lock = threading.Lock()
+        self._task_state_lock = threading.Lock()
 
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
@@ -272,7 +273,7 @@ class AssistantAgent:
             self._skip_history_once = False
             self._skip_history_reason = None
             self._clear_interrupt_request()
-            self._latest_plan_step_trace_by_source[source] = None
+            self._clear_recent_plan_step_trace(source=source)
             response = self._handle_input_text(text, source=source)
             if not text.startswith("/"):
                 if self._skip_history_once:
@@ -300,7 +301,7 @@ class AssistantAgent:
     def interrupt_current_task(self) -> None:
         with self._interrupt_lock:
             self._interrupt_requested = True
-        self._pending_plan_task = None
+        self._clear_pending_plan_task()
 
     def _handle_input_text(
         self,
@@ -311,18 +312,16 @@ class AssistantAgent:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
         if text == self._task_cancel_command:
-            if self._pending_plan_task is None:
+            if not self._clear_pending_plan_task():
                 return "当前没有进行中的任务。"
-            self._pending_plan_task = None
             return "已取消当前任务。"
         if text.startswith("/"):
             return self._handle_command(text)
         if not self.llm_client:
             return "当前未配置 LLM。请设置 DEEPSEEK_API_KEY 后重试。"
 
-        pending_task = self._pending_plan_task
-        if pending_task is not None and pending_task.source == source:
-            self._pending_plan_task = None
+        pending_task = self._take_pending_plan_task_for_source(source=source)
+        if pending_task is not None:
             outer = self._planner_session.outer_context(pending_task)
             outer.clarification_history.append(ClarificationTurn(role="user_answer", content=text))
             pending_task.awaiting_clarification = False
@@ -352,10 +351,7 @@ class AssistantAgent:
         *,
         source: Literal["interactive", "scheduled"] = "interactive",
     ) -> dict[str, Any] | None:
-        snapshot = self._latest_plan_step_trace_by_source.get(source)
-        if snapshot is None:
-            return None
-        return deepcopy(snapshot)
+        return self._get_recent_plan_step_trace_snapshot(source=source)
 
     def _serialize_user_profile(self) -> str | None:
         return self._planner_session.serialize_user_profile()
@@ -442,8 +438,7 @@ class AssistantAgent:
         )
 
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
-        if self._pending_plan_task is task:
-            self._pending_plan_task = None
+        self._clear_pending_plan_task_if(task)
         self._record_plan_step_trace(task)
         self._last_task_completed = True
         if task.source == "scheduled" and not task.should_send:
@@ -463,8 +458,7 @@ class AssistantAgent:
         return response
 
     def _finalize_interrupted_task(self, task: PendingPlanTask) -> str:
-        if self._pending_plan_task is task:
-            self._pending_plan_task = None
+        self._clear_pending_plan_task_if(task)
         self._planner_session.emit_progress("任务状态：已中断。")
         self._clear_interrupt_request()
         return "当前任务已被新消息中断，正在按最新输入重新执行。"
@@ -481,7 +475,7 @@ class AssistantAgent:
         return normalized or response
 
     def _record_plan_step_trace(self, task: PendingPlanTask) -> None:
-        self._latest_plan_step_trace_by_source[task.source] = self._build_plan_step_trace(task)
+        self._set_recent_plan_step_trace(source=task.source, trace=self._build_plan_step_trace(task))
 
     def _build_plan_step_trace(self, task: PendingPlanTask) -> dict[str, Any]:
         outer = self._planner_session.outer_context(task)
@@ -515,6 +509,61 @@ class AssistantAgent:
                 for item in observations
             ],
         }
+
+    def _set_pending_plan_task(self, task: PendingPlanTask | None) -> None:
+        with self._task_state_lock:
+            self._pending_plan_task = task
+
+    def _clear_pending_plan_task(self) -> bool:
+        with self._task_state_lock:
+            had_task = self._pending_plan_task is not None
+            self._pending_plan_task = None
+            return had_task
+
+    def _clear_pending_plan_task_if(self, task: PendingPlanTask) -> None:
+        with self._task_state_lock:
+            if self._pending_plan_task is task:
+                self._pending_plan_task = None
+
+    def _take_pending_plan_task_for_source(
+        self,
+        *,
+        source: Literal["interactive", "scheduled"],
+    ) -> PendingPlanTask | None:
+        with self._task_state_lock:
+            pending_task = self._pending_plan_task
+            if pending_task is None or pending_task.source != source:
+                return None
+            self._pending_plan_task = None
+            return pending_task
+
+    def _clear_recent_plan_step_trace(
+        self,
+        *,
+        source: Literal["interactive", "scheduled"],
+    ) -> None:
+        with self._task_state_lock:
+            self._latest_plan_step_trace_by_source[source] = None
+
+    def _set_recent_plan_step_trace(
+        self,
+        *,
+        source: Literal["interactive", "scheduled"],
+        trace: dict[str, Any],
+    ) -> None:
+        with self._task_state_lock:
+            self._latest_plan_step_trace_by_source[source] = trace
+
+    def _get_recent_plan_step_trace_snapshot(
+        self,
+        *,
+        source: Literal["interactive", "scheduled"],
+    ) -> dict[str, Any] | None:
+        with self._task_state_lock:
+            snapshot = self._latest_plan_step_trace_by_source.get(source)
+            if snapshot is None:
+                return None
+            return deepcopy(snapshot)
 
     def _raise_if_task_interrupted(self) -> None:
         if self._is_interrupt_requested():

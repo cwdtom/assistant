@@ -1336,13 +1336,13 @@ class AssistantDB:
         if not text:
             return []
         normalized_limit = max(limit, 1)
-        like_pattern = f"%{text}%"
+        like_pattern = f"%{_escape_sqlite_like_pattern(text)}%"
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT user_content, assistant_content, created_at
                 FROM chat_history
-                WHERE user_content LIKE ? OR assistant_content LIKE ?
+                WHERE user_content LIKE ? ESCAPE '\\' OR assistant_content LIKE ? ESCAPE '\\'
                 ORDER BY id DESC
                 LIMIT ?
                 """,
@@ -1366,6 +1366,10 @@ class AssistantDB:
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat(sep=" ")
+
+
+def _escape_sqlite_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _normalize_tag(tag: str | None) -> str:

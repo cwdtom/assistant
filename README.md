@@ -167,7 +167,7 @@ python main.py
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 - 新建数据库时会自动初始化两条默认 `timer_tasks`：`每日用户侧写更新`（`0 4 * * *`）和 `每小时提醒`（`0 * * * *`）；两者初始 `run_limit=-1`，`next_run_at=NULL`（由 timer 启动后补齐）
 - 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，不补跑遗漏周期；执行前会在 prompt 末尾追加 `**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，结合其他信息如果价值过低，should_send应该赋值为false**`；任务完成后当 replan 最终输出 `should_send=false` 时，会跳过外发并跳过 `chat_history` 持久化；否则按默认 `should_send=true` 处理，且在 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 非空并且 `final_response` 非空时直接发送 planner `final_response`（不是单独决策文案），中间进度不会外发
-- 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会先按窗口执行本地->飞书重建；运行期仅保留本地日程变更到飞书的异步写同步，不再执行飞书->本地周期拉取
+- 若启用 Feishu 日历同步：同一条日程按 `title + description(tag) + start + end`（分钟粒度）严格匹配；启动时会按窗口做增量对齐（保留已匹配事件、补齐缺失事件、清理多余事件），不再执行“先删后建”；运行期仅保留本地日程变更到飞书的异步写同步，不再执行飞书->本地周期拉取
 
 ## Project Structure
 - `assistant_app/cli.py`：交互入口与 CLI 主循环
@@ -196,10 +196,10 @@ python main.py
 - 常见排障字段：
   - `event`：事件名，例如 `llm_request`、`schedule_reminder_polling_disabled`、`user_profile_read_failed`
   - `context`：事件上下文（message_id、call_id、路径、统计值等）
-- Feishu 通道日志会记录消息内容文本：
-  - 入站：`feishu inbound message received`（含 `message_id/chat_id/open_id/text`）
-  - 出站：`feishu response sent`、`feishu subtask progress sent`、`feishu open_id response sent`（含 `text`）
-  - 若需避免记录消息正文，可将 `FEISHU_LOG_PATH` 置空禁用该 logger 输出
+- Feishu 通道日志会记录脱敏后的标识与文本预览：
+  - 入站：`feishu inbound message received`（含 `message_id/chat_id/open_id_mask/text_mask`）
+  - 出站：`feishu response sent`、`feishu subtask progress sent`、`feishu open_id response sent`（含 `text_mask`）
+  - 若需完全关闭 Feishu 日志，可将 `FEISHU_LOG_PATH` 置空禁用该 logger 输出
 - 快速排查示例：
 ```bash
 # 看最近 30 条日志

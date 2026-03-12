@@ -778,6 +778,18 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(assistant_hits), 1)
         self.assertEqual(assistant_hits[0].assistant_content, "你今天 10:00 有会议")
 
+    def test_search_turns_escapes_like_wildcards(self) -> None:
+        self.db.save_turn(user_content="literal 100% match", assistant_content="ok")
+        self.db.save_turn(user_content="literal 100X match", assistant_content="ok")
+        self.db.save_turn(user_content="underscore_a", assistant_content="ok")
+        self.db.save_turn(user_content="underscoreXa", assistant_content="ok")
+
+        percent_hits = self.db.search_turns("100%", limit=10)
+        self.assertEqual([item.user_content for item in percent_hits], ["literal 100% match"])
+
+        underscore_hits = self.db.search_turns("underscore_a", limit=10)
+        self.assertEqual([item.user_content for item in underscore_hits], ["underscore_a"])
+
     def test_recent_turns_for_planner_applies_lookback_and_limit(self) -> None:
         self.db.save_turn(user_content="两天前的问题", assistant_content="两天前的回答")
         conn = sqlite3.connect(self.db_path)

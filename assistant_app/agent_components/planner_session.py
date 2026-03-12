@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
@@ -71,15 +72,18 @@ class PlannerSession:
         self._plan_observation_history_limit = plan_observation_history_limit
         self._progress_callback = progress_callback
         self._subtask_result_callback = subtask_result_callback
+        self._callback_lock = threading.Lock()
         self._user_profile_max_chars = user_profile_max_chars
         self._project_root = project_root
         self._user_profile_path, self._user_profile_content = self._load_user_profile(user_profile_path)
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
-        self._progress_callback = callback
+        with self._callback_lock:
+            self._progress_callback = callback
 
     def set_subtask_result_callback(self, callback: Callable[[str], None] | None) -> None:
-        self._subtask_result_callback = callback
+        with self._callback_lock:
+            self._subtask_result_callback = callback
 
     @staticmethod
     def outer_context(task: PendingPlanTask) -> OuterPlanContext:
@@ -103,8 +107,10 @@ class PlannerSession:
     def ensure_inner_context(self, task: PendingPlanTask) -> InnerReActContext:
         if task.inner_context is None:
             task.inner_context = self.new_inner_context(task)
-        assert task.inner_context is not None
-        return task.inner_context
+        inner_context = task.inner_context
+        if inner_context is None:
+            raise RuntimeError("planner inner context initialization failed")
+        return inner_context
 
     @staticmethod
     def message_to_payload(
@@ -465,7 +471,7 @@ class PlannerSession:
     def notify_replan_continue_subtask_result(self, task: PendingPlanTask) -> None:
         if task.source != "interactive":
             return
-        callback = self._subtask_result_callback
+        callback = self._get_subtask_result_callback()
         if callback is None:
             return
         completed_subtasks = self.outer_context(task).completed_subtasks
@@ -490,7 +496,7 @@ class PlannerSession:
     def notify_plan_goal_result(self, task: PendingPlanTask, expanded_goal: str) -> None:
         if task.source != "interactive":
             return
-        callback = self._subtask_result_callback
+        callback = self._get_subtask_result_callback()
         if callback is None or task.plan_goal_notified:
             return
         goal_text = expanded_goal.strip()
@@ -564,10 +570,18 @@ class PlannerSession:
         )
 
     def emit_progress(self, message: str) -> None:
-        callback = self._progress_callback
+        callback = self._get_progress_callback()
         if callback is None:
             return
         callback(message)
+
+    def _get_progress_callback(self) -> Callable[[str], None] | None:
+        with self._callback_lock:
+            return self._progress_callback
+
+    def _get_subtask_result_callback(self) -> Callable[[str], None] | None:
+        with self._callback_lock:
+            return self._subtask_result_callback
 
     def emit_plan_progress(self, task: PendingPlanTask) -> None:
         outer = self.outer_context(task)

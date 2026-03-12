@@ -95,6 +95,26 @@ def convert_message_to_text(*, message_type: str, raw_content: str) -> str:
     return ""
 
 
+def _mask_open_id(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 3:
+        return "*" * len(text)
+    return f"{text[:2]}***{text[-1:]}"
+
+
+def _mask_log_text(value: str) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\n", "\\n").strip()
+    if not text:
+        return ""
+    if len(text) <= 3:
+        masked = "*" * len(text)
+    else:
+        masked = f"{text[:2]}***{text[-1:]}"
+    return f"{masked}(len={len(text)})"
+
+
 class FeishuEventProcessor:
     def __init__(
         self,
@@ -202,14 +222,14 @@ class FeishuEventProcessor:
                     "feishu subtask progress sent: message_id=%s chat_id=%s text=%s",
                     update.message_id,
                     update.chat_id,
-                    message,
+                    _mask_log_text(message),
                 )
             except Exception:  # noqa: BLE001
                 self._logger.warning(
                     "feishu subtask progress dropped: message_id=%s chat_id=%s text=%s",
                     update.message_id,
                     update.chat_id,
-                    message,
+                    _mask_log_text(message),
                     exc_info=True,
                 )
 
@@ -232,12 +252,12 @@ class FeishuEventProcessor:
             "feishu inbound message received: message_id=%s chat_id=%s open_id=%s text=%s",
             message.message_id,
             message.chat_id,
-            message.open_id,
-            message.text,
+            _mask_open_id(message.open_id),
+            _mask_log_text(message.text),
         )
 
         if self._allowed_open_ids and message.open_id not in self._allowed_open_ids:
-            self._logger.info("feishu event dropped: open_id not allowed")
+            self._logger.info("feishu event dropped: open_id not allowed open_id=%s", _mask_open_id(message.open_id))
             return
 
         if self._deduplicator.seen(message.message_id):
@@ -355,7 +375,7 @@ class FeishuEventProcessor:
                                     len(semantic_messages),
                                     chunk_index,
                                     len(chunks),
-                                    chunk,
+                                    _mask_log_text(chunk),
                                 )
                             if interrupted_while_sending:
                                 break
@@ -548,14 +568,14 @@ class FeishuLongConnectionRunner:
             send_text_to_open_id(request.open_id, request.text)
             self._logger.info(
                 "feishu open_id response sent: open_id=%s text=%s",
-                request.open_id,
-                request.text,
+                _mask_open_id(request.open_id),
+                _mask_log_text(request.text),
             )
         except Exception:  # noqa: BLE001
             self._logger.warning(
                 "feishu open_id response failed: open_id=%s text=%s",
-                request.open_id,
-                request.text,
+                _mask_open_id(request.open_id),
+                _mask_log_text(request.text),
                 exc_info=True,
             )
             raise

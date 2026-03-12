@@ -354,7 +354,12 @@ def _execute_typed_schedule_system_action(
     if tool_name == "schedule_add" and isinstance(arguments, ScheduleAddArgs):
         repeat_interval_minutes = arguments.interval_minutes
         if "times" in arguments.model_fields_set:
-            assert arguments.times is not None
+            if arguments.times is None:
+                return _schedule_observation(
+                    raw_input=raw_input,
+                    ok=False,
+                    result="schedule.add times 需为 -1 或 >=2 的整数。",
+                )
             repeat_times = arguments.times
         else:
             repeat_times = -1 if repeat_interval_minutes is not None else 1
@@ -387,7 +392,12 @@ def _execute_typed_schedule_system_action(
             arguments.interval_minutes if "interval_minutes" in arguments.model_fields_set else None
         )
         if "times" in arguments.model_fields_set:
-            assert arguments.times is not None
+            if arguments.times is None:
+                return _schedule_observation(
+                    raw_input=raw_input,
+                    ok=False,
+                    result="schedule.update times 需为 -1 或 >=2 的整数。",
+                )
             repeat_times = arguments.times
         else:
             repeat_times = -1 if repeat_interval_minutes is not None else 1
@@ -440,6 +450,12 @@ def _schedule_validation_error_text(*, payload: dict[str, Any], exc: ValidationE
         return message
     if action not in {"add", "list", "get", "view", "update", "delete", "repeat"}:
         return "schedule.action 非法。"
+    if message == "schedule.duration_minutes cannot be null":
+        return f"schedule.{action} duration_minutes 需为 >=1 的整数。"
+    if message == "schedule.interval_minutes cannot be null":
+        return f"schedule.{action} interval_minutes 需为 >=1 的整数。"
+    if message == "schedule.times cannot be null":
+        return f"schedule.{action} times 需为 -1 或 >=2 的整数。"
     if action == "view" and field_name == "view":
         return "schedule.view 需要合法 view(day|week|month)。"
     if action == "view" and (field_name == "anchor" or message == "anchor must match view"):

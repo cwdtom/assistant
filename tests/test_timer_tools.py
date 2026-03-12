@@ -119,6 +119,25 @@ class TimerToolTest(unittest.TestCase):
         self.assertEqual(stored.run_limit, 1)
         self.assertEqual(stored.next_run_at, "2026-03-11 09:00:00")
 
+    def test_timer_update_rejects_explicit_null_run_limit(self) -> None:
+        task_id = self.db.add_scheduled_planner_task(
+            task_name="daily-report",
+            cron_expr="0 9 * * *",
+            prompt="生成日报",
+            run_limit=1,
+            next_run_at="2026-03-11 09:00:00",
+        )
+
+        observation = execute_timer_system_action(
+            self.agent,
+            {"action": "update", "id": task_id, "run_limit": None},
+            raw_input='{"action":"update","id":1,"run_limit":null}',
+            clock=lambda: datetime(2026, 3, 11, 8, 0, 0),
+        )
+
+        self.assertFalse(observation.ok)
+        self.assertEqual(observation.result, "timer.update run_limit 必须为 -1 或 >= 0。")
+
     def test_timer_tool_logs_done_and_failed_events(self) -> None:
         with self.assertLogs("assistant_app.app", level="INFO") as captured_done:
             invalid = self.agent._execute_planner_tool(

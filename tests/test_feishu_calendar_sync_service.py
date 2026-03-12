@@ -212,6 +212,25 @@ class FeishuCalendarSyncServiceTest(unittest.TestCase):
         self.assertEqual(len(self.client.create_calls), 1)
         self.assertEqual(self.client.create_calls[0].get("summary"), "本地会议")
 
+    def test_run_startup_bootstrap_sync_keeps_matched_identity_without_rebuild(self) -> None:
+        self.db.add_schedule("本地会议", "2026-03-05 14:00", tag="work")
+        self.client.list_events_result = [
+            FeishuCalendarEvent(
+                event_id="evt_existing",
+                summary="本地会议",
+                description="work",
+                start_timestamp=int(datetime(2026, 3, 5, 14, 0).timestamp()),
+                end_timestamp=int(datetime(2026, 3, 5, 15, 0).timestamp()),
+                timezone="Asia/Shanghai",
+                create_timestamp=int(datetime(2026, 3, 1, 10, 0).timestamp()),
+            )
+        ]
+
+        self.service.run_startup_bootstrap_sync()
+
+        self.assertEqual(self.client.delete_calls, [])
+        self.assertEqual(self.client.create_calls, [])
+
     def test_window_bounds_are_day_aligned(self) -> None:
         start, end = self.service._window_bounds(datetime(2026, 3, 5, 12, 34, 56))
 

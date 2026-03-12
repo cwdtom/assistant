@@ -118,7 +118,49 @@ class FeishuCalendarSyncService:
         created_count = 0
         try:
             feishu_items = self._list_feishu_events(window_start=window_start, window_end=window_end)
+            event_candidates_by_identity: dict[_IdentityKey, list[FeishuCalendarEvent]] = {}
             for event in feishu_items:
+                identity = self._identity_from_event(event)
+                candidates = event_candidates_by_identity.setdefault(identity, [])
+                candidates.append(event)
+            for candidates in event_candidates_by_identity.values():
+                candidates.sort(key=self._feishu_event_order_key)
+
+            local_items = self._db.list_base_schedules_in_window(
+                window_start=window_start,
+                window_end=window_end,
+                max_window_days=self._window_max_days,
+            )
+            for item in local_items:
+                identity = self._identity_from_schedule(item)
+                candidates = event_candidates_by_identity.get(identity)
+                if candidates:
+                    matched = candidates.pop(0)
+                    remaining = len(candidates) + 1
+                    if remaining > 1:
+                        self._log_identity_ambiguous(
+                            action="bootstrap",
+                            schedule_id=item.id,
+                            identity=identity,
+                            source="feishu",
+                            candidate_count=remaining,
+                        )
+                    self._log_identity_match(
+                        action="bootstrap",
+                        schedule_id=item.id,
+                        identity=identity,
+                        event_id=matched.event_id,
+                        candidate_count=remaining,
+                    )
+                    continue
+                event_id = self._create_feishu_event_from_schedule(item)
+                if event_id is not None:
+                    created_count += 1
+
+            stale_events: list[FeishuCalendarEvent] = []
+            for candidates in event_candidates_by_identity.values():
+                stale_events.extend(candidates)
+            for event in stale_events:
                 try:
                     deleted = self._client.delete_event(
                         calendar_id=self._calendar_id,
@@ -136,16 +178,6 @@ class FeishuCalendarSyncService:
                             "context": {"event_id": event.event_id, "error": repr(exc)},
                         },
                     )
-
-            local_items = self._db.list_base_schedules_in_window(
-                window_start=window_start,
-                window_end=window_end,
-                max_window_days=self._window_max_days,
-            )
-            for item in local_items:
-                event_id = self._create_feishu_event_from_schedule(item)
-                if event_id is not None:
-                    created_count += 1
 
             self._logger.info(
                 "feishu calendar bootstrap done",

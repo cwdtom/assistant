@@ -18,6 +18,8 @@ from assistant_app.feishu_adapter import (
     FeishuEventProcessor,
     FeishuLongConnectionRunner,
     MessageDeduplicator,
+    _mask_log_text,
+    _mask_open_id,
     extract_text_message,
     parse_message_text,
     split_semantic_messages,
@@ -615,11 +617,14 @@ class FeishuAdapterTest(unittest.TestCase):
 
         processor.handle_event(payload)
 
+        masked_open_id = _mask_open_id("ou_1")
+        masked_inbound_text = _mask_log_text("请记录这条消息")
+        masked_sent_text = _mask_log_text("处理完成")
         inbound_log = (
             "feishu inbound message received: "
-            "message_id=om_log_1 chat_id=oc_1 open_id=ou_1 text=请记录这条消息"
+            f"message_id=om_log_1 chat_id=oc_1 open_id={masked_open_id} text={masked_inbound_text}"
         )
-        sent_log = "feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text=处理完成"
+        sent_log = f"feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text={masked_sent_text}"
         self._wait_until(
             lambda: any(
                 inbound_log in message
@@ -634,17 +639,25 @@ class FeishuAdapterTest(unittest.TestCase):
         messages = handler.messages()
         self.assertTrue(
             any(
-                "feishu inbound message received: message_id=om_log_1 chat_id=oc_1 open_id=ou_1 text=请记录这条消息"
+                (
+                    "feishu inbound message received: message_id=om_log_1 "
+                    f"chat_id=oc_1 open_id={masked_open_id} text={masked_inbound_text}"
+                )
                 in message
                 for message in messages
             )
         )
         self.assertTrue(
             any(
-                "feishu response sent: message_id=om_log_1 message=1/1 chunk=1/1 text=处理完成" in message
+                (
+                    "feishu response sent: message_id=om_log_1 "
+                    f"message=1/1 chunk=1/1 text={masked_sent_text}"
+                )
+                in message
                 for message in messages
             )
         )
+        self.assertFalse(any("open_id=ou_1 text=请记录这条消息" in message for message in messages))
         self.assertEqual(sent, [("oc_1", "处理完成")])
 
     def test_event_processor_retries_three_times_before_success(self) -> None:
@@ -1254,12 +1267,15 @@ class FeishuAdapterTest(unittest.TestCase):
         runner.send_open_id_text(open_id="ou_target", text="任务完成")
 
         self.assertEqual(sent, [("ou_target", "任务完成")])
+        masked_open_id = _mask_open_id("ou_target")
+        masked_text = _mask_log_text("任务完成")
         self.assertTrue(
             any(
-                "feishu open_id response sent: open_id=ou_target text=任务完成" in message
+                f"feishu open_id response sent: open_id={masked_open_id} text={masked_text}" in message
                 for message in handler.messages()
             )
         )
+        self.assertFalse(any("open_id=ou_target text=任务完成" in message for message in handler.messages()))
 
     def test_feishu_runner_send_open_id_text_requires_open_id_and_text(self) -> None:
         agent = _FakeAgent(response="ok")

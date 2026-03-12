@@ -45,7 +45,7 @@ def run_outer_plan_loop(agent: Any, task: Any) -> str:
                     return agent._finalize_planner_task(task, "")
 
             if task.awaiting_clarification:
-                agent._pending_plan_task = task
+                agent._set_pending_plan_task(task)
                 return "请确认：请补充必要信息。"
 
             replan_outcome, replan_response = run_replan_gate(agent, task)
@@ -63,7 +63,7 @@ def run_outer_plan_loop(agent: Any, task: Any) -> str:
             if loop_outcome == "replan":
                 continue
             if loop_outcome == "ask_user":
-                agent._pending_plan_task = task
+                agent._set_pending_plan_task(task)
                 return payload or "请确认：请补充必要信息。"
             if loop_outcome == "done_candidate":
                 task.needs_replan = True

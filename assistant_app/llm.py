@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import warnings
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -27,6 +28,8 @@ try:
 except Exception:
     # Keep startup resilient when urllib3 internals differ.
     pass
+
+_LEGACY_OPENAI_CLIENT_LOCK = threading.Lock()
 
 
 class LLMClient(Protocol):
@@ -82,17 +85,18 @@ class OpenAICompatibleClient:
             return self._build_tool_reply_payload(message)
 
         # Legacy openai SDK (e.g. 0.28.x)
-        openai.api_key = self.api_key
-        if hasattr(openai, "api_base"):
-            openai.api_base = self.base_url
+        with _LEGACY_OPENAI_CLIENT_LOCK:
+            openai.api_key = self.api_key
+            if hasattr(openai, "api_base"):
+                openai.api_base = self.base_url
 
-        resp = openai.ChatCompletion.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=self.temperature,
-        )
+            resp = openai.ChatCompletion.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=self.temperature,
+            )
         message = self._first_message_from_response(resp)
         return self._build_tool_reply_payload(message)
 
@@ -122,28 +126,28 @@ class OpenAICompatibleClient:
             return self._first_message_from_response(resp).content_text()
 
         # Legacy openai SDK (e.g. 0.28.x)
-        openai.api_key = self.api_key
-        if hasattr(openai, "api_base"):
-            openai.api_base = self.base_url
-
         kwargs = {}
         if response_format is not None:
             kwargs["response_format"] = response_format
+        with _LEGACY_OPENAI_CLIENT_LOCK:
+            openai.api_key = self.api_key
+            if hasattr(openai, "api_base"):
+                openai.api_base = self.base_url
 
-        try:
-            resp = openai.ChatCompletion.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                **kwargs,
-            )
-        except Exception:
-            # Some compatible providers / old SDKs don't support response_format.
-            resp = openai.ChatCompletion.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-            )
+            try:
+                resp = openai.ChatCompletion.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    **kwargs,
+                )
+            except Exception:
+                # Some compatible providers / old SDKs don't support response_format.
+                resp = openai.ChatCompletion.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                )
         return self._first_message_from_response(resp).content_text()
 
     @staticmethod

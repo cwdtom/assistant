@@ -437,6 +437,14 @@ def _timer_validation_error_text(
     issue = first_validation_issue(exc)
     if action not in {"add", "list", "get", "update", "delete"}:
         return "timer.action 非法。"
+    if issue.message == "timer.task_name cannot be null":
+        return "timer.update task_name 不能为空。"
+    if issue.message == "timer.prompt cannot be null":
+        return "timer.update prompt 不能为空。"
+    if issue.message == "timer.cron_expr cannot be null":
+        return "timer.update cron_expr 必须为合法 cron 表达式。"
+    if issue.message == "timer.run_limit cannot be null":
+        return "timer.update run_limit 必须为 -1 或 >= 0。"
     if issue.field == "id":
         return "timer.id 必须为正整数。"
     if issue.field == "task_name":

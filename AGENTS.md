@@ -125,6 +125,7 @@ Optional runtime flags (all supported in `.env`):
 - Optional Feishu calendar sync uses identity matching by `title + description(tag) + start + end` (minute-level); local writes still sync asynchronously, and updates perform old-identity cleanup + new-identity upsert.
 - Optional Feishu calendar startup bootstrap window is day-aligned by default:
   start=`(today-2d) 00:00:00`, end=`(today+5d) 23:59:59`.
+- Feishu calendar startup bootstrap performs identity-based incremental alignment (keep matched events, create missing events, delete stale extras); it no longer uses a full "delete then rebuild" pass.
 - Feishu calendar runtime no longer performs periodic Feishu->local reconcile; after startup bootstrap, only local schedule writes are synced to Feishu asynchronously.
 - Recurring schedule supports reminder start (`--remind-start`).
 - CLI starts a timer thread for periodic background tasks by default (`TIMER_ENABLED=off` to disable).
@@ -154,6 +155,7 @@ Optional runtime flags (all supported in `.env`):
 - Scheduled planner task completion sends planner `final_response` directly when `should_send` is true (or omitted), `PROACTIVE_REMINDER_TARGET_OPEN_ID` is non-empty, and `final_response` is non-empty; intermediate planner progress/subtask updates are never sent for this source.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.
 - Runtime logs use JSON Lines format; by default app/llm/feishu are consolidated into `app.log`.
+- Feishu message logs store masked open_id and masked text previews (not raw full text).
 - Bocha internet search requests always send `count=50` and enable reranker by default (`rerankModel=gte-rerank`, `rerankTopK=INTERNET_SEARCH_TOP_K`).
 - `internet_search` keyword search supports optional `freshness` filter (`noLimit|oneYear|oneMonth|oneWeek|oneDay|YYYY-MM-DD|YYYY-MM-DD..YYYY-MM-DD`); currently this filter is effective on Bocha provider path and ignored by Bing fallback.
 - `internet_search` no-result responses are treated as successful empty outcomes (`ok=true` with no-result message), not tool failures.

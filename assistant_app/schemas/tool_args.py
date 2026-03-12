@@ -59,7 +59,7 @@ class ScheduleAddArgs(ThoughtToolArgsBase):
     @classmethod
     def normalize_duration_minutes(cls, value: Any) -> int | None:
         if value is None:
-            raise ValueError("duration_minutes must be >= 1")
+            return None
         return ScheduleDurationValue.model_validate({"duration_minutes": value}).duration_minutes
 
     @field_validator("remind_at", "remind_start_time")
@@ -73,15 +73,25 @@ class ScheduleAddArgs(ThoughtToolArgsBase):
     @classmethod
     def normalize_interval_minutes(cls, value: Any) -> int | None:
         if value is None:
-            raise ValueError("interval_minutes must be >= 1")
+            return None
         return PositiveIntValue.model_validate({"value": value}).value
 
     @field_validator("times", mode="before")
     @classmethod
     def normalize_times(cls, value: Any) -> int | None:
         if value is None:
-            raise ValueError("times must be -1 or >= 2")
+            return None
         return ScheduleRepeatTimesValue.model_validate({"value": value}).value
+
+    @model_validator(mode="after")
+    def validate_explicit_null_fields(self) -> ScheduleAddArgs:
+        if "duration_minutes" in self.model_fields_set and self.duration_minutes is None:
+            raise ValueError("schedule.duration_minutes cannot be null")
+        if "interval_minutes" in self.model_fields_set and self.interval_minutes is None:
+            raise ValueError("schedule.interval_minutes cannot be null")
+        if "times" in self.model_fields_set and self.times is None:
+            raise ValueError("schedule.times cannot be null")
+        return self
 
 
 class ScheduleListArgs(ThoughtToolArgsBase):
@@ -186,7 +196,7 @@ class TimerUpdateArgs(ThoughtToolArgsBase):
     @classmethod
     def normalize_optional_text_fields(cls, value: Any, info: object) -> str | None:
         if value is None:
-            raise ValueError(f"{getattr(info, 'field_name', 'text')} cannot be null")
+            return None
         text = str(value).strip()
         if not text:
             raise ValueError(f"{getattr(info, 'field_name', 'text')} is required")
@@ -196,19 +206,27 @@ class TimerUpdateArgs(ThoughtToolArgsBase):
     @classmethod
     def normalize_optional_cron_expr(cls, value: Any) -> str | None:
         if value is None:
-            raise ValueError("cron_expr cannot be null")
+            return None
         return normalize_scheduled_task_cron_expr(value, field_name="cron_expr")
 
     @field_validator("run_limit", mode="before")
     @classmethod
     def normalize_optional_run_limit(cls, value: Any) -> int | None:
         if value is None:
-            raise ValueError("run_limit must be -1 or >= 0")
+            return None
         return normalize_scheduled_task_run_limit(value, field_name="run_limit")
 
     @model_validator(mode="after")
     def validate_has_mutation_fields(self) -> TimerUpdateArgs:
         mutable_fields = {"task_name", "cron_expr", "prompt", "run_limit"}
+        if "task_name" in self.model_fields_set and self.task_name is None:
+            raise ValueError("timer.task_name cannot be null")
+        if "cron_expr" in self.model_fields_set and self.cron_expr is None:
+            raise ValueError("timer.cron_expr cannot be null")
+        if "prompt" in self.model_fields_set and self.prompt is None:
+            raise ValueError("timer.prompt cannot be null")
+        if "run_limit" in self.model_fields_set and self.run_limit is None:
+            raise ValueError("timer.run_limit cannot be null")
         if not (mutable_fields & self.model_fields_set):
             raise ValueError("timer.update 至少需要提供一个可更新字段。")
         return self
