@@ -741,8 +741,7 @@ class AssistantDBTest(unittest.TestCase):
         self.assertFalse(self.db.soft_delete_thought(999))
 
     def test_recent_messages_in_chronological_order(self) -> None:
-        self.db.save_message("user", "hello")
-        self.db.save_message("assistant", "world")
+        self.db.save_turn(user_content="hello", assistant_content="world")
 
         messages = self.db.recent_messages(limit=2)
         self.assertEqual(messages[0].content, "hello")
@@ -768,60 +767,6 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(events[0]["user_content"], "你好")
         self.assertEqual(events[0]["assistant_content"], "你好")
         self.assertRegex(events[0]["created_at"], r"^\d{4}-\d{2}-\d{2} ")
-
-    def test_save_message_user_then_assistant_only_emits_insert_once(self) -> None:
-        events: list[dict[str, Any]] = []
-        self.db.set_chat_history_insert_handler(
-            lambda event: events.append(
-                {
-                    "chat_id": event.chat_id,
-                    "user_content": event.user_content,
-                    "assistant_content": event.assistant_content,
-                }
-            )
-        )
-
-        self.db.save_message("user", "hello")
-        self.db.save_message("assistant", "world")
-
-        self.assertEqual(
-            events,
-            [
-                {
-                    "chat_id": 1,
-                    "user_content": "hello",
-                    "assistant_content": "",
-                }
-            ],
-        )
-        turns = self.db.recent_turns(limit=1)
-        self.assertEqual(turns[0].user_content, "hello")
-        self.assertEqual(turns[0].assistant_content, "world")
-
-    def test_save_message_assistant_without_pending_user_emits_insert_event(self) -> None:
-        events: list[dict[str, Any]] = []
-        self.db.set_chat_history_insert_handler(
-            lambda event: events.append(
-                {
-                    "chat_id": event.chat_id,
-                    "user_content": event.user_content,
-                    "assistant_content": event.assistant_content,
-                }
-            )
-        )
-
-        self.db.save_message("assistant", "world")
-
-        self.assertEqual(
-            events,
-            [
-                {
-                    "chat_id": 1,
-                    "user_content": "",
-                    "assistant_content": "world",
-                }
-            ],
-        )
 
     def test_chat_history_insert_callback_failure_does_not_block_persistence(self) -> None:
         def _broken_handler(_: Any) -> None:

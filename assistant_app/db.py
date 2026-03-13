@@ -1256,46 +1256,6 @@ class AssistantDB:
             ).fetchall()
         return [_reminder_delivery_from_row(row) for row in rows]
 
-    def save_message(self, role: str, content: str) -> None:
-        normalized_role = role.strip().lower()
-        if normalized_role == "user":
-            self.save_turn(user_content=content, assistant_content="")
-            return
-        if normalized_role == "assistant":
-            timestamp = _now_iso()
-            inserted_id: int | None = None
-            with self._connect() as conn:
-                row = conn.execute(
-                    """
-                    SELECT id
-                    FROM chat_history
-                    WHERE assistant_content = ''
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
-                if row is not None:
-                    conn.execute(
-                        "UPDATE chat_history SET assistant_content = ? WHERE id = ?",
-                        (content, int(row["id"])),
-                    )
-                    return
-                inserted_id = self._insert_chat_history_turn(
-                    conn,
-                    user_content="",
-                    assistant_content=content,
-                    created_at=timestamp,
-                )
-            if inserted_id is not None:
-                self._emit_chat_history_insert(
-                    chat_id=inserted_id,
-                    user_content="",
-                    assistant_content=content,
-                    created_at=timestamp,
-                )
-            return
-        self.save_turn(user_content="", assistant_content=content)
-
     def save_turn(self, *, user_content: str, assistant_content: str) -> None:
         timestamp = _now_iso()
         inserted_id: int | None = None

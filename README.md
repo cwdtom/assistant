@@ -154,7 +154,7 @@ python main.py
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
 - replan 输出可选 `should_send`（布尔）；缺失时按 `true` 处理；该字段用于后台定时任务最终发送判定
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
-- 每次 `chat_history` 新增记录会触发异步 sqlite-rag 写入尝试（`uri=assistant://chat_history/{chat_id}`）；该链路为可选依赖，缺依赖或写入失败只记录日志，不阻断主流程；`UPDATE chat_history` 不触发该链路
+- 每次 `chat_history` 新增记录会触发异步 sqlite-rag 写入尝试（`uri=assistant://chat_history/{chat_id}`）；该链路为可选依赖，缺依赖或写入失败只记录日志，不阻断主流程
 - `/history search` 会优先尝试 sqlite-rag 检索；当 sqlite-rag 不可用、检索失败、结果为空、或命中无法映射到本地 `chat_history` 时，自动回退到现有 SQL 模糊查询；命令输出格式保持不变
 - thought 每轮仅暴露当前子任务可用 `tools`，并在运行时自动补齐 `ask_user`/`done`（若缺失才补，最终去重）；当子任务工具含 group 时，会展开为：`schedule` -> `schedule_add|schedule_list|schedule_view|schedule_get|schedule_update|schedule_delete|schedule_repeat`，`timer` -> `timer_add|timer_list|timer_get|timer_update|timer_delete`（管理通用定时 planner 任务，不是普通日程，且仅对交互式 thought 开放），`internet_search` -> `internet_search_tool|internet_search_fetch_url`，`history` -> `history_list|history_search`，`thoughts` -> `thoughts_add|thoughts_list|thoughts_get|thoughts_update|thoughts_delete`（记录碎片想法），`user_profile` -> `user_profile_get|user_profile_overwrite`（读取/整份覆盖画像文件，缺文件视为空，overwrite 允许空字符串清空），`system` -> `system_date`（读取当前本地时间）；后台定时 planner 任务链路不会向 thought 暴露 `ask_user` 或 `timer`
 - Bocha 搜索请求固定使用 `count=50`，并默认启用 rerank（`rerankModel=gte-rerank`，`rerankTopK=INTERNET_SEARCH_TOP_K`）
