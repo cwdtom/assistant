@@ -400,7 +400,7 @@ class ThoughtsAddCompatPayload(FrozenModel):
 
 class ThoughtsListCompatPayload(FrozenModel):
     action: Literal["list"]
-    status: Literal["未完成", "完成", "删除"] | None = None
+    status: Literal["pending", "completed", "deleted"] | None = None
 
     @field_validator("status", mode="before")
     @classmethod
@@ -410,7 +410,7 @@ class ThoughtsListCompatPayload(FrozenModel):
         try:
             return OptionalThoughtStatusValue.model_validate({"status": value}).status
         except ValidationError as exc:
-            raise ValueError("thoughts.list status 必须为 未完成|完成|删除。") from exc
+            raise ValueError("thoughts.list status must be pending|completed|deleted.") from exc
 
     def to_runtime_payload(self) -> RuntimePlannerActionPayload:
         arguments: dict[str, Any] = {}
@@ -446,7 +446,7 @@ class ThoughtsUpdateCompatPayload(FrozenModel):
     action: Literal["update"]
     id: int = Field(ge=1)
     content: str = Field(min_length=1)
-    status: Literal["未完成", "完成", "删除"] | None = None
+    status: Literal["pending", "completed", "deleted"] | None = None
 
     @field_validator("id", mode="before")
     @classmethod
@@ -468,11 +468,11 @@ class ThoughtsUpdateCompatPayload(FrozenModel):
     @classmethod
     def normalize_status(cls, value: Any) -> str | None:
         if value is None:
-            raise ValueError("thoughts.update status 必须为 未完成|完成|删除。")
+            raise ValueError("thoughts.update status must be pending|completed|deleted.")
         try:
             return OptionalThoughtStatusValue.model_validate({"status": value}).status
         except ValidationError as exc:
-            raise ValueError("thoughts.update status 必须为 未完成|完成|删除。") from exc
+            raise ValueError("thoughts.update status must be pending|completed|deleted.") from exc
 
     def to_runtime_payload(self) -> RuntimePlannerActionPayload:
         arguments: dict[str, Any] = {
@@ -675,17 +675,17 @@ def parse_json_object(raw_arguments: Any) -> dict[str, Any] | None:
     elif isinstance(raw_arguments, str):
         text = raw_arguments.strip()
         if not text:
-            return None
+            return {}
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
-            return None
+            return {}
     else:
-        return None
+        return {}
     try:
         return _JSON_OBJECT_ADAPTER.validate_python(payload)
     except ValidationError:
-        return None
+        return {}
 
 
 __all__ = [

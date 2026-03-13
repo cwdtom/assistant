@@ -81,6 +81,8 @@ DEFAULT_SCHEDULE_MAX_WINDOW_DAYS = 31
 DEFAULT_USER_PROFILE_MAX_CHARS = 6000
 UNKNOWN_APP_VERSION = "unknown"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PlannerSource = Literal["interactive", "scheduled"]
+PLANNER_SOURCES: tuple[PlannerSource, PlannerSource] = ("interactive", "scheduled")
 
 
 class AssistantAgent:
@@ -120,14 +122,26 @@ class AssistantAgent:
         if not self._app_logger.handlers:
             self._app_logger.addHandler(logging.NullHandler())
 
-        self._pending_plan_task: PendingPlanTask | None = None
-        self._last_task_completed = False
-        self._skip_history_once = False
-        self._skip_history_reason: str | None = None
         self._interrupt_lock = threading.Lock()
-        self._interrupt_requested = False
-        self._handle_input_lock = threading.Lock()
         self._task_state_lock = threading.Lock()
+        self._handle_input_locks_by_source: dict[PlannerSource, threading.Lock] = {
+            source: threading.Lock() for source in PLANNER_SOURCES
+        }
+        self._pending_plan_task_by_source: dict[PlannerSource, PendingPlanTask | None] = {
+            source: None for source in PLANNER_SOURCES
+        }
+        self._last_task_completed_by_source: dict[PlannerSource, bool] = {
+            source: False for source in PLANNER_SOURCES
+        }
+        self._skip_history_once_by_source: dict[PlannerSource, bool] = {
+            source: False for source in PLANNER_SOURCES
+        }
+        self._skip_history_reason_by_source: dict[PlannerSource, str | None] = {
+            source: None for source in PLANNER_SOURCES
+        }
+        self._interrupt_requested_by_source: dict[PlannerSource, bool] = {
+            source: False for source in PLANNER_SOURCES
+        }
 
         self._plan_replan_max_steps = max(plan_replan_max_steps, 1)
         self._plan_continuous_failure_limit = max(plan_continuous_failure_limit, 1)
@@ -139,9 +153,8 @@ class AssistantAgent:
         normalized_observation_history_limit = max(plan_observation_history_limit, 1)
         normalized_user_profile_max_chars = max(user_profile_max_chars, 1)
         self._plan_observation_history_limit = normalized_observation_history_limit
-        self._latest_plan_step_trace_by_source: dict[str, dict[str, Any] | None] = {
-            "interactive": None,
-            "scheduled": None,
+        self._latest_plan_step_trace_by_source: dict[PlannerSource, dict[str, Any] | None] = {
+            source: None for source in PLANNER_SOURCES
         }
 
         self._planner_session = PlannerSession(
@@ -266,56 +279,69 @@ class AssistantAgent:
         self,
         user_input: str,
         *,
-        source: Literal["interactive", "scheduled"] = "interactive",
+        source: PlannerSource = "interactive",
     ) -> str:
-        with self._handle_input_lock:
-            text = user_input.strip()
-            if not text:
-                return "请输入内容。输入 /help 查看可用命令。"
-            self._last_task_completed = False
-            self._skip_history_once = False
-            self._skip_history_reason = None
-            self._clear_interrupt_request()
-            self._clear_recent_plan_step_trace(source=source)
-            response = self._handle_input_text(text, source=source)
-            if not text.startswith("/"):
-                if self._skip_history_once:
-                    skip_reason = self._skip_history_reason or "plan_ack_only"
-                    self._app_logger.info(
-                        "chat history skipped",
-                        extra={
-                            "event": "chat_history_skipped",
-                            "context": {"reason": skip_reason},
-                        },
-                    )
-                else:
-                    self._save_turn_history(user_text=text, assistant_text=response)
-            return response
+        response, _task_completed = self._handle_input_for_source_with_status(
+            user_input,
+            source=source,
+        )
+        return response
 
     def handle_input_with_task_status(
         self,
         user_input: str,
         *,
-        source: Literal["interactive", "scheduled"] = "interactive",
+        source: PlannerSource = "interactive",
     ) -> tuple[str, bool]:
-        response = self.handle_input_for_source(user_input, source=source)
-        return response, self._last_task_completed
+        return self._handle_input_for_source_with_status(user_input, source=source)
 
-    def interrupt_current_task(self) -> None:
+    def _handle_input_for_source_with_status(
+        self,
+        user_input: str,
+        *,
+        source: PlannerSource = "interactive",
+    ) -> tuple[str, bool]:
+        lane_source = self._normalize_source(source)
+        with self._handle_input_locks_by_source[lane_source]:
+            text = user_input.strip()
+            if not text:
+                return "请输入内容。输入 /help 查看可用命令。", False
+            self._set_last_task_completed(source=lane_source, completed=False)
+            self._set_skip_history_state(source=lane_source, skip=False, reason=None)
+            self._clear_interrupt_request(source=lane_source)
+            self._clear_recent_plan_step_trace(source=lane_source)
+            response = self._handle_input_text(text, source=lane_source)
+            if not text.startswith("/"):
+                skip_history_once, skip_reason = self._get_skip_history_state(source=lane_source)
+                if skip_history_once:
+                    normalized_skip_reason = skip_reason or "plan_ack_only"
+                    self._app_logger.info(
+                        "chat history skipped",
+                        extra={
+                            "event": "chat_history_skipped",
+                            "context": {"reason": normalized_skip_reason, "source": lane_source},
+                        },
+                    )
+                else:
+                    self._save_turn_history(user_text=text, assistant_text=response)
+            return response, self._get_last_task_completed(source=lane_source)
+
+    def interrupt_current_task(self, *, source: PlannerSource = "interactive") -> None:
+        lane_source = self._normalize_source(source)
         with self._interrupt_lock:
-            self._interrupt_requested = True
-        self._clear_pending_plan_task()
+            self._interrupt_requested_by_source[lane_source] = True
+        self._clear_pending_plan_task(source=lane_source)
 
     def _handle_input_text(
         self,
         text: str,
         *,
-        source: Literal["interactive", "scheduled"] = "interactive",
+        source: PlannerSource = "interactive",
     ) -> str:
         if not text:
             return "请输入内容。输入 /help 查看可用命令。"
         if text == self._task_cancel_command:
-            if not self._clear_pending_plan_task():
+            if not self._clear_pending_plan_task(source=source):
                 return "当前没有进行中的任务。"
             return "已取消当前任务。"
         if text.startswith("/"):
@@ -412,9 +438,9 @@ class AssistantAgent:
     def get_recent_plan_step_trace(
         self,
         *,
-        source: Literal["interactive", "scheduled"] = "interactive",
+        source: PlannerSource = "interactive",
     ) -> dict[str, Any] | None:
-        return self._get_recent_plan_step_trace_snapshot(source=source)
+        return self._get_recent_plan_step_trace_snapshot(source=self._normalize_source(source))
 
     def _serialize_user_profile(self) -> str | None:
         return self._planner_session.serialize_user_profile()
@@ -503,18 +529,24 @@ class AssistantAgent:
     def _finalize_planner_task(self, task: PendingPlanTask, response: str) -> str:
         self._clear_pending_plan_task_if(task)
         self._record_plan_step_trace(task)
-        self._last_task_completed = True
+        self._set_last_task_completed(source=task.source, completed=True)
         if task.source == "scheduled" and not task.should_send:
-            self._skip_history_once = True
-            self._skip_history_reason = "scheduled_should_send_false"
+            self._set_skip_history_state(
+                source=task.source,
+                skip=True,
+                reason="scheduled_should_send_false",
+            )
         elif task.plan_ack_only:
-            self._skip_history_once = True
-            self._skip_history_reason = "plan_ack_only"
+            self._set_skip_history_state(
+                source=task.source,
+                skip=True,
+                reason="plan_ack_only",
+            )
             self._app_logger.info(
                 "plan ack-only completed",
                 extra={
                     "event": "plan_ack_only_completed",
-                    "context": {"goal": task.goal},
+                    "context": {"goal": task.goal, "source": task.source},
                 },
             )
         self._planner_session.emit_progress("任务状态：已完成。")
@@ -523,7 +555,7 @@ class AssistantAgent:
     def _finalize_interrupted_task(self, task: PendingPlanTask) -> str:
         self._clear_pending_plan_task_if(task)
         self._planner_session.emit_progress("任务状态：已中断。")
-        self._clear_interrupt_request()
+        self._clear_interrupt_request(source=task.source)
         return "当前任务已被新消息中断，正在按最新输入重新执行。"
 
     def _rewrite_final_response(self, response: str) -> str:
@@ -574,71 +606,110 @@ class AssistantAgent:
         }
 
     def _set_pending_plan_task(self, task: PendingPlanTask | None) -> None:
+        if task is None:
+            return
         with self._task_state_lock:
-            self._pending_plan_task = task
+            self._pending_plan_task_by_source[task.source] = task
 
-    def _clear_pending_plan_task(self) -> bool:
+    def _clear_pending_plan_task(self, *, source: PlannerSource) -> bool:
+        lane_source = self._normalize_source(source)
         with self._task_state_lock:
-            had_task = self._pending_plan_task is not None
-            self._pending_plan_task = None
+            had_task = self._pending_plan_task_by_source[lane_source] is not None
+            self._pending_plan_task_by_source[lane_source] = None
             return had_task
 
     def _clear_pending_plan_task_if(self, task: PendingPlanTask) -> None:
         with self._task_state_lock:
-            if self._pending_plan_task is task:
-                self._pending_plan_task = None
+            if self._pending_plan_task_by_source[task.source] is task:
+                self._pending_plan_task_by_source[task.source] = None
 
     def _take_pending_plan_task_for_source(
         self,
         *,
-        source: Literal["interactive", "scheduled"],
+        source: PlannerSource,
     ) -> PendingPlanTask | None:
+        lane_source = self._normalize_source(source)
         with self._task_state_lock:
-            pending_task = self._pending_plan_task
-            if pending_task is None or pending_task.source != source:
+            pending_task = self._pending_plan_task_by_source[lane_source]
+            if pending_task is None:
                 return None
-            self._pending_plan_task = None
+            self._pending_plan_task_by_source[lane_source] = None
             return pending_task
 
     def _clear_recent_plan_step_trace(
         self,
         *,
-        source: Literal["interactive", "scheduled"],
+        source: PlannerSource,
     ) -> None:
+        lane_source = self._normalize_source(source)
         with self._task_state_lock:
-            self._latest_plan_step_trace_by_source[source] = None
+            self._latest_plan_step_trace_by_source[lane_source] = None
 
     def _set_recent_plan_step_trace(
         self,
         *,
-        source: Literal["interactive", "scheduled"],
+        source: PlannerSource,
         trace: dict[str, Any],
     ) -> None:
+        lane_source = self._normalize_source(source)
         with self._task_state_lock:
-            self._latest_plan_step_trace_by_source[source] = trace
+            self._latest_plan_step_trace_by_source[lane_source] = trace
 
     def _get_recent_plan_step_trace_snapshot(
         self,
         *,
-        source: Literal["interactive", "scheduled"],
+        source: PlannerSource,
     ) -> dict[str, Any] | None:
+        lane_source = self._normalize_source(source)
         with self._task_state_lock:
-            snapshot = self._latest_plan_step_trace_by_source.get(source)
+            snapshot = self._latest_plan_step_trace_by_source.get(lane_source)
             if snapshot is None:
                 return None
             return deepcopy(snapshot)
 
-    def _raise_if_task_interrupted(self) -> None:
-        if self._is_interrupt_requested():
+    def _raise_if_task_interrupted(self, *, source: PlannerSource) -> None:
+        if self._is_interrupt_requested(source=source):
             raise TaskInterruptedError("task interrupted by newer input")
 
-    def _is_interrupt_requested(self) -> bool:
+    def _is_interrupt_requested(self, *, source: PlannerSource) -> bool:
+        lane_source = self._normalize_source(source)
         with self._interrupt_lock:
-            return self._interrupt_requested
+            return self._interrupt_requested_by_source[lane_source]
 
-    def _clear_interrupt_request(self) -> None:
+    def _clear_interrupt_request(self, *, source: PlannerSource) -> None:
+        lane_source = self._normalize_source(source)
         with self._interrupt_lock:
-            self._interrupt_requested = False
+            self._interrupt_requested_by_source[lane_source] = False
+
+    @staticmethod
+    def _normalize_source(source: str) -> PlannerSource:
+        if source == "scheduled":
+            return "scheduled"
+        return "interactive"
+
+    def _set_last_task_completed(self, *, source: PlannerSource, completed: bool) -> None:
+        lane_source = self._normalize_source(source)
+        with self._task_state_lock:
+            self._last_task_completed_by_source[lane_source] = completed
+
+    def _get_last_task_completed(self, *, source: PlannerSource) -> bool:
+        lane_source = self._normalize_source(source)
+        with self._task_state_lock:
+            return bool(self._last_task_completed_by_source[lane_source])
+
+    def _set_skip_history_state(self, *, source: PlannerSource, skip: bool, reason: str | None) -> None:
+        lane_source = self._normalize_source(source)
+        with self._task_state_lock:
+            self._skip_history_once_by_source[lane_source] = skip
+            self._skip_history_reason_by_source[lane_source] = reason
+
+    def _get_skip_history_state(self, *, source: PlannerSource) -> tuple[bool, str | None]:
+        lane_source = self._normalize_source(source)
+        with self._task_state_lock:
+            return (
+                bool(self._skip_history_once_by_source[lane_source]),
+                self._skip_history_reason_by_source[lane_source],
+            )
 
     def _handle_command(self, command: str) -> str:
         return _handle_command_impl(self, command)

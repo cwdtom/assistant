@@ -4,6 +4,7 @@ import json
 import unittest
 
 from assistant_app.planner_thought import build_thought_tool_schemas, normalize_thought_tool_call
+from assistant_app.runtime_actions import coerce_runtime_action_payload
 from assistant_app.schemas.tools import (
     InternetSearchArgs,
     InternetSearchFetchUrlArgs,
@@ -106,8 +107,43 @@ class ToolSchemaTest(unittest.TestCase):
 
         self.assertEqual(tool_names, {"done"})
 
-    def test_parse_json_object_rejects_non_object_json(self) -> None:
-        self.assertIsNone(parse_json_object('[1,2,3]'))
+    def test_parse_json_object_normalizes_non_object_json_to_empty_object(self) -> None:
+        self.assertEqual(parse_json_object('[1,2,3]'), {})
+
+    def test_parse_json_object_normalizes_invalid_json_to_empty_object(self) -> None:
+        self.assertEqual(parse_json_object('not-json'), {})
+
+    def test_coerce_runtime_action_payload_internet_search_fallback_still_works_for_text(self) -> None:
+        payload = coerce_runtime_action_payload(action_tool="internet_search", raw_input="OpenAI Responses API")
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(payload.tool_name, "internet_search_tool")
+        self.assertEqual(payload.arguments, InternetSearchArgs(query="OpenAI Responses API"))
+
+    def test_coerce_runtime_action_payload_internet_search_fallback_still_works_for_url(self) -> None:
+        payload = coerce_runtime_action_payload(action_tool="internet_search", raw_input="https://example.com")
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(payload.tool_name, "internet_search_fetch_url")
+        self.assertEqual(payload.arguments, InternetSearchFetchUrlArgs(url="https://example.com"))
+
+    def test_coerce_runtime_action_payload_internet_search_does_not_fallback_for_invalid_json_object(self) -> None:
+        payload = coerce_runtime_action_payload(
+            action_tool="internet_search",
+            raw_input='{"action":"search","query":""}',
+        )
+
+        self.assertIsNone(payload)
+
+    def test_coerce_runtime_action_payload_internet_search_does_not_fallback_for_empty_json_object(self) -> None:
+        payload = coerce_runtime_action_payload(
+            action_tool="internet_search",
+            raw_input="{}",
+        )
+
+        self.assertIsNone(payload)
 
     def test_validate_thought_tool_arguments_rejects_invalid_repeat_times(self) -> None:
         parsed = validate_thought_tool_arguments(
@@ -326,7 +362,7 @@ class ToolSchemaTest(unittest.TestCase):
                 'function': {
                     'name': 'thoughts_update',
                     'arguments': json.dumps(
-                        {'id': 3, 'content': '记得补周报', 'status': '完成'},
+                        {'id': 3, 'content': '记得补周报', 'status': 'completed'},
                         ensure_ascii=False,
                     ),
                 },
@@ -340,7 +376,7 @@ class ToolSchemaTest(unittest.TestCase):
         self.assertEqual(
             decision.next_action.payload,
             coerce_thoughts_action_payload(
-                {'action': 'update', 'id': 3, 'content': '记得补周报', 'status': '完成'}
+                {'action': 'update', 'id': 3, 'content': '记得补周报', 'status': 'completed'}
             ),
         )
 

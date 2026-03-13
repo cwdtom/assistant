@@ -257,7 +257,7 @@ def parse_thoughts_list_command(command: str) -> ThoughtsListCommand | None:
         return None
     raw_payload: dict[str, object] = {"action": "list"}
     if isinstance(parsed_status, str):
-        normalized_status = cast(Literal["未完成", "完成", "删除"], parsed_status)
+        normalized_status = cast(Literal["pending", "completed", "deleted"], parsed_status)
         raw_payload["status"] = normalized_status
     arguments = _coerce_thoughts_command_arguments(raw_payload)
     if not isinstance(arguments, ThoughtsListArgs):

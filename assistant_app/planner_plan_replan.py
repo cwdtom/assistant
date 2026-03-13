@@ -22,7 +22,7 @@ PLANNER_CAPABILITIES_TEXT = """
   - 关键字段：keyword（搜索关键词，可用于 search）、limit（返回条数上限，>=1）
 - thoughts：记录和管理碎片想法（新增、列表、详情、更新、软删除）
   - 常用动作：add/list/get/update/delete
-  - 关键字段：content（想法内容）、status（未完成|完成|删除）、id（想法 ID）
+  - 关键字段：content（想法内容）、status（pending|completed|deleted）、id（想法 ID）
 - user_profile：读取和覆盖用户画像文件
   - 常用动作：get/overwrite
   - 关键字段：content（整份画像文本；overwrite 时整文件覆盖，允许空字符串表示清空）

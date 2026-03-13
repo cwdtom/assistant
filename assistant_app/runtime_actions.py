@@ -175,7 +175,10 @@ def coerce_runtime_action_payload(*, action_tool: str, raw_input: str) -> Runtim
                     return coerce_internet_search_action_payload(parsed_payload)
                 return coerce_thoughts_action_payload(parsed_payload)
             except (ValidationError, ValueError):
-                return None
+                if action_tool != "internet_search":
+                    return None
+                if _looks_like_json_container(normalized_input):
+                    return None
         if action_tool == "internet_search":
             try:
                 return RuntimePlannerActionPayload(
@@ -203,6 +206,11 @@ def _payload_arguments(payload: RuntimePlannerActionPayload) -> dict[str, Any]:
     if isinstance(payload.arguments, dict):
         return dict(payload.arguments)
     return {}
+
+
+def _looks_like_json_container(text: str) -> bool:
+    stripped = text.lstrip()
+    return stripped.startswith("{") or stripped.startswith("[")
 
 
 __all__ = [

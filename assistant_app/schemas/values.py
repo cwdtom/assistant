@@ -18,7 +18,7 @@ from assistant_app.schemas.normalization import (
 
 DEFAULT_HISTORY_LIST_LIMIT = 20
 MAX_HISTORY_LIST_LIMIT = 200
-THOUGHT_STATUS_VALUES = ("未完成", "完成", "删除")
+THOUGHT_STATUS_VALUES = ("pending", "completed", "deleted")
 
 
 class DefaultTagValue(FrozenModel):
@@ -123,29 +123,29 @@ class ThoughtContentValue(FrozenModel):
 
 
 class ThoughtStatusValue(FrozenModel):
-    status: Literal["未完成", "完成", "删除"]
+    status: Literal["pending", "completed", "deleted"]
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> Literal["未完成", "完成", "删除"]:
+    def normalize_status(cls, value: Any) -> Literal["pending", "completed", "deleted"]:
         normalized = normalize_required_text(value, field_name="status")
         if normalized not in THOUGHT_STATUS_VALUES:
-            raise ValueError("status must be one of 未完成, 完成, 删除")
-        return cast(Literal["未完成", "完成", "删除"], normalized)
+            raise ValueError("status must be one of pending, completed, deleted")
+        return cast(Literal["pending", "completed", "deleted"], normalized)
 
 
 class OptionalThoughtStatusValue(FrozenModel):
-    status: Literal["未完成", "完成", "删除"] | None = None
+    status: Literal["pending", "completed", "deleted"] | None = None
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> Literal["未完成", "完成", "删除"] | None:
+    def normalize_status(cls, value: Any) -> Literal["pending", "completed", "deleted"] | None:
         normalized = normalize_optional_text(value)
         if normalized is None:
             return None
         if normalized not in THOUGHT_STATUS_VALUES:
-            raise ValueError("status must be one of 未完成, 完成, 删除")
-        return cast(Literal["未完成", "完成", "删除"], normalized)
+            raise ValueError("status must be one of pending, completed, deleted")
+        return cast(Literal["pending", "completed", "deleted"], normalized)
 
 
 class ScheduleViewAnchorValue(FrozenModel):

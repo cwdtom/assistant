@@ -31,11 +31,18 @@ class PlannerToolRoutingTest(unittest.TestCase):
         self.assertEqual(observation.tool, "history")
         self.assertIn("历史会话", observation.result)
 
-    def test_json_route_returns_configured_error_when_json_invalid(self) -> None:
+    def test_json_route_treats_invalid_json_as_empty_object_payload(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def _payload_executor(payload: dict[str, Any], raw_input: str) -> PlannerObservation:
+            captured["payload"] = dict(payload)
+            captured["raw_input"] = raw_input
+            return PlannerObservation(tool="schedule", input_text=raw_input, ok=False, result="schedule.action 非法。")
+
         route = JsonPlannerToolRoute(
             tool="schedule",
             invalid_json_result="schedule 工具参数无效：需要 JSON 对象。",
-            payload_executor=lambda _payload, _raw_input: self.fail("payload executor should not run"),
+            payload_executor=_payload_executor,
         )
         executor = build_json_planner_tool_executor(
             route=route,
@@ -45,7 +52,9 @@ class PlannerToolRoutingTest(unittest.TestCase):
         observation = executor("not-json")
 
         self.assertFalse(observation.ok)
-        self.assertEqual(observation.result, "schedule 工具参数无效：需要 JSON 对象。")
+        self.assertEqual(observation.result, "schedule.action 非法。")
+        self.assertEqual(captured["payload"], {})
+        self.assertEqual(captured["raw_input"], "not-json")
 
     def test_json_route_overrides_action_with_compat_action(self) -> None:
         captured: dict[str, Any] = {}
@@ -82,7 +91,7 @@ class PlannerToolRoutingTest(unittest.TestCase):
         )
         executor = build_json_planner_tool_executor(
             route=route,
-            command_executor=lambda _command: "想法列表(状态: 未完成|完成):\n| ID | 内容 |",
+            command_executor=lambda _command: "想法列表(状态: pending|completed):\n| ID | 内容 |",
         )
 
         observation = executor("/thoughts list")

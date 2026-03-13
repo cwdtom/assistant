@@ -40,15 +40,23 @@ from assistant_app.schemas.values import (
 )
 
 _UNSET = object()
-THOUGHT_STATUS_TODO = "未完成"
-THOUGHT_STATUS_DONE = "完成"
-THOUGHT_STATUS_DELETED = "删除"
+THOUGHT_STATUS_TODO = "pending"
+THOUGHT_STATUS_DONE = "completed"
+THOUGHT_STATUS_DELETED = "deleted"
+LEGACY_THOUGHT_STATUS_TODO = "未完成"
+LEGACY_THOUGHT_STATUS_DONE = "完成"
+LEGACY_THOUGHT_STATUS_DELETED = "删除"
 TIMER_TASKS_TABLE = "timer_tasks"
 LEGACY_TIMER_TASKS_TABLE = "scheduled_planner_tasks"
 THOUGHT_STATUS_VALUES = (
     THOUGHT_STATUS_TODO,
     THOUGHT_STATUS_DONE,
     THOUGHT_STATUS_DELETED,
+)
+LEGACY_THOUGHT_STATUS_VALUES = (
+    LEGACY_THOUGHT_STATUS_TODO,
+    LEGACY_THOUGHT_STATUS_DONE,
+    LEGACY_THOUGHT_STATUS_DELETED,
 )
 
 class AssistantDB:
@@ -136,12 +144,13 @@ class AssistantDB:
                 CREATE TABLE IF NOT EXISTS thoughts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     content TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('未完成', '完成', '删除')),
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'deleted')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
+            self._ensure_thoughts_status_schema(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reminder_deliveries (
@@ -503,6 +512,107 @@ class AssistantDB:
             conn.execute("DROP TABLE chat_history_old")
             return
         raise RuntimeError("chat_history schema is not supported")
+
+    def _ensure_thoughts_status_schema(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'thoughts'
+            """
+        ).fetchone()
+        sql_text = str(row["sql"]).lower() if row and row["sql"] else ""
+        expected_tokens = ("'pending'", "'completed'", "'deleted'")
+        schema_rebuilt = not all(token in sql_text for token in expected_tokens)
+        if schema_rebuilt:
+            self._recreate_thoughts_table_with_english_status(conn)
+
+        migrated_rows = conn.execute(
+            """
+            UPDATE thoughts
+            SET status = CASE status
+                WHEN ? THEN ?
+                WHEN ? THEN ?
+                WHEN ? THEN ?
+                ELSE status
+            END
+            WHERE status IN (?, ?, ?)
+            """,
+            (
+                LEGACY_THOUGHT_STATUS_TODO,
+                THOUGHT_STATUS_TODO,
+                LEGACY_THOUGHT_STATUS_DONE,
+                THOUGHT_STATUS_DONE,
+                LEGACY_THOUGHT_STATUS_DELETED,
+                THOUGHT_STATUS_DELETED,
+                *LEGACY_THOUGHT_STATUS_VALUES,
+            ),
+        ).rowcount
+
+        if schema_rebuilt or migrated_rows > 0:
+            self._logger.info(
+                "thoughts status migration completed",
+                extra={
+                    "event": "db_thoughts_status_migration",
+                    "context": {"schema_rebuilt": schema_rebuilt, "migrated_rows": migrated_rows},
+                },
+            )
+
+    def _recreate_thoughts_table_with_english_status(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(thoughts)").fetchall()
+        names = {row["name"] for row in columns}
+        required = {"id", "content", "status", "created_at", "updated_at"}
+        if not required.issubset(names):
+            raise RuntimeError("thoughts schema is not supported")
+
+        conn.execute("ALTER TABLE thoughts RENAME TO thoughts_old")
+        conn.execute(
+            """
+            CREATE TABLE thoughts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'deleted')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO thoughts (id, content, status, created_at, updated_at)
+            SELECT
+                id,
+                content,
+                CASE status
+                    WHEN ? THEN ?
+                    WHEN ? THEN ?
+                    WHEN ? THEN ?
+                    WHEN ? THEN ?
+                    WHEN ? THEN ?
+                    WHEN ? THEN ?
+                    ELSE ?
+                END,
+                created_at,
+                updated_at
+            FROM thoughts_old
+            """,
+            (
+                LEGACY_THOUGHT_STATUS_TODO,
+                THOUGHT_STATUS_TODO,
+                LEGACY_THOUGHT_STATUS_DONE,
+                THOUGHT_STATUS_DONE,
+                LEGACY_THOUGHT_STATUS_DELETED,
+                THOUGHT_STATUS_DELETED,
+                THOUGHT_STATUS_TODO,
+                THOUGHT_STATUS_TODO,
+                THOUGHT_STATUS_DONE,
+                THOUGHT_STATUS_DONE,
+                THOUGHT_STATUS_DELETED,
+                THOUGHT_STATUS_DELETED,
+                THOUGHT_STATUS_TODO,
+            ),
+        )
+        conn.execute("DROP TABLE thoughts_old")
 
     def add_schedule(
         self,

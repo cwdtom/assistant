@@ -220,5 +220,5 @@ def _done_observation(*, agent: Any, action: str, raw_input: str, result: str) -
 def _first_validation_error_message(exc: ValidationError) -> str:
     message = first_validation_issue(exc).message
     if message == "thoughts.status cannot be null":
-        return "thoughts.update status 必须为 未完成|完成|删除。"
+        return "thoughts.update status must be pending|completed|deleted."
     return message or "thoughts 工具参数无效。"

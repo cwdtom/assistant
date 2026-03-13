@@ -689,35 +689,35 @@ class AssistantDBTest(unittest.TestCase):
         self.assertIsNotNone(item)
         assert item is not None
         self.assertEqual(item.content, "记得买咖啡豆")
-        self.assertEqual(item.status, "未完成")
+        self.assertEqual(item.status, "pending")
 
-        updated = self.db.update_thought(thought_id, content="记得买咖啡豆和滤纸", status="完成")
+        updated = self.db.update_thought(thought_id, content="记得买咖啡豆和滤纸", status="completed")
         self.assertTrue(updated)
         changed = self.db.get_thought(thought_id)
         self.assertIsNotNone(changed)
         assert changed is not None
         self.assertEqual(changed.content, "记得买咖啡豆和滤纸")
-        self.assertEqual(changed.status, "完成")
+        self.assertEqual(changed.status, "completed")
 
         deleted = self.db.soft_delete_thought(thought_id)
         self.assertTrue(deleted)
         removed = self.db.get_thought(thought_id)
         self.assertIsNotNone(removed)
         assert removed is not None
-        self.assertEqual(removed.status, "删除")
+        self.assertEqual(removed.status, "deleted")
 
     def test_list_thoughts_default_excludes_deleted(self) -> None:
         a = self.db.add_thought("碎片想法A")
-        b = self.db.add_thought("碎片想法B", status="完成")
+        b = self.db.add_thought("碎片想法B", status="completed")
         c = self.db.add_thought("碎片想法C")
         self.assertEqual([a, b, c], [1, 2, 3])
         self.assertTrue(self.db.soft_delete_thought(c))
 
         default_items = self.db.list_thoughts()
         self.assertEqual([item.content for item in default_items], ["碎片想法A", "碎片想法B"])
-        self.assertTrue(all(item.status in {"未完成", "完成"} for item in default_items))
+        self.assertTrue(all(item.status in {"pending", "completed"} for item in default_items))
 
-        deleted_only = self.db.list_thoughts(status="删除")
+        deleted_only = self.db.list_thoughts(status="deleted")
         self.assertEqual(len(deleted_only), 1)
         self.assertEqual(deleted_only[0].content, "碎片想法C")
 
@@ -1195,6 +1195,83 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0].user_content, "老问题")
         self.assertEqual(turns[0].assistant_content, "老回答")
+
+    def test_legacy_thought_status_is_migrated_to_english_enum(self) -> None:
+        legacy_path = Path(self.tmp.name) / "legacy_thoughts.db"
+        conn = sqlite3.connect(str(legacy_path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE thoughts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('未完成', '完成', '删除')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.executemany(
+                "INSERT INTO thoughts (content, status, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                [
+                    ("旧数据A", "未完成", "2026-03-10 09:00:00", "2026-03-10 09:00:00"),
+                    ("旧数据B", "完成", "2026-03-10 09:01:00", "2026-03-10 09:01:00"),
+                    ("旧数据C", "删除", "2026-03-10 09:02:00", "2026-03-10 09:02:00"),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        stream = io.StringIO()
+        logger = logging.getLogger("test.db.thought_status_migration")
+        original_handlers = list(logger.handlers)
+        original_propagate = logger.propagate
+        try:
+            logger.handlers.clear()
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler(stream)
+            handler.setFormatter(JsonLinesFormatter())
+            logger.addHandler(handler)
+            migrated_db = AssistantDB(str(legacy_path), logger=logger)
+
+            default_items = migrated_db.list_thoughts()
+            self.assertEqual([item.content for item in default_items], ["旧数据A", "旧数据B"])
+            self.assertEqual([item.status for item in default_items], ["pending", "completed"])
+            deleted_only = migrated_db.list_thoughts(status="deleted")
+            self.assertEqual(len(deleted_only), 1)
+            self.assertEqual(deleted_only[0].status, "deleted")
+
+            with sqlite3.connect(str(legacy_path)) as verify_conn:
+                status_rows = verify_conn.execute("SELECT status FROM thoughts ORDER BY id ASC").fetchall()
+                table_sql = verify_conn.execute(
+                    """
+                    SELECT sql
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'thoughts'
+                    """
+                ).fetchone()[0]
+            self.assertEqual([row[0] for row in status_rows], ["pending", "completed", "deleted"])
+            self.assertIn("'pending'", str(table_sql))
+            self.assertIn("'completed'", str(table_sql))
+            self.assertIn("'deleted'", str(table_sql))
+            self.assertNotIn("未完成", str(table_sql))
+
+            records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+            migration_events = [item for item in records if item.get("event") == "db_thoughts_status_migration"]
+            self.assertEqual(len(migration_events), 1)
+            context = migration_events[0].get("context")
+            self.assertIsInstance(context, dict)
+            assert isinstance(context, dict)
+            self.assertEqual(context.get("schema_rebuilt"), True)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            for handler in original_handlers:
+                logger.addHandler(handler)
+            logger.propagate = original_propagate
 
 
 if __name__ == "__main__":

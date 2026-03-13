@@ -146,13 +146,14 @@ python main.py
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `--remind` 与 `--remind-start` 仍会持久化到本地数据库，但当前运行时不再自动轮询或投递本地日程提醒
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
-- `/thoughts list` 支持 `--status <未完成|完成|删除>`；默认仅展示 `未完成|完成`
-- `/thoughts delete` 为软删除（状态置为 `删除`）
+- `/thoughts list` 支持 `--status <pending|completed|deleted>`；默认仅展示 `pending|completed`
+- `/thoughts delete` 为软删除（状态置为 `deleted`）
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
 - replan 输出可选 `should_send`（布尔）；缺失时按 `true` 处理；该字段用于后台定时任务最终发送判定
+- 主流程 source 分为 `interactive` 与 `scheduled` 两类：两类可并行执行；同一 source 内仍按先到先执行（串行）；pending/cancel/interrupt/trace 等运行态按 source 隔离
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
 - 每次 `chat_history` 新增记录会触发异步 sqlite-rag 写入尝试（`uri=assistant://chat_history/{chat_id}`）；该链路为可选依赖，缺依赖或写入失败只记录日志，不阻断主流程
 - `/history search` 会优先尝试 sqlite-rag 检索；当 sqlite-rag 不可用、检索失败、结果为空、或命中无法映射到本地 `chat_history` 时，自动回退到现有 SQL 模糊查询；命令输出格式保持不变

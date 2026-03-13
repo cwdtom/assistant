@@ -19,7 +19,7 @@ from assistant_app.schemas.values import (
     ThoughtStatusValue,
 )
 
-THOUGHT_STATUS_TODO: Literal["未完成"] = "未完成"
+THOUGHT_STATUS_TODO: Literal["pending"] = "pending"
 
 
 class ScheduleCreateInput(FrozenModel):
@@ -146,7 +146,7 @@ class ScheduleUpdateInput(FrozenModel):
 
 class ThoughtCreateInput(FrozenModel):
     content: str = Field(min_length=1)
-    status: Literal["未完成", "完成", "删除"] = THOUGHT_STATUS_TODO
+    status: Literal["pending", "completed", "deleted"] = THOUGHT_STATUS_TODO
 
     @field_validator("content", mode="before")
     @classmethod
@@ -161,7 +161,7 @@ class ThoughtCreateInput(FrozenModel):
 
 class ThoughtUpdateInput(FrozenModel):
     content: str = Field(min_length=1)
-    status: Literal["未完成", "完成", "删除"] | None = None
+    status: Literal["pending", "completed", "deleted"] | None = None
 
     @field_validator("content", mode="before")
     @classmethod
@@ -172,7 +172,7 @@ class ThoughtUpdateInput(FrozenModel):
     @classmethod
     def normalize_status(cls, value: object) -> str | None:
         if value is None:
-            raise ValueError("status must be one of 未完成, 完成, 删除")
+            raise ValueError("status must be one of pending, completed, deleted")
         return OptionalThoughtStatusValue.model_validate({"status": value}).status
 
 

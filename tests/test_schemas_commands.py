@@ -84,13 +84,13 @@ class CommandSchemaTest(unittest.TestCase):
         self.assertIsNone(parse_thoughts_list_command("/thoughts list --status 进行中"))
 
     def test_parse_thoughts_update_command_tracks_status_presence(self) -> None:
-        command = parse_thoughts_update_command("/thoughts update 3 记得买牛奶 --status 完成")
+        command = parse_thoughts_update_command("/thoughts update 3 记得买牛奶 --status completed")
 
         self.assertIsNotNone(command)
         assert command is not None
         self.assertEqual(command.arguments.id, 3)
         self.assertEqual(command.arguments.content, "记得买牛奶")
-        self.assertEqual(command.arguments.status, "完成")
+        self.assertEqual(command.arguments.status, "completed")
         self.assertIn("status", command.arguments.model_fields_set)
 
 

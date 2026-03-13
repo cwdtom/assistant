@@ -553,6 +553,57 @@ class _BlockingLLMClient:
         return self._response
 
 
+class _LaneBlockingLLMClient:
+    def __init__(self, blocked_plan_goals: set[str] | None = None) -> None:
+        self._blocked_plan_goals = set(blocked_plan_goals or set())
+        self._plan_started_events: dict[str, threading.Event] = {}
+        self._plan_release_events: dict[str, threading.Event] = {}
+        self._lock = threading.Lock()
+
+    def _plan_started_event(self, goal: str) -> threading.Event:
+        with self._lock:
+            event = self._plan_started_events.get(goal)
+            if event is None:
+                event = threading.Event()
+                self._plan_started_events[goal] = event
+            return event
+
+    def _plan_release_event(self, goal: str) -> threading.Event:
+        with self._lock:
+            event = self._plan_release_events.get(goal)
+            if event is None:
+                event = threading.Event()
+                self._plan_release_events[goal] = event
+            return event
+
+    def wait_plan_started(self, goal: str, *, timeout: float = 1.0) -> bool:
+        return self._plan_started_event(goal).wait(timeout=timeout)
+
+    def release_plan(self, goal: str) -> None:
+        self._plan_release_event(goal).set()
+
+    @staticmethod
+    def _extract_goal(messages: list[dict[str, str]]) -> str:
+        if not messages:
+            return ""
+        payload = _try_parse_json(str(messages[-1].get("content", "")))
+        if not isinstance(payload, dict):
+            return ""
+        return str(payload.get("goal") or "").strip()
+
+    def reply(self, messages: list[dict[str, str]]) -> str:
+        phase = _extract_phase_from_messages(messages)
+        if phase == "plan":
+            goal = self._extract_goal(messages)
+            self._plan_started_event(goal).set()
+            if goal in self._blocked_plan_goals:
+                self._plan_release_event(goal).wait(timeout=2.0)
+            return _planner_planned(["执行步骤"])
+        if phase == "thought":
+            return _planner_done("步骤已完成。")
+        return _planner_done("最终完成。")
+
+
 class AssistantAgentTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -660,6 +711,97 @@ class AssistantAgentTest(unittest.TestCase):
         worker.join(timeout=2.0)
 
         self.assertIn("已被新消息中断", holder.get("response", ""))
+
+    def test_interrupt_current_task_default_source_does_not_interrupt_scheduled_task(self) -> None:
+        lane_llm = _LaneBlockingLLMClient(blocked_plan_goals={"scheduled-long-task"})
+        agent = AssistantAgent(db=self.db, llm_client=lane_llm)
+        holder: dict[str, str] = {}
+
+        def run_scheduled_task() -> None:
+            holder["response"] = agent.handle_input_for_source(
+                "scheduled-long-task",
+                source="scheduled",
+            )
+
+        worker = threading.Thread(target=run_scheduled_task)
+        worker.start()
+        self.assertTrue(lane_llm.wait_plan_started("scheduled-long-task", timeout=2.0))
+        agent.interrupt_current_task()
+        lane_llm.release_plan("scheduled-long-task")
+        worker.join(timeout=2.0)
+
+        self.assertIn("最终完成", holder.get("response", ""))
+
+    def test_different_sources_can_run_in_parallel(self) -> None:
+        lane_llm = _LaneBlockingLLMClient(blocked_plan_goals={"interactive-long-task"})
+        agent = AssistantAgent(db=self.db, llm_client=lane_llm)
+        interactive_result: dict[str, tuple[str, bool]] = {}
+        scheduled_result: dict[str, tuple[str, bool]] = {}
+        interactive_done = threading.Event()
+        scheduled_done = threading.Event()
+
+        def run_interactive_task() -> None:
+            interactive_result["value"] = agent.handle_input_with_task_status(
+                "interactive-long-task",
+                source="interactive",
+            )
+            interactive_done.set()
+
+        def run_scheduled_task() -> None:
+            scheduled_result["value"] = agent.handle_input_with_task_status(
+                "scheduled-fast-task",
+                source="scheduled",
+            )
+            scheduled_done.set()
+
+        interactive_worker = threading.Thread(target=run_interactive_task)
+        interactive_worker.start()
+        self.assertTrue(lane_llm.wait_plan_started("interactive-long-task", timeout=2.0))
+
+        scheduled_worker = threading.Thread(target=run_scheduled_task)
+        scheduled_worker.start()
+        self.assertTrue(scheduled_done.wait(timeout=1.0))
+        self.assertFalse(interactive_done.is_set())
+
+        lane_llm.release_plan("interactive-long-task")
+        interactive_worker.join(timeout=2.0)
+        scheduled_worker.join(timeout=2.0)
+
+        self.assertTrue(interactive_result["value"][1])
+        self.assertTrue(scheduled_result["value"][1])
+        self.assertIn("最终完成", interactive_result["value"][0])
+        self.assertIn("最终完成", scheduled_result["value"][0])
+
+    def test_same_source_requests_remain_serialized(self) -> None:
+        lane_llm = _LaneBlockingLLMClient(blocked_plan_goals={"interactive-first-task"})
+        agent = AssistantAgent(db=self.db, llm_client=lane_llm)
+        first_done = threading.Event()
+        second_done = threading.Event()
+
+        def run_first_task() -> None:
+            agent.handle_input_with_task_status("interactive-first-task", source="interactive")
+            first_done.set()
+
+        def run_second_task() -> None:
+            agent.handle_input_with_task_status("interactive-second-task", source="interactive")
+            second_done.set()
+
+        first_worker = threading.Thread(target=run_first_task)
+        first_worker.start()
+        self.assertTrue(lane_llm.wait_plan_started("interactive-first-task", timeout=2.0))
+
+        second_worker = threading.Thread(target=run_second_task)
+        second_worker.start()
+        self.assertFalse(lane_llm.wait_plan_started("interactive-second-task", timeout=0.2))
+        self.assertFalse(second_done.is_set())
+
+        lane_llm.release_plan("interactive-first-task")
+        self.assertTrue(lane_llm.wait_plan_started("interactive-second-task", timeout=1.0))
+
+        first_worker.join(timeout=2.0)
+        second_worker.join(timeout=2.0)
+        self.assertTrue(first_done.is_set())
+        self.assertTrue(second_done.is_set())
 
     def test_handle_input_persists_user_and_assistant_turns_for_non_slash_input(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -778,7 +920,7 @@ class AssistantAgentTest(unittest.TestCase):
         command_cases = [
             ("/history search", "用法: /history search <关键词> [--limit <>=1>]"),
             ("/thoughts get", "用法: /thoughts get <id>"),
-            ("/thoughts update", "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]"),
+            ("/thoughts update", "用法: /thoughts update <id> <内容> [--status <pending|completed|deleted>]"),
             ("/thoughts delete", "用法: /thoughts delete <id>"),
             ("/schedule view", "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"),
             ("/schedule get", "用法: /schedule get <id>"),
@@ -816,19 +958,19 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("记得买牛奶", added)
 
         listed = agent.handle_input("/thoughts list")
-        self.assertIn("想法列表(状态: 未完成|完成)", listed)
+        self.assertIn("想法列表(状态: pending|completed)", listed)
         self.assertIn("记得买牛奶", listed)
-        self.assertIn("| 未完成 |", listed)
+        self.assertIn("| pending |", listed)
 
         detail = agent.handle_input("/thoughts get 1")
         self.assertIn("想法详情:", detail)
-        self.assertIn("| 1 | 记得买牛奶 | 未完成 |", detail)
+        self.assertIn("| 1 | 记得买牛奶 | pending |", detail)
 
-        updated = agent.handle_input("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
-        self.assertIn("已更新想法 #1: 记得买牛奶和鸡蛋 [状态:完成]", updated)
+        updated = agent.handle_input("/thoughts update 1 记得买牛奶和鸡蛋 --status completed")
+        self.assertIn("已更新想法 #1: 记得买牛奶和鸡蛋 [状态:completed]", updated)
 
-        filtered_done = agent.handle_input("/thoughts list --status 完成")
-        self.assertIn("想法列表(状态: 完成)", filtered_done)
+        filtered_done = agent.handle_input("/thoughts list --status completed")
+        self.assertIn("想法列表(状态: completed)", filtered_done)
         self.assertIn("记得买牛奶和鸡蛋", filtered_done)
 
         deleted = agent.handle_input("/thoughts delete 1")
@@ -837,8 +979,8 @@ class AssistantAgentTest(unittest.TestCase):
         listed_after_delete = agent.handle_input("/thoughts list")
         self.assertEqual(listed_after_delete, "暂无想法记录。")
 
-        deleted_only = agent.handle_input("/thoughts list --status 删除")
-        self.assertIn("想法列表(状态: 删除)", deleted_only)
+        deleted_only = agent.handle_input("/thoughts list --status deleted")
+        self.assertIn("想法列表(状态: deleted)", deleted_only)
         self.assertIn("记得买牛奶和鸡蛋", deleted_only)
 
     def test_thoughts_commands_validate_usage(self) -> None:
@@ -848,13 +990,13 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(invalid_add, "用法: /thoughts add <内容>")
 
         invalid_list = agent.handle_input("/thoughts list --status 进行中")
-        self.assertEqual(invalid_list, "用法: /thoughts list [--status <未完成|完成|删除>]")
+        self.assertEqual(invalid_list, "用法: /thoughts list [--status <pending|completed|deleted>]")
 
         invalid_get = agent.handle_input("/thoughts get abc")
         self.assertEqual(invalid_get, "用法: /thoughts get <id>")
 
-        invalid_update = agent.handle_input("/thoughts update 1 --status 完成")
-        self.assertEqual(invalid_update, "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]")
+        invalid_update = agent.handle_input("/thoughts update 1 --status completed")
+        self.assertEqual(invalid_update, "用法: /thoughts update <id> <内容> [--status <pending|completed|deleted>]")
 
         invalid_delete = agent.handle_input("/thoughts delete nope")
         self.assertEqual(invalid_delete, "用法: /thoughts delete <id>")
@@ -2451,7 +2593,7 @@ class AssistantAgentTest(unittest.TestCase):
                 "function": {
                     "name": "thoughts_update",
                     "arguments": json.dumps(
-                        {"id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
+                        {"id": 2, "content": "记得补充周报并发给团队", "status": "completed"},
                         ensure_ascii=False,
                     ),
                 },
@@ -2464,7 +2606,7 @@ class AssistantAgentTest(unittest.TestCase):
         input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(
             input_payload,
-            {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
+            {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "completed"},
         )
         assert decision.next_action.payload is not None
         self.assertEqual(decision.next_action.payload.tool_name, "thoughts_update")
@@ -2902,6 +3044,24 @@ class AssistantAgentTest(unittest.TestCase):
         cancel = agent.handle_input("取消当前任务")
         self.assertEqual(cancel, "已取消当前任务。")
 
+    def test_cancel_pending_plan_task_is_isolated_by_source(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["确认目标日程", "执行更新"]),
+                _thought_ask_user("你想操作哪个日程 id？", current_step="确认目标日程"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        ask = agent.handle_input("帮我更新日程")
+        self.assertEqual(ask, "请确认：你想操作哪个日程 id？")
+
+        scheduled_cancel = agent.handle_input_for_source("取消当前任务", source="scheduled")
+        self.assertEqual(scheduled_cancel, "当前没有进行中的任务。")
+
+        interactive_cancel = agent.handle_input("取消当前任务")
+        self.assertEqual(interactive_cancel, "已取消当前任务。")
+
     def test_plan_contract_requires_tools_field(self) -> None:
         fake_llm = FakeLLMClient(
             responses=[
@@ -3012,7 +3172,7 @@ class AssistantAgentTest(unittest.TestCase):
             action_input='{"action":"list"}',
         )
         self.assertTrue(list_observation.ok)
-        self.assertIn("想法列表(状态: 未完成|完成)", list_observation.result)
+        self.assertIn("想法列表(状态: pending|completed)", list_observation.result)
 
         get_observation = agent._execute_planner_tool(
             action_tool="thoughts",
@@ -3023,10 +3183,10 @@ class AssistantAgentTest(unittest.TestCase):
 
         update_observation = agent._execute_planner_tool(
             action_tool="thoughts",
-            action_input='{"action":"update","id":1,"content":"记得买牛奶和鸡蛋","status":"完成"}',
+            action_input='{"action":"update","id":1,"content":"记得买牛奶和鸡蛋","status":"completed"}',
         )
         self.assertTrue(update_observation.ok)
-        self.assertIn("[状态:完成]", update_observation.result)
+        self.assertIn("[状态:completed]", update_observation.result)
 
         delete_observation = agent._execute_planner_tool(
             action_tool="thoughts",
@@ -3037,10 +3197,10 @@ class AssistantAgentTest(unittest.TestCase):
 
         deleted_list = agent._execute_planner_tool(
             action_tool="thoughts",
-            action_input='{"action":"list","status":"删除"}',
+            action_input='{"action":"list","status":"deleted"}',
         )
         self.assertTrue(deleted_list.ok)
-        self.assertIn("想法列表(状态: 删除)", deleted_list.result)
+        self.assertIn("想法列表(状态: deleted)", deleted_list.result)
         self.assertIn("记得买牛奶和鸡蛋", deleted_list.result)
 
     def test_thoughts_tool_logs_done_and_failed_events(self) -> None:
@@ -3052,7 +3212,7 @@ class AssistantAgentTest(unittest.TestCase):
                 action_input='{"action":"list","status":"进行中"}',
             )
         self.assertFalse(invalid_status.ok)
-        self.assertIn("status 必须为 未完成|完成|删除", invalid_status.result)
+        self.assertIn("pending|completed|deleted", invalid_status.result)
         merged_done = "\n".join(captured_done.output)
         self.assertIn("planner_tool_thoughts_start", merged_done)
         self.assertIn("planner_tool_thoughts_done", merged_done)
@@ -3079,17 +3239,17 @@ class AssistantAgentTest(unittest.TestCase):
                 action_input="not-json",
                 action_payload=RuntimePlannerActionPayload(
                     tool_name="thoughts_update",
-                    arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="完成"),
+                    arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="completed"),
                 ),
             )
 
         self.assertTrue(observation.ok)
-        self.assertIn("[状态:完成]", observation.result)
+        self.assertIn("[状态:completed]", observation.result)
         item = self.db.get_thought(thought_id)
         self.assertIsNotNone(item)
         assert item is not None
         self.assertEqual(item.content, "记得买牛奶和鸡蛋")
-        self.assertEqual(item.status, "完成")
+        self.assertEqual(item.status, "completed")
         merged = "\n".join(captured.output)
         self.assertIn("planner_tool_thoughts_start", merged)
         self.assertIn("planner_tool_thoughts_done", merged)
@@ -3116,12 +3276,12 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("planner_tool_system_date_done", merged)
 
     def test_thoughts_cli_and_json_payload_share_runtime_payload(self) -> None:
-        command_payload = parse_tool_command_payload("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
+        command_payload = parse_tool_command_payload("/thoughts update 1 记得买牛奶和鸡蛋 --status completed")
         self.assertIsNotNone(command_payload)
         assert command_payload is not None
 
         compat_payload = coerce_thoughts_action_payload(
-            {"action": "update", "id": 1, "content": "记得买牛奶和鸡蛋", "status": "完成"}
+            {"action": "update", "id": 1, "content": "记得买牛奶和鸡蛋", "status": "completed"}
         )
 
         self.assertEqual(command_payload, compat_payload)
@@ -3233,7 +3393,7 @@ class AssistantAgentTest(unittest.TestCase):
         )
 
         self.assertFalse(observation.ok)
-        self.assertEqual(observation.result, "thoughts.update status 必须为 未完成|完成|删除。")
+        self.assertEqual(observation.result, "thoughts.update status must be pending|completed|deleted.")
         item = self.db.get_thought(thought_id)
         self.assertIsNotNone(item)
         assert item is not None

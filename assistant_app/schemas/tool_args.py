@@ -257,9 +257,9 @@ class ThoughtsAddArgs(ThoughtToolArgsBase):
 
 
 class ThoughtsListArgs(ThoughtToolArgsBase):
-    status: Literal["未完成", "完成", "删除"] | None = Field(
+    status: Literal["pending", "completed", "deleted"] | None = Field(
         default=None,
-        description="状态过滤；不传/null 时默认只看未完成与完成。",
+        description="状态过滤；不传/null 时默认只看 pending 与 completed。",
     )
 
     @field_validator("status", mode="before")
@@ -275,7 +275,7 @@ class ThoughtsIdArgs(ThoughtToolArgsBase):
 class ThoughtsUpdateArgs(ThoughtToolArgsBase):
     id: int = Field(ge=1, description="想法 ID，正整数。")
     content: str = Field(min_length=1, description="更新后的想法内容文本，不能为空。")
-    status: Literal["未完成", "完成", "删除"] | None = Field(
+    status: Literal["pending", "completed", "deleted"] | None = Field(
         default=None,
         description="更新后的状态；不传/null 时保持原状态。",
     )
@@ -289,7 +289,7 @@ class ThoughtsUpdateArgs(ThoughtToolArgsBase):
     @classmethod
     def normalize_status(cls, value: Any) -> str | None:
         if value is None:
-            raise ValueError("status must be one of 未完成, 完成, 删除")
+            raise ValueError("status must be one of pending, completed, deleted")
         return OptionalThoughtStatusValue.model_validate({"status": value}).status
 
 
