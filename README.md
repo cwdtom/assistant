@@ -153,6 +153,7 @@ python main.py
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入
 - plan/replan 中 `plan` 使用对象项契约：`task/completed/tools`；初始 plan 的 `completed` 固定为 `false`；plan 阶段允许输出空数组（ack-only）
 - replan 输出可选 `should_send`（布尔）；缺失时按 `true` 处理；该字段用于后台定时任务最终发送判定
+- 主流程 source 分为 `interactive` 与 `scheduled` 两类：两类可并行执行；同一 source 内仍按先到先执行（串行）；pending/cancel/interrupt/trace 等运行态按 source 隔离
 - 当用户输入是对上一轮最终回答的简短确认/致谢（例如“谢谢”“好的”“明白了”）时，plan 可输出空计划并直接结束：不进入 thought/replan，不落库 `chat_history`
 - 每次 `chat_history` 新增记录会触发异步 sqlite-rag 写入尝试（`uri=assistant://chat_history/{chat_id}`）；该链路为可选依赖，缺依赖或写入失败只记录日志，不阻断主流程
 - `/history search` 会优先尝试 sqlite-rag 检索；当 sqlite-rag 不可用、检索失败、结果为空、或命中无法映射到本地 `chat_history` 时，自动回退到现有 SQL 模糊查询；命令输出格式保持不变

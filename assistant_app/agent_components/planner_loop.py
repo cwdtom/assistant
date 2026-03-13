@@ -32,7 +32,7 @@ def run_outer_plan_loop(agent: Any, task: Any) -> str:
     session = agent._planner_session
     try:
         while True:
-            agent._raise_if_task_interrupted()
+            agent._raise_if_task_interrupted(source=task.source)
             if task.step_count >= agent._plan_replan_max_steps:
                 return agent._finalize_planner_task(task, session.format_step_limit_response(task))
 
@@ -190,7 +190,7 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
     outer = session.outer_context(task)
     emit_progress = False
     while True:
-        agent._raise_if_task_interrupted()
+        agent._raise_if_task_interrupted(source=task.source)
         if task.step_count >= agent._plan_replan_max_steps:
             return "step_limit", None
 
@@ -316,7 +316,7 @@ def run_inner_react_loop(agent: Any, task: Any) -> tuple[str, str | None]:
         action_payload = next_action.payload
         tool_call_id = thought_payload.tool_call_id
         session.emit_progress(f"步骤动作：{action_tool} -> {action_input}")
-        agent._raise_if_task_interrupted()
+        agent._raise_if_task_interrupted(source=task.source)
         task.step_count += 1
         observation = agent._execute_planner_tool(
             action_tool=action_tool,

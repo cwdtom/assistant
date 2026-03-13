@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any, TypeVar, cast
 
@@ -46,6 +47,7 @@ class PlannerPayloadRequester:
         self._plan_replan_retry_count = plan_replan_retry_count
         self._session = session
         self._llm_trace_call_seq = 0
+        self._llm_trace_call_seq_lock = threading.Lock()
 
     def request_plan_payload(self, task: PendingPlanTask) -> PlanResponsePayload | None:
         if self._llm_client is None:
@@ -397,8 +399,9 @@ class PlannerPayloadRequester:
         return False
 
     def _next_llm_trace_call_id(self) -> int:
-        self._llm_trace_call_seq += 1
-        return self._llm_trace_call_seq
+        with self._llm_trace_call_seq_lock:
+            self._llm_trace_call_seq += 1
+            return self._llm_trace_call_seq
 
     def _llm_trace_phase(self, messages: list[dict[str, object]]) -> str:
         if not messages:

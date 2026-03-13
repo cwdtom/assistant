@@ -553,6 +553,57 @@ class _BlockingLLMClient:
         return self._response
 
 
+class _LaneBlockingLLMClient:
+    def __init__(self, blocked_plan_goals: set[str] | None = None) -> None:
+        self._blocked_plan_goals = set(blocked_plan_goals or set())
+        self._plan_started_events: dict[str, threading.Event] = {}
+        self._plan_release_events: dict[str, threading.Event] = {}
+        self._lock = threading.Lock()
+
+    def _plan_started_event(self, goal: str) -> threading.Event:
+        with self._lock:
+            event = self._plan_started_events.get(goal)
+            if event is None:
+                event = threading.Event()
+                self._plan_started_events[goal] = event
+            return event
+
+    def _plan_release_event(self, goal: str) -> threading.Event:
+        with self._lock:
+            event = self._plan_release_events.get(goal)
+            if event is None:
+                event = threading.Event()
+                self._plan_release_events[goal] = event
+            return event
+
+    def wait_plan_started(self, goal: str, *, timeout: float = 1.0) -> bool:
+        return self._plan_started_event(goal).wait(timeout=timeout)
+
+    def release_plan(self, goal: str) -> None:
+        self._plan_release_event(goal).set()
+
+    @staticmethod
+    def _extract_goal(messages: list[dict[str, str]]) -> str:
+        if not messages:
+            return ""
+        payload = _try_parse_json(str(messages[-1].get("content", "")))
+        if not isinstance(payload, dict):
+            return ""
+        return str(payload.get("goal") or "").strip()
+
+    def reply(self, messages: list[dict[str, str]]) -> str:
+        phase = _extract_phase_from_messages(messages)
+        if phase == "plan":
+            goal = self._extract_goal(messages)
+            self._plan_started_event(goal).set()
+            if goal in self._blocked_plan_goals:
+                self._plan_release_event(goal).wait(timeout=2.0)
+            return _planner_planned(["执行步骤"])
+        if phase == "thought":
+            return _planner_done("步骤已完成。")
+        return _planner_done("最终完成。")
+
+
 class AssistantAgentTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -660,6 +711,97 @@ class AssistantAgentTest(unittest.TestCase):
         worker.join(timeout=2.0)
 
         self.assertIn("已被新消息中断", holder.get("response", ""))
+
+    def test_interrupt_current_task_default_source_does_not_interrupt_scheduled_task(self) -> None:
+        lane_llm = _LaneBlockingLLMClient(blocked_plan_goals={"scheduled-long-task"})
+        agent = AssistantAgent(db=self.db, llm_client=lane_llm)
+        holder: dict[str, str] = {}
+
+        def run_scheduled_task() -> None:
+            holder["response"] = agent.handle_input_for_source(
+                "scheduled-long-task",
+                source="scheduled",
+            )
+
+        worker = threading.Thread(target=run_scheduled_task)
+        worker.start()
+        self.assertTrue(lane_llm.wait_plan_started("scheduled-long-task", timeout=2.0))
+        agent.interrupt_current_task()
+        lane_llm.release_plan("scheduled-long-task")
+        worker.join(timeout=2.0)
+
+        self.assertIn("最终完成", holder.get("response", ""))
+
+    def test_different_sources_can_run_in_parallel(self) -> None:
+        lane_llm = _LaneBlockingLLMClient(blocked_plan_goals={"interactive-long-task"})
+        agent = AssistantAgent(db=self.db, llm_client=lane_llm)
+        interactive_result: dict[str, tuple[str, bool]] = {}
+        scheduled_result: dict[str, tuple[str, bool]] = {}
+        interactive_done = threading.Event()
+        scheduled_done = threading.Event()
+
+        def run_interactive_task() -> None:
+            interactive_result["value"] = agent.handle_input_with_task_status(
+                "interactive-long-task",
+                source="interactive",
+            )
+            interactive_done.set()
+
+        def run_scheduled_task() -> None:
+            scheduled_result["value"] = agent.handle_input_with_task_status(
+                "scheduled-fast-task",
+                source="scheduled",
+            )
+            scheduled_done.set()
+
+        interactive_worker = threading.Thread(target=run_interactive_task)
+        interactive_worker.start()
+        self.assertTrue(lane_llm.wait_plan_started("interactive-long-task", timeout=2.0))
+
+        scheduled_worker = threading.Thread(target=run_scheduled_task)
+        scheduled_worker.start()
+        self.assertTrue(scheduled_done.wait(timeout=1.0))
+        self.assertFalse(interactive_done.is_set())
+
+        lane_llm.release_plan("interactive-long-task")
+        interactive_worker.join(timeout=2.0)
+        scheduled_worker.join(timeout=2.0)
+
+        self.assertTrue(interactive_result["value"][1])
+        self.assertTrue(scheduled_result["value"][1])
+        self.assertIn("最终完成", interactive_result["value"][0])
+        self.assertIn("最终完成", scheduled_result["value"][0])
+
+    def test_same_source_requests_remain_serialized(self) -> None:
+        lane_llm = _LaneBlockingLLMClient(blocked_plan_goals={"interactive-first-task"})
+        agent = AssistantAgent(db=self.db, llm_client=lane_llm)
+        first_done = threading.Event()
+        second_done = threading.Event()
+
+        def run_first_task() -> None:
+            agent.handle_input_with_task_status("interactive-first-task", source="interactive")
+            first_done.set()
+
+        def run_second_task() -> None:
+            agent.handle_input_with_task_status("interactive-second-task", source="interactive")
+            second_done.set()
+
+        first_worker = threading.Thread(target=run_first_task)
+        first_worker.start()
+        self.assertTrue(lane_llm.wait_plan_started("interactive-first-task", timeout=2.0))
+
+        second_worker = threading.Thread(target=run_second_task)
+        second_worker.start()
+        self.assertFalse(lane_llm.wait_plan_started("interactive-second-task", timeout=0.2))
+        self.assertFalse(second_done.is_set())
+
+        lane_llm.release_plan("interactive-first-task")
+        self.assertTrue(lane_llm.wait_plan_started("interactive-second-task", timeout=1.0))
+
+        first_worker.join(timeout=2.0)
+        second_worker.join(timeout=2.0)
+        self.assertTrue(first_done.is_set())
+        self.assertTrue(second_done.is_set())
 
     def test_handle_input_persists_user_and_assistant_turns_for_non_slash_input(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)
@@ -2901,6 +3043,24 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(ask, "请确认：你想操作哪个日程 id？")
         cancel = agent.handle_input("取消当前任务")
         self.assertEqual(cancel, "已取消当前任务。")
+
+    def test_cancel_pending_plan_task_is_isolated_by_source(self) -> None:
+        fake_llm = FakeLLMClient(
+            responses=[
+                _planner_planned(["确认目标日程", "执行更新"]),
+                _thought_ask_user("你想操作哪个日程 id？", current_step="确认目标日程"),
+            ]
+        )
+        agent = AssistantAgent(db=self.db, llm_client=fake_llm, search_provider=FakeSearchProvider())
+
+        ask = agent.handle_input("帮我更新日程")
+        self.assertEqual(ask, "请确认：你想操作哪个日程 id？")
+
+        scheduled_cancel = agent.handle_input_for_source("取消当前任务", source="scheduled")
+        self.assertEqual(scheduled_cancel, "当前没有进行中的任务。")
+
+        interactive_cancel = agent.handle_input("取消当前任务")
+        self.assertEqual(interactive_cancel, "已取消当前任务。")
 
     def test_plan_contract_requires_tools_field(self) -> None:
         fake_llm = FakeLLMClient(
