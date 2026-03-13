@@ -121,10 +121,10 @@ class FeishuCalendarSyncService:
             event_candidates_by_identity: dict[_IdentityKey, list[FeishuCalendarEvent]] = {}
             for event in feishu_items:
                 identity = self._identity_from_event(event)
-                candidates = event_candidates_by_identity.setdefault(identity, [])
-                candidates.append(event)
-            for candidates in event_candidates_by_identity.values():
-                candidates.sort(key=self._feishu_event_order_key)
+                identity_candidates = event_candidates_by_identity.setdefault(identity, [])
+                identity_candidates.append(event)
+            for identity_candidates in event_candidates_by_identity.values():
+                identity_candidates.sort(key=self._feishu_event_order_key)
 
             local_items = self._db.list_base_schedules_in_window(
                 window_start=window_start,
@@ -133,10 +133,10 @@ class FeishuCalendarSyncService:
             )
             for item in local_items:
                 identity = self._identity_from_schedule(item)
-                candidates = event_candidates_by_identity.get(identity)
-                if candidates:
-                    matched = candidates.pop(0)
-                    remaining = len(candidates) + 1
+                matched_candidates = event_candidates_by_identity.get(identity)
+                if matched_candidates:
+                    matched = matched_candidates.pop(0)
+                    remaining = len(matched_candidates) + 1
                     if remaining > 1:
                         self._log_identity_ambiguous(
                             action="bootstrap",

@@ -222,10 +222,7 @@ def _execute_typed_timer_system_action(
                 raw_input=raw_input,
                 result=f"未找到定时任务 #{arguments.id}",
             )
-        task_name = arguments.task_name if "task_name" in arguments.model_fields_set else item.task_name
-        cron_expr = arguments.cron_expr if "cron_expr" in arguments.model_fields_set else item.cron_expr
-        prompt = arguments.prompt if "prompt" in arguments.model_fields_set else item.prompt
-        run_limit = arguments.run_limit if "run_limit" in arguments.model_fields_set else item.run_limit
+        task_name, cron_expr, prompt, run_limit = _resolve_timer_update_fields(arguments=arguments, item=item)
         next_run_at = _resolve_updated_next_run_at(
             item=item,
             arguments=arguments,
@@ -317,6 +314,30 @@ def _next_run_at_for_task(*, cron_expr: str, run_limit: int, now: datetime) -> s
     if run_limit == 0:
         return None
     return compute_next_run_at_from_cron(cron_expr=cron_expr, now=now)
+
+
+def _resolve_timer_update_fields(
+    *,
+    arguments: TimerUpdateArgs,
+    item: ScheduledPlannerTask,
+) -> tuple[str, str, str, int]:
+    task_name = item.task_name
+    if "task_name" in arguments.model_fields_set and arguments.task_name is not None:
+        task_name = arguments.task_name
+
+    cron_expr = item.cron_expr
+    if "cron_expr" in arguments.model_fields_set and arguments.cron_expr is not None:
+        cron_expr = arguments.cron_expr
+
+    prompt = item.prompt
+    if "prompt" in arguments.model_fields_set and arguments.prompt is not None:
+        prompt = arguments.prompt
+
+    run_limit = item.run_limit
+    if "run_limit" in arguments.model_fields_set:
+        run_limit = arguments.run_limit if arguments.run_limit is not None else item.run_limit
+
+    return task_name, cron_expr, prompt, run_limit
 
 
 def _resolve_updated_next_run_at(

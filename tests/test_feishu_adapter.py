@@ -204,6 +204,9 @@ class FeishuAdapterTest(unittest.TestCase):
         text = "第一条结果\n\n第二条结果\n\n\n第三条结果"
         self.assertEqual(split_semantic_messages(text), ["第一条结果", "第二条结果", "第三条结果"])
 
+    def test_mask_open_id_returns_empty_string_for_none(self) -> None:
+        self.assertEqual(_mask_open_id(None), "")
+
     def test_extract_text_message_from_event_payload(self) -> None:
         payload = {
             "event": {

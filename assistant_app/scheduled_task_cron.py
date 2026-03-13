@@ -11,7 +11,7 @@ class CronIterator(Protocol):
 
 def build_cron_iterator(expr: str, now: datetime) -> CronIterator:
     try:
-        from croniter import croniter
+        from croniter import croniter  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover - exercised in integration environments
         raise RuntimeError("croniter is required for scheduled planner tasks") from exc
     return croniter(expr, now)

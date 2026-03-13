@@ -96,7 +96,7 @@ def convert_message_to_text(*, message_type: str, raw_content: str) -> str:
     return ""
 
 
-def _mask_open_id(value: str) -> str:
+def _mask_open_id(value: str | None) -> str:
     text = str(value or "").strip()
     if not text:
         return ""

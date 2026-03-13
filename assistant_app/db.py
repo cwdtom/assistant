@@ -1510,7 +1510,10 @@ class AssistantDB:
             "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
             (user_content, assistant_content, created_at),
         )
-        return int(cursor.lastrowid)
+        chat_id = cursor.lastrowid
+        if chat_id is None:
+            raise RuntimeError("failed to insert chat history turn")
+        return int(chat_id)
 
     def _emit_chat_history_insert(
         self,
@@ -1618,7 +1621,8 @@ def _chat_turn_from_row(row: sqlite3.Row) -> ChatTurn:
 def _scheduled_planner_task_from_row(row: sqlite3.Row) -> ScheduledPlannerTask:
     payload = dict(row)
     payload["task_name"] = str(payload.get("task_name") or "")
-    payload["run_limit"] = int(payload.get("run_limit") if payload.get("run_limit") is not None else -1)
+    run_limit = payload.get("run_limit")
+    payload["run_limit"] = int(run_limit) if run_limit is not None else -1
     payload["cron_expr"] = str(payload.get("cron_expr") or "")
     payload["prompt"] = str(payload.get("prompt") or "")
     payload["next_run_at"] = str(payload["next_run_at"]) if payload.get("next_run_at") else None

@@ -781,6 +781,22 @@ class AssistantDBTest(unittest.TestCase):
         self.assertEqual(turns[0].user_content, "用户问题")
         self.assertEqual(turns[0].assistant_content, "助手回答")
 
+    def test_insert_chat_history_turn_raises_when_lastrowid_is_none(self) -> None:
+        class _Cursor:
+            lastrowid = None
+
+        class _Conn:
+            def execute(self, *_args: Any, **_kwargs: Any) -> _Cursor:
+                return _Cursor()
+
+        with self.assertRaisesRegex(RuntimeError, "failed to insert chat history turn"):
+            AssistantDB._insert_chat_history_turn(
+                _Conn(),  # type: ignore[arg-type]
+                user_content="用户问题",
+                assistant_content="助手回答",
+                created_at="2026-03-13 10:00:00",
+            )
+
     def test_save_turn_persists_user_and_assistant_messages(self) -> None:
         self.db.save_turn(user_content="你好", assistant_content="你好，我可以帮你什么？")
 
