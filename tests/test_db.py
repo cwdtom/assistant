@@ -741,12 +741,45 @@ class AssistantDBTest(unittest.TestCase):
         self.assertFalse(self.db.soft_delete_thought(999))
 
     def test_recent_messages_in_chronological_order(self) -> None:
-        self.db.save_message("user", "hello")
-        self.db.save_message("assistant", "world")
+        self.db.save_turn(user_content="hello", assistant_content="world")
 
         messages = self.db.recent_messages(limit=2)
         self.assertEqual(messages[0].content, "hello")
         self.assertEqual(messages[1].content, "world")
+
+    def test_save_turn_emits_chat_history_insert_event(self) -> None:
+        events: list[dict[str, Any]] = []
+        self.db.set_chat_history_insert_handler(
+            lambda event: events.append(
+                {
+                    "chat_id": event.chat_id,
+                    "user_content": event.user_content,
+                    "assistant_content": event.assistant_content,
+                    "created_at": event.created_at,
+                }
+            )
+        )
+
+        self.db.save_turn(user_content="你好", assistant_content="你好")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["chat_id"], 1)
+        self.assertEqual(events[0]["user_content"], "你好")
+        self.assertEqual(events[0]["assistant_content"], "你好")
+        self.assertRegex(events[0]["created_at"], r"^\d{4}-\d{2}-\d{2} ")
+
+    def test_chat_history_insert_callback_failure_does_not_block_persistence(self) -> None:
+        def _broken_handler(_: Any) -> None:
+            raise RuntimeError("callback failed")
+
+        self.db.set_chat_history_insert_handler(_broken_handler)
+
+        self.db.save_turn(user_content="用户问题", assistant_content="助手回答")
+
+        turns = self.db.recent_turns(limit=1)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0].user_content, "用户问题")
+        self.assertEqual(turns[0].assistant_content, "助手回答")
 
     def test_save_turn_persists_user_and_assistant_messages(self) -> None:
         self.db.save_turn(user_content="你好", assistant_content="你好，我可以帮你什么？")
@@ -789,6 +822,15 @@ class AssistantDBTest(unittest.TestCase):
 
         underscore_hits = self.db.search_turns("underscore_a", limit=10)
         self.assertEqual([item.user_content for item in underscore_hits], ["underscore_a"])
+
+    def test_turns_by_chat_ids_preserves_order_and_applies_limit(self) -> None:
+        self.db.save_turn(user_content="用户1", assistant_content="助手1")
+        self.db.save_turn(user_content="用户2", assistant_content="助手2")
+        self.db.save_turn(user_content="用户3", assistant_content="助手3")
+
+        turns = self.db.turns_by_chat_ids([3, 1, 99, 3, 2], limit=3)
+
+        self.assertEqual([item.user_content for item in turns], ["用户3", "用户1"])
 
     def test_recent_turns_for_planner_applies_lookback_and_limit(self) -> None:
         self.db.save_turn(user_content="两天前的问题", assistant_content="两天前的回答")

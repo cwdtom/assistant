@@ -21,6 +21,7 @@ from assistant_app.agent import (
 )
 from assistant_app.agent_components.models import PlannerObservation
 from assistant_app.agent_components.tools.planner_tool_routing import build_json_planner_tool_executor
+from assistant_app.chat_history_rag_search import ChatHistoryRagQueryResult
 from assistant_app.db import AssistantDB
 from assistant_app.planner_thought import normalize_thought_decision, normalize_thought_tool_call
 from assistant_app.schemas.commands import parse_tool_command_payload
@@ -530,6 +531,16 @@ class FakeSearchProvider:
         return self.results[:top_k]
 
 
+class FakeChatHistoryRagSearcher:
+    def __init__(self, result: ChatHistoryRagQueryResult) -> None:
+        self.result = result
+        self.calls: list[tuple[str, int]] = []
+
+    def search_chat_ids(self, *, keyword: str, limit: int) -> ChatHistoryRagQueryResult:
+        self.calls.append((keyword, limit))
+        return self.result
+
+
 class _BlockingLLMClient:
     def __init__(self, response: str) -> None:
         self._response = response
@@ -708,6 +719,59 @@ class AssistantAgentTest(unittest.TestCase):
 
         invalid = agent.handle_input("/history search --limit 2")
         self.assertIn("用法: /history search <关键词> [--limit <>=1>]", invalid)
+
+    def test_history_search_command_prefers_rag_hits_when_available(self) -> None:
+        rag_searcher = FakeChatHistoryRagSearcher(
+            ChatHistoryRagQueryResult(status="hit", chat_ids=[2]),
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=None,
+            chat_history_rag_searcher=rag_searcher,
+        )
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="按旧 SQL 会命中这条")
+        self.db.save_turn(user_content="明天提醒体检", assistant_content="这是 rag 指定的命中")
+
+        result = agent.handle_input("/history search 牛奶 --limit 5")
+
+        self.assertIn("历史搜索(关键词: 牛奶, 命中 1 轮)", result)
+        self.assertIn("| 明天提醒体检 | 这是 rag 指定的命中 |", result)
+        self.assertNotIn("| 我要买牛奶 | 按旧 SQL 会命中这条 |", result)
+        self.assertEqual(rag_searcher.calls, [("牛奶", 5)])
+
+    def test_history_search_command_falls_back_to_sql_when_rag_empty(self) -> None:
+        rag_searcher = FakeChatHistoryRagSearcher(
+            ChatHistoryRagQueryResult(status="empty", chat_ids=[]),
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=None,
+            chat_history_rag_searcher=rag_searcher,
+        )
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="SQL 兜底命中")
+
+        result = agent.handle_input("/history search 牛奶 --limit 5")
+
+        self.assertIn("历史搜索(关键词: 牛奶, 命中 1 轮)", result)
+        self.assertIn("| 我要买牛奶 | SQL 兜底命中 |", result)
+        self.assertEqual(rag_searcher.calls, [("牛奶", 5)])
+
+    def test_history_search_command_falls_back_to_sql_when_rag_hit_is_unmapped(self) -> None:
+        rag_searcher = FakeChatHistoryRagSearcher(
+            ChatHistoryRagQueryResult(status="hit", chat_ids=[999]),
+        )
+        agent = AssistantAgent(
+            db=self.db,
+            llm_client=None,
+            chat_history_rag_searcher=rag_searcher,
+        )
+        self.db.save_turn(user_content="我要买牛奶", assistant_content="SQL 映射结果")
+
+        result = agent.handle_input("/history search 牛奶 --limit 5")
+
+        self.assertIn("历史搜索(关键词: 牛奶, 命中 1 轮)", result)
+        self.assertIn("| 我要买牛奶 | SQL 映射结果 |", result)
+        self.assertEqual(rag_searcher.calls, [("牛奶", 5)])
 
     def test_missing_args_commands_return_usage_instead_of_unknown(self) -> None:
         agent = AssistantAgent(db=self.db, llm_client=None)

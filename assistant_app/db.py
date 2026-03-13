@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
 
+from assistant_app.chat_history_rag_async import ChatHistoryInsertEvent
 from assistant_app.schemas.domain import (
     ChatMessage,
     ChatTurn,
@@ -51,12 +52,18 @@ THOUGHT_STATUS_VALUES = (
 )
 
 class AssistantDB:
-    def __init__(self, db_path: str, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        logger: logging.Logger | None = None,
+        on_chat_history_insert: Callable[[ChatHistoryInsertEvent], None] | None = None,
+    ) -> None:
         self.db_path = db_path
         self._logger = logger or logging.getLogger("assistant_app.app")
         self._logger.propagate = False
         if not self._logger.handlers:
             self._logger.addHandler(logging.NullHandler())
+        self._on_chat_history_insert = on_chat_history_insert
         self._ensure_parent_dir()
         self._init_schema()
 
@@ -186,6 +193,12 @@ class AssistantDB:
         conn.execute(f"ALTER TABLE {TIMER_TASKS_TABLE} RENAME TO {TIMER_TASKS_TABLE}_old")
         self._recreate_timer_tasks_table(conn=conn, source_table=f"{TIMER_TASKS_TABLE}_old", column_names=names)
         conn.execute(f"DROP TABLE {TIMER_TASKS_TABLE}_old")
+
+    def set_chat_history_insert_handler(
+        self,
+        handler: Callable[[ChatHistoryInsertEvent], None] | None,
+    ) -> None:
+        self._on_chat_history_insert = handler
 
     def _create_timer_tasks_table(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -1243,42 +1256,22 @@ class AssistantDB:
             ).fetchall()
         return [_reminder_delivery_from_row(row) for row in rows]
 
-    def save_message(self, role: str, content: str) -> None:
-        normalized_role = role.strip().lower()
-        if normalized_role == "user":
-            self.save_turn(user_content=content, assistant_content="")
-            return
-        if normalized_role == "assistant":
-            timestamp = _now_iso()
-            with self._connect() as conn:
-                row = conn.execute(
-                    """
-                    SELECT id
-                    FROM chat_history
-                    WHERE assistant_content = ''
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
-                if row is not None:
-                    conn.execute(
-                        "UPDATE chat_history SET assistant_content = ? WHERE id = ?",
-                        (content, int(row["id"])),
-                    )
-                    return
-                conn.execute(
-                    "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
-                    ("", content, timestamp),
-                )
-            return
-        self.save_turn(user_content="", assistant_content=content)
-
     def save_turn(self, *, user_content: str, assistant_content: str) -> None:
         timestamp = _now_iso()
+        inserted_id: int | None = None
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
-                (user_content, assistant_content, timestamp),
+            inserted_id = self._insert_chat_history_turn(
+                conn,
+                user_content=user_content,
+                assistant_content=assistant_content,
+                created_at=timestamp,
+            )
+        if inserted_id is not None:
+            self._emit_chat_history_insert(
+                chat_id=inserted_id,
+                user_content=user_content,
+                assistant_content=assistant_content,
+                created_at=timestamp,
             )
 
     def recent_turns(self, limit: int = 8) -> list[ChatTurn]:
@@ -1351,6 +1344,38 @@ class AssistantDB:
         rows.reverse()
         return [_chat_turn_from_row(row) for row in rows]
 
+    def turns_by_chat_ids(self, chat_ids: list[int], *, limit: int | None = None) -> list[ChatTurn]:
+        if not chat_ids:
+            return []
+
+        normalized_ids: list[int] = []
+        seen_ids: set[int] = set()
+        for item in chat_ids:
+            if isinstance(item, bool) or not isinstance(item, int):
+                continue
+            if item <= 0 or item in seen_ids:
+                continue
+            normalized_ids.append(item)
+            seen_ids.add(item)
+        if not normalized_ids:
+            return []
+
+        if limit is not None:
+            normalized_ids = normalized_ids[: max(limit, 1)]
+        if not normalized_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        query = (
+            "SELECT id, user_content, assistant_content, created_at "
+            f"FROM chat_history WHERE id IN ({placeholders})"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(normalized_ids)).fetchall()
+
+        row_by_id = {int(row["id"]): row for row in rows}
+        return [_chat_turn_from_row(row_by_id[item_id]) for item_id in normalized_ids if item_id in row_by_id]
+
     def recent_messages(self, limit: int = 8) -> list[ChatMessage]:
         turns = self.recent_turns(limit=max(limit, 1))
         messages: list[ChatMessage] = []
@@ -1362,6 +1387,50 @@ class AssistantDB:
         if len(messages) <= limit:
             return messages
         return messages[-limit:]
+
+    @staticmethod
+    def _insert_chat_history_turn(
+        conn: sqlite3.Connection,
+        *,
+        user_content: str,
+        assistant_content: str,
+        created_at: str,
+    ) -> int:
+        cursor = conn.execute(
+            "INSERT INTO chat_history (user_content, assistant_content, created_at) VALUES (?, ?, ?)",
+            (user_content, assistant_content, created_at),
+        )
+        return int(cursor.lastrowid)
+
+    def _emit_chat_history_insert(
+        self,
+        *,
+        chat_id: int,
+        user_content: str,
+        assistant_content: str,
+        created_at: str,
+    ) -> None:
+        callback = self._on_chat_history_insert
+        if callback is None:
+            return
+        try:
+            callback(
+                ChatHistoryInsertEvent(
+                    chat_id=chat_id,
+                    user_content=user_content,
+                    assistant_content=assistant_content,
+                    created_at=created_at,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.warning(
+                "chat history insert callback failed",
+                extra={
+                    "event": "chat_history_insert_callback_failed",
+                    "context": {"chat_id": chat_id},
+                },
+                exc_info=True,
+            )
 
 
 def _now_iso() -> str:
@@ -1427,10 +1496,12 @@ def _reminder_delivery_from_row(row: sqlite3.Row) -> ReminderDelivery:
 
 
 def _chat_turn_from_row(row: sqlite3.Row) -> ChatTurn:
-    payload = dict(row)
-    payload["user_content"] = str(payload.get("user_content") or "")
-    payload["assistant_content"] = str(payload.get("assistant_content") or "")
-    payload["created_at"] = str(payload.get("created_at") or "")
+    raw_payload = dict(row)
+    payload = {
+        "user_content": str(raw_payload.get("user_content") or ""),
+        "assistant_content": str(raw_payload.get("assistant_content") or ""),
+        "created_at": str(raw_payload.get("created_at") or ""),
+    }
     return ChatTurn.model_validate(payload)
 
 

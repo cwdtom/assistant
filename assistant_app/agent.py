@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import logging
 import threading
 from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
@@ -56,6 +56,7 @@ from assistant_app.agent_components.tools.timer import (
 from assistant_app.agent_components.tools.user_profile import (
     execute_user_profile_system_action as _execute_user_profile_system_action_impl,
 )
+from assistant_app.chat_history_rag_search import ChatHistoryRagSearcher
 from assistant_app.db import AssistantDB, ScheduleItem
 from assistant_app.llm import LLMClient
 from assistant_app.schemas.routing import RuntimePlannerActionPayload
@@ -88,6 +89,7 @@ class AssistantAgent:
         db: AssistantDB,
         llm_client: LLMClient | None = None,
         search_provider: SearchProvider | None = None,
+        chat_history_rag_searcher: ChatHistoryRagSearcher | None = None,
         llm_trace_logger: logging.Logger | None = None,
         app_logger: logging.Logger | None = None,
         progress_callback: Callable[[str], None] | None = None,
@@ -108,6 +110,7 @@ class AssistantAgent:
         self.db = db
         self.llm_client = llm_client
         self.search_provider = search_provider or BingSearchProvider()
+        self._chat_history_rag_searcher = chat_history_rag_searcher
         self._llm_trace_logger = llm_trace_logger or logging.getLogger("assistant_app.llm_trace")
         self._llm_trace_logger.propagate = False
         if not self._llm_trace_logger.handlers:
@@ -339,6 +342,66 @@ class AssistantAgent:
                 extra={"event": "chat_history_save_failed"},
                 exc_info=True,
             )
+
+    def search_history_turns(self, *, keyword: str, limit: int) -> list[Any]:
+        normalized_keyword = keyword.strip()
+        normalized_limit = max(limit, 1)
+        rag_searcher = self._chat_history_rag_searcher
+        if rag_searcher is None:
+            self._log_history_search_sql_fallback(
+                reason="rag_unavailable",
+                keyword=normalized_keyword,
+                limit=normalized_limit,
+            )
+            return self.db.search_turns(normalized_keyword, limit=normalized_limit)
+
+        rag_result = rag_searcher.search_chat_ids(keyword=normalized_keyword, limit=normalized_limit)
+        if rag_result.status == "hit":
+            turns = self.db.turns_by_chat_ids(rag_result.chat_ids, limit=normalized_limit)
+            if turns:
+                self._app_logger.info(
+                    "history search rag selected",
+                    extra={
+                        "event": "history_search_rag_selected",
+                        "context": {
+                            "rag_hit_count": len(rag_result.chat_ids),
+                            "returned_count": len(turns),
+                            "limit": normalized_limit,
+                        },
+                    },
+                )
+                return turns
+            self._log_history_search_sql_fallback(
+                reason="rag_unmapped",
+                keyword=normalized_keyword,
+                limit=normalized_limit,
+            )
+            return self.db.search_turns(normalized_keyword, limit=normalized_limit)
+
+        fallback_reason = {
+            "unavailable": "rag_unavailable",
+            "error": "rag_error",
+            "empty": "rag_empty",
+        }.get(rag_result.status, "rag_empty")
+        self._log_history_search_sql_fallback(
+            reason=fallback_reason,
+            keyword=normalized_keyword,
+            limit=normalized_limit,
+        )
+        return self.db.search_turns(normalized_keyword, limit=normalized_limit)
+
+    def _log_history_search_sql_fallback(self, *, reason: str, keyword: str, limit: int) -> None:
+        self._app_logger.info(
+            "history search sql fallback",
+            extra={
+                "event": "history_search_sql_fallback",
+                "context": {
+                    "reason": reason,
+                    "keyword_length": len(keyword),
+                    "limit": limit,
+                },
+            },
+        )
 
     def reload_user_profile(self) -> bool:
         return self._planner_session.reload_user_profile()

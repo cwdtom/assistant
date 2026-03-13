@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from assistant_app.agent import AssistantAgent
+from assistant_app.chat_history_rag_async import AsyncChatHistoryRagIndexer
+from assistant_app.chat_history_rag_search import ChatHistoryRagSearcher
 from assistant_app.config import load_config, load_startup_app_version
 from assistant_app.db import AssistantDB
 from assistant_app.feishu_adapter import create_feishu_runner
@@ -183,7 +185,16 @@ def main() -> None:
         logger=app_logger,
     )
     _configure_llm_trace_logger(config.llm_trace_log_path, retention_days=config.app_log_retention_days)
-    db = AssistantDB(config.db_path)
+    db = AssistantDB(config.db_path, logger=app_logger)
+    chat_history_rag_indexer = AsyncChatHistoryRagIndexer(
+        rag_db_path=config.sqlite_rag_db_path,
+        logger=app_logger,
+    )
+    chat_history_rag_searcher = ChatHistoryRagSearcher(
+        rag_db_path=config.sqlite_rag_db_path,
+        logger=app_logger,
+    )
+    db.set_chat_history_insert_handler(chat_history_rag_indexer.enqueue)
     progress_color_prefix, progress_color_suffix = _resolve_progress_color(config.cli_progress_color)
     search_provider = create_search_provider(
         provider_name=config.search_provider,
@@ -210,6 +221,7 @@ def main() -> None:
         db=db,
         llm_client=llm_client,
         search_provider=search_provider,
+        chat_history_rag_searcher=chat_history_rag_searcher,
         app_logger=app_logger,
         user_profile_path=config.user_profile_path,
         plan_replan_max_steps=config.plan_replan_max_steps,
@@ -360,6 +372,8 @@ def main() -> None:
         scheduled_planner_task_service.stop()
         if calendar_sync_service is not None:
             calendar_sync_service.stop()
+        chat_history_rag_indexer.close(wait=False)
+        chat_history_rag_searcher.close()
 
 
 if __name__ == "__main__":
