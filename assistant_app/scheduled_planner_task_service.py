@@ -15,7 +15,7 @@ from assistant_app.schemas.scheduled_tasks import ScheduledPlannerTask
 
 SCHEDULED_AUTO_TRIGGER_PROMPT_SUFFIX = (
     "**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，"
-    "结合其他信息如果价值过低，should_send应该赋值为false**"
+    "结合其他信息(特别是判断如果当前是免打扰期间的提醒价值)如果价值不足以需要提醒，should_send应该赋值为false**"
 )
 
 
