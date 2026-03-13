@@ -675,17 +675,17 @@ def parse_json_object(raw_arguments: Any) -> dict[str, Any] | None:
     elif isinstance(raw_arguments, str):
         text = raw_arguments.strip()
         if not text:
-            return None
+            return {}
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
-            return None
+            return {}
     else:
-        return None
+        return {}
     try:
         return _JSON_OBJECT_ADAPTER.validate_python(payload)
     except ValidationError:
-        return None
+        return {}
 
 
 __all__ = [
