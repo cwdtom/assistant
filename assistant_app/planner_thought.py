@@ -85,11 +85,64 @@ _THOUGHT_TOOL_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("done", "声明当前子任务完成，并提供本轮最终结论。", ()),
 )
 
-THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
-    build_function_tool_schema(
+
+def _build_thought_tool_schema(*, name: str, description: str, exclude_fields: tuple[str, ...]) -> dict[str, Any]:
+    schema = build_function_tool_schema(
         name=name,
         description=description,
         arguments_model=THOUGHT_TOOL_ARGS_MODELS[name],
+        exclude_fields=exclude_fields,
+    )
+    if name == "thoughts_update":
+        _strip_nullable_type(
+            schema=schema,
+            field_name="status",
+        )
+    return schema
+
+
+def _strip_nullable_type(*, schema: dict[str, Any], field_name: str) -> None:
+    function_schema = schema.get("function")
+    if not isinstance(function_schema, dict):
+        return
+    parameters = function_schema.get("parameters")
+    if not isinstance(parameters, dict):
+        return
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return
+    property_schema = properties.get(field_name)
+    if not isinstance(property_schema, dict):
+        return
+
+    raw_type = property_schema.get("type")
+    if isinstance(raw_type, list):
+        normalized_types = [item for item in raw_type if item != "null"]
+        if len(normalized_types) == 1:
+            property_schema["type"] = normalized_types[0]
+        elif normalized_types:
+            property_schema["type"] = normalized_types
+        else:
+            property_schema.pop("type", None)
+
+    raw_any_of = property_schema.get("anyOf")
+    if isinstance(raw_any_of, list):
+        normalized_any_of = [
+            item
+            for item in raw_any_of
+            if not (isinstance(item, dict) and item.get("type") == "null")
+        ]
+        if len(normalized_any_of) == 1 and isinstance(normalized_any_of[0], dict):
+            property_schema.clear()
+            property_schema.update(normalized_any_of[0])
+        else:
+            property_schema["anyOf"] = normalized_any_of
+
+
+THOUGHT_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    _build_thought_tool_schema(
+        name=name,
+        description=description,
         exclude_fields=exclude_fields,
     )
     for name, description, exclude_fields in _THOUGHT_TOOL_SPECS

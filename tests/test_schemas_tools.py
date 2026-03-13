@@ -61,6 +61,16 @@ class ToolSchemaTest(unittest.TestCase):
             {"timer_add", "timer_list", "timer_get", "timer_update", "timer_delete"}.issubset(timer_tool_names)
         )
 
+    def test_build_thought_tool_schemas_thoughts_update_status_is_non_nullable(self) -> None:
+        schemas = build_thought_tool_schemas(["thoughts"])
+        thoughts_update_schema = next(item for item in schemas if item["function"]["name"] == "thoughts_update")
+
+        properties = thoughts_update_schema["function"]["parameters"]["properties"]
+        status = properties["status"]
+        self.assertEqual(status.get("type"), "string")
+        self.assertNotIn("anyOf", status)
+        self.assertEqual(status.get("enum"), ["pending", "completed", "deleted"])
+
     def test_build_thought_tool_schemas_internet_search_freshness_has_enum_and_patterns(self) -> None:
         schemas = build_thought_tool_schemas(["internet_search"])
         search_schema = next(item for item in schemas if item["function"]["name"] == "internet_search_tool")

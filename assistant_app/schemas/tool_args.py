@@ -277,7 +277,7 @@ class ThoughtsUpdateArgs(ThoughtToolArgsBase):
     content: str = Field(min_length=1, description="更新后的想法内容文本，不能为空。")
     status: Literal["pending", "completed", "deleted"] | None = Field(
         default=None,
-        description="更新后的状态；不传/null 时保持原状态。",
+        description="更新后的状态；省略则保持原状态。",
     )
 
     @field_validator("content", mode="before")
