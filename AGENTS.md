@@ -151,6 +151,7 @@ Optional runtime flags (all supported in `.env`):
 - Replan completion can trigger persona rewrite on final answer (fallback to original on failure).
 - Feishu mode supports DM queue isolation, dedup, interruption/requeue, semantic split, and retry.
 - Feishu ack-only completion (task completed with empty response) sends ACK/DONE reactions only and skips text sending.
+- Feishu ACK/DONE reaction send failure handling: if HTTP status `400` is detectable, skip reaction immediately (no retry); otherwise keep existing retry path (including cases where HTTP status is unavailable).
 - Scheduled planner task execution appends `**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，结合其他信息如果价值过低，should_send应该赋值为false**` to the prompt before planner execution.
 - Scheduled planner task completion sends planner `final_response` directly when `should_send` is true (or omitted), `PROACTIVE_REMINDER_TARGET_OPEN_ID` is non-empty, and `final_response` is non-empty; intermediate planner progress/subtask updates are never sent for this source.
 - Default natural-language step cap is `20`; timeout returns partial completion + next-step suggestion.

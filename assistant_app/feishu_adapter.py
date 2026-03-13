@@ -30,6 +30,7 @@ DEFAULT_FEISHU_DEDUP_TTL_SECONDS = 600
 DEFAULT_FEISHU_ACK_REACTION_ENABLED = True
 DEFAULT_FEISHU_ACK_EMOJI_TYPE = "Get"
 DEFAULT_FEISHU_DONE_EMOJI_TYPE = "DONE"
+REACTION_SKIP_HTTP_STATUS_CODE = 400
 
 
 class AgentLike(Protocol):
@@ -113,6 +114,83 @@ def _mask_log_text(value: str) -> str:
     else:
         masked = f"{text[:2]}***{text[-1:]}"
     return f"{masked}(len={len(text)})"
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            return int(normalized)
+        except ValueError:
+            return None
+    return None
+
+
+def _read_attr_or_key(raw: Any, key: str) -> Any:
+    if isinstance(raw, dict):
+        return raw.get(key)
+    return getattr(raw, key, None)
+
+
+def _extract_http_status_code(raw: Any) -> int | None:
+    candidates = [raw]
+    visited: set[int] = set()
+    status_keys = ("status_code", "http_status_code", "http_status")
+    method_keys = ("get_status_code", "get_http_status_code", "get_http_status")
+    nested_keys = ("raw", "response", "raw_response", "http_response")
+
+    while candidates:
+        current = candidates.pop(0)
+        if current is None:
+            continue
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+
+        for key in status_keys:
+            parsed = _coerce_optional_int(_read_attr_or_key(current, key))
+            if parsed is not None:
+                return parsed
+
+        for key in method_keys:
+            reader = _read_attr_or_key(current, key)
+            if not callable(reader):
+                continue
+            try:
+                parsed = _coerce_optional_int(reader())
+            except Exception:  # noqa: BLE001
+                parsed = None
+            if parsed is not None:
+                return parsed
+
+        for key in nested_keys:
+            nested = _read_attr_or_key(current, key)
+            if nested is not None:
+                candidates.append(nested)
+    return None
+
+
+class FeishuSendError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        action: str,
+        code: Any,
+        msg: str,
+        http_status_code: int | None,
+    ) -> None:
+        super().__init__(f"{action} failed: code={code}, msg={msg}")
+        self.action = action
+        self.code = code
+        self.msg = msg
+        self.http_status_code = http_status_code
 
 
 class FeishuEventProcessor:
@@ -330,15 +408,22 @@ class FeishuEventProcessor:
                             )
                         else:
                             try:
-                                self._send_reaction_with_retry(
+                                skipped = self._send_reaction_with_retry(
                                     message_id=active_task.latest_message_id,
                                     emoji_type=self._done_emoji_type,
                                 )
-                                self._logger.info(
-                                    "feishu done reaction sent: message_id=%s emoji=%s",
-                                    active_task.latest_message_id,
-                                    self._done_emoji_type,
-                                )
+                                if skipped:
+                                    self._logger.info(
+                                        "feishu done reaction skipped: message_id=%s emoji=%s reason=http_status_400",
+                                        active_task.latest_message_id,
+                                        self._done_emoji_type,
+                                    )
+                                else:
+                                    self._logger.info(
+                                        "feishu done reaction sent: message_id=%s emoji=%s",
+                                        active_task.latest_message_id,
+                                        self._done_emoji_type,
+                                    )
                             except Exception:  # noqa: BLE001
                                 self._logger.warning(
                                     "feishu done reaction failed: message_id=%s emoji=%s",
@@ -398,12 +483,19 @@ class FeishuEventProcessor:
         if not self._ack_reaction_enabled:
             return
         try:
-            self._send_reaction_with_retry(message_id=task.latest_message_id, emoji_type=self._ack_emoji_type)
-            self._logger.info(
-                "feishu ack reaction sent: message_id=%s emoji=%s",
-                task.latest_message_id,
-                self._ack_emoji_type,
-            )
+            skipped = self._send_reaction_with_retry(message_id=task.latest_message_id, emoji_type=self._ack_emoji_type)
+            if skipped:
+                self._logger.info(
+                    "feishu ack reaction skipped: message_id=%s emoji=%s reason=http_status_400",
+                    task.latest_message_id,
+                    self._ack_emoji_type,
+                )
+            else:
+                self._logger.info(
+                    "feishu ack reaction sent: message_id=%s emoji=%s",
+                    task.latest_message_id,
+                    self._ack_emoji_type,
+                )
         except Exception:  # noqa: BLE001
             self._logger.warning(
                 "feishu ack reaction failed: message_id=%s emoji=%s",
@@ -478,8 +570,25 @@ class FeishuEventProcessor:
     def _send_with_retry(self, *, chat_id: str, text: str) -> None:
         self._run_with_retry(lambda: self._send_text(chat_id, text))
 
-    def _send_reaction_with_retry(self, *, message_id: str, emoji_type: str) -> None:
-        self._run_with_retry(lambda: self._send_reaction(message_id, emoji_type))
+    def _send_reaction_with_retry(self, *, message_id: str, emoji_type: str) -> bool:
+        attempts = self._send_retry_count + 1
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                self._send_reaction(message_id, emoji_type)
+                return False
+            except Exception as exc:  # noqa: BLE001
+                if _extract_http_status_code(exc) == REACTION_SKIP_HTTP_STATUS_CODE:
+                    return True
+                last_error = exc
+                if attempt >= attempts:
+                    break
+                sleep_seconds = self._send_retry_backoff_seconds * (2 ** (attempt - 1))
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+        if last_error is not None:
+            raise last_error
+        return False
 
     def _run_agent(self, user_input: str) -> tuple[str, bool]:
         maybe_task_aware = getattr(self._agent, "handle_input_with_task_status", None)
@@ -693,6 +802,7 @@ class FeishuLongConnectionRunner:
 
     @staticmethod
     def _ensure_send_response_success(*, response: Any, action: str) -> None:
+        http_status_code = _extract_http_status_code(response)
         success = getattr(response, "success", None)
         if callable(success):
             if success():
@@ -709,12 +819,22 @@ class FeishuLongConnectionRunner:
                 if status is not None and status.msg is not None
                 else str(getattr(response, "msg", "") or "")
             )
-            raise RuntimeError(f"{action} failed: code={code}, msg={msg}")
+            raise FeishuSendError(
+                action=action,
+                code=code,
+                msg=msg,
+                http_status_code=http_status_code,
+            )
 
         status = parse_feishu_response_status(response)
         if status is None or status.is_success():
             return
-        raise RuntimeError(f"{action} failed: code={status.code}, msg={status.msg or ''}")
+        raise FeishuSendError(
+            action=action,
+            code=status.code,
+            msg=status.msg or "",
+            http_status_code=http_status_code,
+        )
 
 
 def create_feishu_runner(

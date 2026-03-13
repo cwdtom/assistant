@@ -164,6 +164,7 @@ python main.py
 - Bocha 结果摘要提取规则：优先 `summary`，缺失时回退 `snippet`
 - 若启用 Feishu，非空 plan 成功后会异步推送一条 `任务目标：<扩展 goal>` 进度消息（每任务仅一次，replan 不重复发送）
 - 若启用 Feishu，ack-only 空计划分支仅发送 ACK/DONE reaction，不发送正文文本
+- Feishu ACK/DONE reaction 发送失败时：若可识别到 HTTP 状态码为 `400`，会直接跳过（不重试）；其他异常按现有重试策略处理；若无法识别 HTTP 状态码也按现有重试策略处理
 - 当前 thought 工具链路不支持 thinking 模式（例如 `deepseek-reasoner`）；检测到 reasoning 输出会直接报错并终止该轮任务
 - 新建数据库时会自动初始化两条默认 `timer_tasks`：`每日用户侧写更新`（`0 4 * * *`）和 `每小时提醒`（`0 * * * *`）；两者初始 `run_limit=-1`，`next_run_at=NULL`（由 timer 启动后补齐）
 - 若数据库存在 `timer_tasks` 记录：timer 会按 `TIMER_POLL_INTERVAL_SECONDS` 周期扫描；仅 `run_limit != 0` 且 `next_run_at` 到期的记录会执行，并在开始执行时扣减一次 `run_limit`（`-1` 保持不变）；该链路会把 `prompt` 送入现有 planner 流程，不补跑遗漏周期；执行前会在 prompt 末尾追加 `**以上消息为系统自动触发，在最后发送前需要判定内容是否有提醒价值，结合其他信息如果价值过低，should_send应该赋值为false**`；任务完成后当 replan 最终输出 `should_send=false` 时，会跳过外发并跳过 `chat_history` 持久化；否则按默认 `should_send=true` 处理，且在 `PROACTIVE_REMINDER_TARGET_OPEN_ID` 非空并且 `final_response` 非空时直接发送 planner `final_response`（不是单独决策文案），中间进度不会外发

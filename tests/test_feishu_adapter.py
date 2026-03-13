@@ -323,6 +323,25 @@ class FeishuAdapterTest(unittest.TestCase):
                 emoji_type="DONE",
             )
 
+    def test_send_ack_reaction_error_keeps_http_status_code_from_raw_response(self) -> None:
+        api_client = _FakeImApiClient(
+            message_response=SimpleNamespace(code=0, msg="ok"),
+            reaction_response=SimpleNamespace(
+                code="951",
+                msg="forbidden",
+                raw=SimpleNamespace(status_code=400),
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "send reaction failed: code=951, msg=forbidden") as exc_info:
+            FeishuLongConnectionRunner._send_ack_reaction(
+                api_client=api_client,
+                message_id="om_1",
+                emoji_type="DONE",
+            )
+
+        self.assertEqual(getattr(exc_info.exception, "http_status_code", None), 400)
+
     def test_extract_text_message_skips_blank_json_text(self) -> None:
         payload = {
             "event": {
@@ -694,6 +713,184 @@ class FeishuAdapterTest(unittest.TestCase):
 
         self._wait_until(lambda: attempts["count"] == 4)
         self.assertEqual(attempts["count"], 4)
+
+    def test_event_processor_skips_ack_reaction_retry_on_http_400(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reaction_attempts = {"count": 0}
+        logger = logging.getLogger("test.feishu_adapter.skip_ack_http_400")
+        handler = _RecordListHandler()
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+
+        def fail_with_http_400(_message_id: str, _emoji_type: str) -> None:
+            reaction_attempts["count"] += 1
+            error = RuntimeError("send reaction failed")
+            error.http_status_code = 400  # type: ignore[attr-defined]
+            raise error
+
+        processor = FeishuEventProcessor(
+            agent=_FakeAgent(response="ok"),
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=fail_with_http_400,
+            logger=logger,
+            send_retry_count=3,
+            send_retry_backoff_seconds=0,
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_ack_skip_400",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"hello"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(lambda: len(sent) == 1)
+        self.assertEqual(reaction_attempts["count"], 1)
+        self.assertEqual(sent, [("oc_1", "ok")])
+        self.assertTrue(
+            any(
+                "feishu ack reaction skipped: message_id=om_ack_skip_400 emoji=Get reason=http_status_400" in message
+                for message in handler.messages()
+            )
+        )
+
+    def test_event_processor_skips_done_reaction_retry_on_http_400(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reactions: list[tuple[str, str]] = []
+        done_attempts = {"count": 0}
+        logger = logging.getLogger("test.feishu_adapter.skip_done_http_400")
+        handler = _RecordListHandler()
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+
+        def send_reaction(message_id: str, emoji_type: str) -> None:
+            if emoji_type == "DONE":
+                done_attempts["count"] += 1
+                error = RuntimeError("send reaction failed")
+                error.http_status_code = 400  # type: ignore[attr-defined]
+                raise error
+            reactions.append((message_id, emoji_type))
+
+        processor = FeishuEventProcessor(
+            agent=_TaskAwareFakeAgent(response="任务处理完成。", task_completed=True),
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=send_reaction,
+            logger=logger,
+            send_retry_count=3,
+            send_retry_backoff_seconds=0,
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_done_skip_400",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"安排并给出结论"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(lambda: len(sent) == 1 and done_attempts["count"] == 1)
+        self.assertEqual(reactions, [("om_done_skip_400", "Get")])
+        self.assertEqual(done_attempts["count"], 1)
+        self.assertEqual(sent, [("oc_1", "任务处理完成。")])
+        self.assertTrue(
+            any(
+                (
+                    "feishu done reaction skipped: message_id=om_done_skip_400 "
+                    "emoji=DONE reason=http_status_400"
+                )
+                in message
+                for message in handler.messages()
+            )
+        )
+
+    def test_event_processor_keeps_reaction_retry_for_non_400_http_status(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reaction_attempts = {"count": 0}
+
+        def fail_with_http_500(_message_id: str, _emoji_type: str) -> None:
+            reaction_attempts["count"] += 1
+            error = RuntimeError("send reaction failed")
+            error.http_status_code = 500  # type: ignore[attr-defined]
+            raise error
+
+        processor = FeishuEventProcessor(
+            agent=_FakeAgent(response="ok"),
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=fail_with_http_500,
+            logger=logging.getLogger("test.feishu_adapter.retry_ack_http_500"),
+            send_retry_count=2,
+            send_retry_backoff_seconds=0,
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_ack_retry_500",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"hello"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(lambda: len(sent) == 1 and reaction_attempts["count"] == 3)
+        self.assertEqual(reaction_attempts["count"], 3)
+        self.assertEqual(sent, [("oc_1", "ok")])
+
+    def test_event_processor_keeps_reaction_retry_when_http_status_unavailable(self) -> None:
+        sent: list[tuple[str, str]] = []
+        reaction_attempts = {"count": 0}
+
+        def fail_without_http_status(_message_id: str, _emoji_type: str) -> None:
+            reaction_attempts["count"] += 1
+            raise RuntimeError("send reaction failed")
+
+        processor = FeishuEventProcessor(
+            agent=_FakeAgent(response="ok"),
+            send_text=lambda chat_id, text: sent.append((chat_id, text)),
+            send_reaction=fail_without_http_status,
+            logger=logging.getLogger("test.feishu_adapter.retry_ack_without_http_status"),
+            send_retry_count=2,
+            send_retry_backoff_seconds=0,
+        )
+        payload = {
+            "event": {
+                "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+                "message": {
+                    "message_type": "text",
+                    "chat_type": "p2p",
+                    "message_id": "om_ack_retry_unknown",
+                    "chat_id": "oc_1",
+                    "content": '{"text":"hello"}',
+                },
+            }
+        }
+
+        processor.handle_event(payload)
+
+        self._wait_until(lambda: len(sent) == 1 and reaction_attempts["count"] == 3)
+        self.assertEqual(reaction_attempts["count"], 3)
+        self.assertEqual(sent, [("oc_1", "ok")])
 
     def test_event_processor_can_disable_ack_reaction(self) -> None:
         sent: list[tuple[str, str]] = []
