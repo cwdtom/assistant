@@ -17,7 +17,7 @@ class ValidationIssueTest(unittest.TestCase):
 
         self.assertEqual(issue.code, "value_error")
         self.assertEqual(issue.field, "status")
-        self.assertEqual(issue.message, "status must be one of 未完成, 完成, 删除")
+        self.assertEqual(issue.message, "status must be one of pending, completed, deleted")
 
     def test_first_validation_issue_supports_model_level_errors(self) -> None:
         with self.assertRaises(ValidationError) as ctx:

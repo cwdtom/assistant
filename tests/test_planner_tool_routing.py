@@ -91,7 +91,7 @@ class PlannerToolRoutingTest(unittest.TestCase):
         )
         executor = build_json_planner_tool_executor(
             route=route,
-            command_executor=lambda _command: "想法列表(状态: 未完成|完成):\n| ID | 内容 |",
+            command_executor=lambda _command: "想法列表(状态: pending|completed):\n| ID | 内容 |",
         )
 
         observation = executor("/thoughts list")

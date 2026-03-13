@@ -48,7 +48,7 @@ def _thoughts_table_rows(items: list[ThoughtItem]) -> list[list[str]]:
 
 
 def _format_thoughts_list_result(*, items: list[ThoughtItem], status: str | None) -> str:
-    title = f"想法列表(状态: {status})" if status else "想法列表(状态: 未完成|完成)"
+    title = f"想法列表(状态: {status})" if status else "想法列表(状态: pending|completed)"
     table = _render_table(headers=_thoughts_table_headers(), rows=_thoughts_table_rows(items))
     return f"{title}:\n{table}"
 

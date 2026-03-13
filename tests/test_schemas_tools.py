@@ -362,7 +362,7 @@ class ToolSchemaTest(unittest.TestCase):
                 'function': {
                     'name': 'thoughts_update',
                     'arguments': json.dumps(
-                        {'id': 3, 'content': '记得补周报', 'status': '完成'},
+                        {'id': 3, 'content': '记得补周报', 'status': 'completed'},
                         ensure_ascii=False,
                     ),
                 },
@@ -376,7 +376,7 @@ class ToolSchemaTest(unittest.TestCase):
         self.assertEqual(
             decision.next_action.payload,
             coerce_thoughts_action_payload(
-                {'action': 'update', 'id': 3, 'content': '记得补周报', 'status': '完成'}
+                {'action': 'update', 'id': 3, 'content': '记得补周报', 'status': 'completed'}
             ),
         )
 

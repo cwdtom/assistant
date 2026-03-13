@@ -146,8 +146,8 @@ python main.py
 - `/schedule add|update` 支持 `--tag --duration --remind --interval --times --remind-start`
 - `--remind` 与 `--remind-start` 仍会持久化到本地数据库，但当前运行时不再自动轮询或投递本地日程提醒
 - `/schedule list` 支持 `--tag`，`/schedule view` 支持 `--tag` 过滤
-- `/thoughts list` 支持 `--status <未完成|完成|删除>`；默认仅展示 `未完成|完成`
-- `/thoughts delete` 为软删除（状态置为 `删除`）
+- `/thoughts list` 支持 `--status <pending|completed|deleted>`；默认仅展示 `pending|completed`
+- `/thoughts delete` 为软删除（状态置为 `deleted`）
 - 非 `/` 开头输入会进入 plan/replan 流程；thought 标准路径使用 tool-calling 结构化参数直接执行本地动作（保留旧模型命令串兼容兜底，非标准契约）
 - `/version` 返回启动时从 `pyproject.toml` 读取并缓存的版本（格式：`当前版本：v<version>`；读取失败返回 `当前版本：unknown`）
 - plan 阶段要求返回 `status/goal/plan`；其中 `goal` 为扩展后的执行目标，并会覆盖该任务后续上下文中的原始用户输入

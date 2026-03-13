@@ -130,7 +130,7 @@ class ChatTurn(FrozenModel):
 class ThoughtItem(FrozenModel):
     id: int = Field(ge=1)
     content: str = Field(min_length=1)
-    status: Literal["未完成", "完成", "删除"]
+    status: Literal["pending", "completed", "deleted"]
     created_at: str
     updated_at: str
 

@@ -920,7 +920,7 @@ class AssistantAgentTest(unittest.TestCase):
         command_cases = [
             ("/history search", "用法: /history search <关键词> [--limit <>=1>]"),
             ("/thoughts get", "用法: /thoughts get <id>"),
-            ("/thoughts update", "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]"),
+            ("/thoughts update", "用法: /thoughts update <id> <内容> [--status <pending|completed|deleted>]"),
             ("/thoughts delete", "用法: /thoughts delete <id>"),
             ("/schedule view", "用法: /schedule view <day|week|month> [YYYY-MM-DD|YYYY-MM] [--tag <标签>]"),
             ("/schedule get", "用法: /schedule get <id>"),
@@ -958,19 +958,19 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("记得买牛奶", added)
 
         listed = agent.handle_input("/thoughts list")
-        self.assertIn("想法列表(状态: 未完成|完成)", listed)
+        self.assertIn("想法列表(状态: pending|completed)", listed)
         self.assertIn("记得买牛奶", listed)
-        self.assertIn("| 未完成 |", listed)
+        self.assertIn("| pending |", listed)
 
         detail = agent.handle_input("/thoughts get 1")
         self.assertIn("想法详情:", detail)
-        self.assertIn("| 1 | 记得买牛奶 | 未完成 |", detail)
+        self.assertIn("| 1 | 记得买牛奶 | pending |", detail)
 
-        updated = agent.handle_input("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
-        self.assertIn("已更新想法 #1: 记得买牛奶和鸡蛋 [状态:完成]", updated)
+        updated = agent.handle_input("/thoughts update 1 记得买牛奶和鸡蛋 --status completed")
+        self.assertIn("已更新想法 #1: 记得买牛奶和鸡蛋 [状态:completed]", updated)
 
-        filtered_done = agent.handle_input("/thoughts list --status 完成")
-        self.assertIn("想法列表(状态: 完成)", filtered_done)
+        filtered_done = agent.handle_input("/thoughts list --status completed")
+        self.assertIn("想法列表(状态: completed)", filtered_done)
         self.assertIn("记得买牛奶和鸡蛋", filtered_done)
 
         deleted = agent.handle_input("/thoughts delete 1")
@@ -979,8 +979,8 @@ class AssistantAgentTest(unittest.TestCase):
         listed_after_delete = agent.handle_input("/thoughts list")
         self.assertEqual(listed_after_delete, "暂无想法记录。")
 
-        deleted_only = agent.handle_input("/thoughts list --status 删除")
-        self.assertIn("想法列表(状态: 删除)", deleted_only)
+        deleted_only = agent.handle_input("/thoughts list --status deleted")
+        self.assertIn("想法列表(状态: deleted)", deleted_only)
         self.assertIn("记得买牛奶和鸡蛋", deleted_only)
 
     def test_thoughts_commands_validate_usage(self) -> None:
@@ -990,13 +990,13 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertEqual(invalid_add, "用法: /thoughts add <内容>")
 
         invalid_list = agent.handle_input("/thoughts list --status 进行中")
-        self.assertEqual(invalid_list, "用法: /thoughts list [--status <未完成|完成|删除>]")
+        self.assertEqual(invalid_list, "用法: /thoughts list [--status <pending|completed|deleted>]")
 
         invalid_get = agent.handle_input("/thoughts get abc")
         self.assertEqual(invalid_get, "用法: /thoughts get <id>")
 
-        invalid_update = agent.handle_input("/thoughts update 1 --status 完成")
-        self.assertEqual(invalid_update, "用法: /thoughts update <id> <内容> [--status <未完成|完成|删除>]")
+        invalid_update = agent.handle_input("/thoughts update 1 --status completed")
+        self.assertEqual(invalid_update, "用法: /thoughts update <id> <内容> [--status <pending|completed|deleted>]")
 
         invalid_delete = agent.handle_input("/thoughts delete nope")
         self.assertEqual(invalid_delete, "用法: /thoughts delete <id>")
@@ -2593,7 +2593,7 @@ class AssistantAgentTest(unittest.TestCase):
                 "function": {
                     "name": "thoughts_update",
                     "arguments": json.dumps(
-                        {"id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
+                        {"id": 2, "content": "记得补充周报并发给团队", "status": "completed"},
                         ensure_ascii=False,
                     ),
                 },
@@ -2606,7 +2606,7 @@ class AssistantAgentTest(unittest.TestCase):
         input_payload = _try_parse_json(str(next_action["input"] or ""))
         self.assertEqual(
             input_payload,
-            {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "完成"},
+            {"action": "update", "id": 2, "content": "记得补充周报并发给团队", "status": "completed"},
         )
         assert decision.next_action.payload is not None
         self.assertEqual(decision.next_action.payload.tool_name, "thoughts_update")
@@ -3172,7 +3172,7 @@ class AssistantAgentTest(unittest.TestCase):
             action_input='{"action":"list"}',
         )
         self.assertTrue(list_observation.ok)
-        self.assertIn("想法列表(状态: 未完成|完成)", list_observation.result)
+        self.assertIn("想法列表(状态: pending|completed)", list_observation.result)
 
         get_observation = agent._execute_planner_tool(
             action_tool="thoughts",
@@ -3183,10 +3183,10 @@ class AssistantAgentTest(unittest.TestCase):
 
         update_observation = agent._execute_planner_tool(
             action_tool="thoughts",
-            action_input='{"action":"update","id":1,"content":"记得买牛奶和鸡蛋","status":"完成"}',
+            action_input='{"action":"update","id":1,"content":"记得买牛奶和鸡蛋","status":"completed"}',
         )
         self.assertTrue(update_observation.ok)
-        self.assertIn("[状态:完成]", update_observation.result)
+        self.assertIn("[状态:completed]", update_observation.result)
 
         delete_observation = agent._execute_planner_tool(
             action_tool="thoughts",
@@ -3197,10 +3197,10 @@ class AssistantAgentTest(unittest.TestCase):
 
         deleted_list = agent._execute_planner_tool(
             action_tool="thoughts",
-            action_input='{"action":"list","status":"删除"}',
+            action_input='{"action":"list","status":"deleted"}',
         )
         self.assertTrue(deleted_list.ok)
-        self.assertIn("想法列表(状态: 删除)", deleted_list.result)
+        self.assertIn("想法列表(状态: deleted)", deleted_list.result)
         self.assertIn("记得买牛奶和鸡蛋", deleted_list.result)
 
     def test_thoughts_tool_logs_done_and_failed_events(self) -> None:
@@ -3212,7 +3212,7 @@ class AssistantAgentTest(unittest.TestCase):
                 action_input='{"action":"list","status":"进行中"}',
             )
         self.assertFalse(invalid_status.ok)
-        self.assertIn("status 必须为 未完成|完成|删除", invalid_status.result)
+        self.assertIn("pending|completed|deleted", invalid_status.result)
         merged_done = "\n".join(captured_done.output)
         self.assertIn("planner_tool_thoughts_start", merged_done)
         self.assertIn("planner_tool_thoughts_done", merged_done)
@@ -3239,17 +3239,17 @@ class AssistantAgentTest(unittest.TestCase):
                 action_input="not-json",
                 action_payload=RuntimePlannerActionPayload(
                     tool_name="thoughts_update",
-                    arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="完成"),
+                    arguments=ThoughtsUpdateArgs(id=thought_id, content="记得买牛奶和鸡蛋", status="completed"),
                 ),
             )
 
         self.assertTrue(observation.ok)
-        self.assertIn("[状态:完成]", observation.result)
+        self.assertIn("[状态:completed]", observation.result)
         item = self.db.get_thought(thought_id)
         self.assertIsNotNone(item)
         assert item is not None
         self.assertEqual(item.content, "记得买牛奶和鸡蛋")
-        self.assertEqual(item.status, "完成")
+        self.assertEqual(item.status, "completed")
         merged = "\n".join(captured.output)
         self.assertIn("planner_tool_thoughts_start", merged)
         self.assertIn("planner_tool_thoughts_done", merged)
@@ -3276,12 +3276,12 @@ class AssistantAgentTest(unittest.TestCase):
         self.assertIn("planner_tool_system_date_done", merged)
 
     def test_thoughts_cli_and_json_payload_share_runtime_payload(self) -> None:
-        command_payload = parse_tool_command_payload("/thoughts update 1 记得买牛奶和鸡蛋 --status 完成")
+        command_payload = parse_tool_command_payload("/thoughts update 1 记得买牛奶和鸡蛋 --status completed")
         self.assertIsNotNone(command_payload)
         assert command_payload is not None
 
         compat_payload = coerce_thoughts_action_payload(
-            {"action": "update", "id": 1, "content": "记得买牛奶和鸡蛋", "status": "完成"}
+            {"action": "update", "id": 1, "content": "记得买牛奶和鸡蛋", "status": "completed"}
         )
 
         self.assertEqual(command_payload, compat_payload)
@@ -3393,7 +3393,7 @@ class AssistantAgentTest(unittest.TestCase):
         )
 
         self.assertFalse(observation.ok)
-        self.assertEqual(observation.result, "thoughts.update status 必须为 未完成|完成|删除。")
+        self.assertEqual(observation.result, "thoughts.update status must be pending|completed|deleted.")
         item = self.db.get_thought(thought_id)
         self.assertIsNotNone(item)
         assert item is not None

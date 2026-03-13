@@ -115,8 +115,8 @@ Optional runtime flags (all supported in `.env`):
 - Every non-`/` input persists into `chat_history` with final assistant reply, except plan ack-only completion and scheduled tasks with `should_send=false`.
 - Every `chat_history` INSERT triggers async sqlite-rag indexing (`uri=assistant://chat_history/{chat_id}`); this path is optional-dependency best-effort, and failures only emit logs without blocking main flow.
 - `/history search` now prefers sqlite-rag retrieval first; when sqlite-rag is unavailable, errors, returns empty, or returns unmappable hits, it falls back to SQL fuzzy keyword search on user input and assistant output.
-- Thoughts supports minimal fields: `content` + `status` (`未完成|完成|删除`).
-- Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
+- Thoughts supports minimal fields: `content` + `status` (`pending|completed|deleted`).
+- Thoughts delete uses soft-delete semantics (`status=deleted`); default `/thoughts list` excludes deleted records.
 - Schedule includes `duration_minutes` (default `60` on create).
 - Timer also scans `timer_tasks` every `TIMER_POLL_INTERVAL_SECONDS`; rows with `run_limit != 0` and due `next_run_at` are queued serially, pushed into the existing planner flow via `prompt`, and do not catch up missed runs. Starting execution decrements `run_limit` once, except `-1` which remains unlimited.
 - New database initialization seeds two default `timer_tasks`: `每日用户侧写更新` (`0 4 * * *`) and `每小时提醒` (`0 * * * *`), both with `run_limit=-1` and `next_run_at=NULL` before timer initialization.
