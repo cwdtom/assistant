@@ -878,6 +878,15 @@ class AssistantDBTest(unittest.TestCase):
         underscore_hits = self.db.search_turns("underscore_a", limit=10)
         self.assertEqual([item.user_content for item in underscore_hits], ["underscore_a"])
 
+    def test_turns_by_chat_ids_preserves_order_and_applies_limit(self) -> None:
+        self.db.save_turn(user_content="用户1", assistant_content="助手1")
+        self.db.save_turn(user_content="用户2", assistant_content="助手2")
+        self.db.save_turn(user_content="用户3", assistant_content="助手3")
+
+        turns = self.db.turns_by_chat_ids([3, 1, 99, 3, 2], limit=3)
+
+        self.assertEqual([item.user_content for item in turns], ["用户3", "用户1"])
+
     def test_recent_turns_for_planner_applies_lookback_and_limit(self) -> None:
         self.db.save_turn(user_content="两天前的问题", assistant_content="两天前的回答")
         conn = sqlite3.connect(self.db_path)

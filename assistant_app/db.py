@@ -1384,6 +1384,38 @@ class AssistantDB:
         rows.reverse()
         return [_chat_turn_from_row(row) for row in rows]
 
+    def turns_by_chat_ids(self, chat_ids: list[int], *, limit: int | None = None) -> list[ChatTurn]:
+        if not chat_ids:
+            return []
+
+        normalized_ids: list[int] = []
+        seen_ids: set[int] = set()
+        for item in chat_ids:
+            if isinstance(item, bool) or not isinstance(item, int):
+                continue
+            if item <= 0 or item in seen_ids:
+                continue
+            normalized_ids.append(item)
+            seen_ids.add(item)
+        if not normalized_ids:
+            return []
+
+        if limit is not None:
+            normalized_ids = normalized_ids[: max(limit, 1)]
+        if not normalized_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        query = (
+            "SELECT id, user_content, assistant_content, created_at "
+            f"FROM chat_history WHERE id IN ({placeholders})"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(normalized_ids)).fetchall()
+
+        row_by_id = {int(row["id"]): row for row in rows}
+        return [_chat_turn_from_row(row_by_id[item_id]) for item_id in normalized_ids if item_id in row_by_id]
+
     def recent_messages(self, limit: int = 8) -> list[ChatMessage]:
         turns = self.recent_turns(limit=max(limit, 1))
         messages: list[ChatMessage] = []
@@ -1504,10 +1536,12 @@ def _reminder_delivery_from_row(row: sqlite3.Row) -> ReminderDelivery:
 
 
 def _chat_turn_from_row(row: sqlite3.Row) -> ChatTurn:
-    payload = dict(row)
-    payload["user_content"] = str(payload.get("user_content") or "")
-    payload["assistant_content"] = str(payload.get("assistant_content") or "")
-    payload["created_at"] = str(payload.get("created_at") or "")
+    raw_payload = dict(row)
+    payload = {
+        "user_content": str(raw_payload.get("user_content") or ""),
+        "assistant_content": str(raw_payload.get("assistant_content") or ""),
+        "created_at": str(raw_payload.get("created_at") or ""),
+    }
     return ChatTurn.model_validate(payload)
 
 

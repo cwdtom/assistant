@@ -115,7 +115,7 @@ Optional runtime flags (all supported in `.env`):
 - Every non-`/` input persists into `chat_history` with final assistant reply, except plan ack-only completion and scheduled tasks with `should_send=false`.
 - Every `chat_history` INSERT triggers async sqlite-rag indexing (`uri=assistant://chat_history/{chat_id}`); this path is optional-dependency best-effort, and failures only emit logs without blocking main flow.
 - `chat_history` UPDATE operations (for example, `save_message("assistant")` filling an existing pending row) do not trigger sqlite-rag indexing.
-- `/history search` supports fuzzy keyword search on user input and assistant output.
+- `/history search` now prefers sqlite-rag retrieval first; when sqlite-rag is unavailable, errors, returns empty, or returns unmappable hits, it falls back to SQL fuzzy keyword search on user input and assistant output.
 - Thoughts supports minimal fields: `content` + `status` (`未完成|完成|删除`).
 - Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
 - Schedule includes `duration_minutes` (default `60` on create).

@@ -96,7 +96,11 @@ def _execute_typed_history_system_action(
 
     if tool_name == "history_search" and isinstance(arguments, HistorySearchArgs):
         history_limit = _normalized_history_limit(arguments.limit)
-        turns = agent.db.search_turns(arguments.keyword, limit=history_limit)
+        search_history_turns = getattr(agent, "search_history_turns", None)
+        if callable(search_history_turns):
+            turns = search_history_turns(keyword=arguments.keyword, limit=history_limit)
+        else:
+            turns = agent.db.search_turns(arguments.keyword, limit=history_limit)
         if not turns:
             result = f"未找到包含“{arguments.keyword}”的历史会话。"
             ok = _is_planner_command_success(result, tool=observation_tool)
