@@ -92,6 +92,7 @@ Optional runtime flags (all supported in `.env`):
 - `PERSONA_REWRITE_ENABLED`: enable persona rewrite (default `true`)
 - `ASSISTANT_PERSONA`: assistant persona text
 - `USER_PROFILE_PATH`: user profile markdown file path (loaded content is injected into plan/replan context)
+- `SQLITE_RAG_DB_PATH`: sqlite-rag database path for async chat_history indexing (default `sqliterag.sqlite`)
 - `APP_LOG_PATH`: general runtime log path (JSON Lines, default `logs/app.log`, empty to disable)
 - `APP_LOG_RETENTION_DAYS`: app log retention days for daily rotation (default `7`)
 - `LLM_TRACE_LOG_PATH`: LLM trace log path (default follows `APP_LOG_PATH`, empty to disable)
@@ -112,6 +113,8 @@ Optional runtime flags (all supported in `.env`):
 
 ## Supplement: Detailed Behavior Notes (moved from README)
 - Every non-`/` input persists into `chat_history` with final assistant reply, except plan ack-only completion and scheduled tasks with `should_send=false`.
+- Every `chat_history` INSERT triggers async sqlite-rag indexing (`uri=assistant://chat_history/{chat_id}`); this path is optional-dependency best-effort, and failures only emit logs without blocking main flow.
+- `chat_history` UPDATE operations (for example, `save_message("assistant")` filling an existing pending row) do not trigger sqlite-rag indexing.
 - `/history search` supports fuzzy keyword search on user input and assistant output.
 - Thoughts supports minimal fields: `content` + `status` (`未完成|完成|删除`).
 - Thoughts delete uses soft-delete semantics (`status=删除`); default `/thoughts list` excludes deleted records.
@@ -175,6 +178,7 @@ Optional runtime flags (all supported in `.env`):
 - `schedules`: title, tag, start datetime, duration, reminder datetime, created time.
 - `recurring_schedules`: repeat rule linked by `schedule_id`, with interval/times/remind-start/enabled.
 - `chat_history`: stores `user_content`, `assistant_content`, and `created_at`.
+- `sqliterag.sqlite` (optional): stores rag `documents/chunks/sentences` for async chat_history indexing results.
 - `timer_tasks`: stores `task_name`, `run_limit`, `cron_expr`, `prompt`, `next_run_at`, `last_run_at`, `created_at`, and `updated_at`.
 - `thoughts`: stores `content`, `status`, `created_at`, and `updated_at`.
 

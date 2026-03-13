@@ -32,6 +32,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.model, "deepseek-chat")
         self.assertEqual(config.llm_temperature, 0.5)
         self.assertEqual(config.db_path, "custom.db")
+        self.assertEqual(config.sqlite_rag_db_path, "sqliterag.sqlite")
         self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.plan_replan_max_steps, 100)
         self.assertEqual(config.plan_observation_history_limit, 100)
@@ -81,6 +82,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.model, "deepseek-chat")
         self.assertEqual(config.llm_temperature, 0.5)
         self.assertEqual(config.db_path, "assistant.db")
+        self.assertEqual(config.sqlite_rag_db_path, "sqliterag.sqlite")
         self.assertEqual(config.user_profile_path, "")
         self.assertEqual(config.llm_trace_log_path, "logs/app.log")
         self.assertEqual(config.app_log_path, "logs/app.log")
@@ -118,6 +120,7 @@ class ConfigTest(unittest.TestCase):
         env = {
             "DEEPSEEK_API_KEY": "deep-key",
             "USER_PROFILE_PATH": "profiles/me.md",
+            "SQLITE_RAG_DB_PATH": "data/chat-rag.sqlite",
             "USER_PROFILE_REFRESH_ENABLED": "off",
             "USER_PROFILE_REFRESH_HOUR": "5",
             "USER_PROFILE_REFRESH_LOOKBACK_DAYS": "45",
@@ -171,6 +174,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.plan_continuous_failure_limit, 3)
         self.assertEqual(config.task_cancel_command, "停止任务")
         self.assertEqual(config.user_profile_path, "profiles/me.md")
+        self.assertEqual(config.sqlite_rag_db_path, "data/chat-rag.sqlite")
         self.assertFalse(hasattr(config, "user_profile_refresh_enabled"))
         self.assertFalse(hasattr(config, "user_profile_refresh_hour"))
         self.assertFalse(hasattr(config, "user_profile_refresh_lookback_days"))
