@@ -16,3 +16,4 @@ skills
 *.egg-info
 .idea
 sqliterag.sqlite
+*.gguf
